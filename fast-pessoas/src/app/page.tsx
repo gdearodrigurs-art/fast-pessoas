@@ -1,65 +1,61 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+import { redirect } from "next/navigation";
+import { lerSessao } from "../lib/sessao";
+import { BotaoSair } from "./botao-sair";
+import estilos from "./page.module.css";
 
-export default function Home() {
+const ROTULO_PAPEL: Record<string, string> = {
+  funcionario: "Funcionário",
+  gestor: "Gestor",
+  rh: "RH",
+  dp: "Departamento Pessoal",
+  diretoria: "Diretoria de Pessoas",
+  admin: "Administrador",
+};
+
+export default async function PaginaInicial() {
+  const sessao = await lerSessao();
+  if (!sessao) {
+    redirect("/entrar");
+  }
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.tsx file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
+    <div className={estilos.pagina}>
+      <header className={estilos.cabecalho}>
+        <span className={estilos.marca}>Fast Pessoas</span>
+        <div className={estilos.usuario}>
+          <span>
+            {sessao.nome} · {ROTULO_PAPEL[sessao.papel] ?? sessao.papel}
+          </span>
+          <a className={estilos.acao} href="/trocar-senha">
+            Trocar senha
           </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          <BotaoSair />
         </div>
+      </header>
+
+      <main className={estilos.conteudo}>
+        <h1>Bem-vindo ao Fast Pessoas</h1>
+        <p className={estilos.subtitulo}>
+          Sistema de DP/RH da Fast — em construção, entregue por etapas.
+        </p>
+
+        <section className={estilos.grade}>
+          <div className={estilos.cartao}>
+            <h2>Ficha do colaborador</h2>
+            <p>Cadastro e linha do tempo de cada pessoa.</p>
+            <span className={estilos.etiqueta}>em desenvolvimento</span>
+          </div>
+          <div className={estilos.cartao}>
+            <h2>Solicitações</h2>
+            <p>Pedidos e aprovações entre funcionário e DP.</p>
+            <span className={estilos.etiqueta}>em desenvolvimento</span>
+          </div>
+          <div className={estilos.cartao}>
+            <h2>Check-in diário</h2>
+            <p>Como você está se sentindo hoje?</p>
+            <span className={estilos.etiqueta}>em desenvolvimento</span>
+          </div>
+        </section>
       </main>
     </div>
   );
