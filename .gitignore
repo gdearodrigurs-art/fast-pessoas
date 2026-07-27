@@ -1,0 +1,20 @@
+# dependências e build
+node_modules/
+.next/
+out/
+dist/
+
+# ambiente e segredos — NUNCA commitar
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+
+# artefatos locais
+*.log
+.DS_Store
+Thumbs.db
+
+# arquivos temporários do Office
+~$*

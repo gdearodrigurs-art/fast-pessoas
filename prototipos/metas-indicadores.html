@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fast Pessoas — Metas de Indicadores (protótipo)</title>
+<style>
+  :root{
+    --primary:#d21217; --primary-hover:#bd1015;
+    --bg:#f7f6f4; --surface:#ffffff; --text:#1c1b1a; --muted:#6b6763;
+    --border:#e3e0dc; --fill:#f0eeeb; --success:#1a7f37; --warning:#b58500; --danger:#c62828;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#161514; --surface:#211f1e; --text:#f0eeec; --muted:#a09a94;
+           --border:#3a3735; --fill:#2b2927; --success:#4caf6d; --warning:#d9a521; --danger:#ef6461; }
+  }
+  *{box-sizing:border-box; margin:0}
+  body{background:var(--bg); color:var(--text);
+       font:15px/1.5 'Instrument Sans','Segoe UI',system-ui,sans-serif; padding-bottom:80px}
+  header{background:var(--surface); border-bottom:3px solid var(--primary); padding:16px 28px;
+         display:flex; align-items:center; gap:20px; flex-wrap:wrap}
+  header h1{font-size:20px}
+  header h1 span{color:var(--primary)}
+  .proto-badge{background:var(--warning); color:#fff; font-size:11px; font-weight:700;
+               padding:2px 8px; border-radius:10px; letter-spacing:.5px}
+  .spacer{flex:1}
+  .controle{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted)}
+  select,input,button{font:inherit; color:var(--text); background:var(--surface);
+    border:1px solid var(--border); border-radius:6px; padding:6px 10px}
+  button{cursor:pointer}
+  button.primaria{background:var(--primary); border-color:var(--primary); color:#fff; font-weight:600}
+  button.primaria:hover{background:var(--primary-hover)}
+  button.leve{background:transparent; color:var(--primary); border:none; font-weight:600; padding:4px 6px}
+  main{max-width:1080px; margin:24px auto; padding:0 20px}
+  .aviso{background:var(--fill); border:1px dashed var(--border); border-radius:8px;
+         padding:10px 14px; font-size:13px; color:var(--muted); margin-bottom:20px}
+  .area{margin-bottom:28px}
+  .area>h2{font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--muted);
+           margin-bottom:8px; padding-left:4px}
+  table{width:100%; border-collapse:collapse; background:var(--surface);
+        border:1px solid var(--border); border-radius:10px; overflow:hidden}
+  thead th{font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted);
+           text-align:left; padding:10px 14px; border-bottom:1px solid var(--border); background:var(--fill)}
+  tbody td{padding:12px 14px; border-bottom:1px solid var(--border); vertical-align:top}
+  tbody tr:last-child td{border-bottom:none}
+  .num{font-variant-numeric:tabular-nums; font-weight:700; font-size:17px}
+  .sem-meta{color:var(--muted); font-style:italic; font-weight:400; font-size:14px}
+  .dir{font-size:11px; color:var(--muted)}
+  .nome-ind{font-weight:600}
+  .desc-ind{font-size:12.5px; color:var(--muted); margin-top:2px}
+  .vig{font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums}
+  .chip-unidade{display:inline-block; background:var(--fill); border:1px solid var(--border);
+    border-radius:10px; font-size:11px; padding:1px 8px; margin:2px 3px 0 0; font-variant-numeric:tabular-nums}
+  .historico{background:var(--fill); border-radius:8px; margin:8px 0 4px; padding:10px 14px; font-size:13px}
+  .historico div{padding:3px 0; border-bottom:1px dotted var(--border); font-variant-numeric:tabular-nums}
+  .historico div:last-child{border-bottom:none}
+  .historico .encerrada{color:var(--muted); text-decoration:line-through}
+  dialog{border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text);
+         padding:24px; width:420px; max-width:92vw}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  dialog h3{margin-bottom:4px}
+  dialog .sub{font-size:13px; color:var(--muted); margin-bottom:16px}
+  dialog label{display:block; font-size:13px; font-weight:600; margin:12px 0 4px}
+  dialog input,dialog select{width:100%}
+  dialog .acoes{display:flex; justify-content:flex-end; gap:10px; margin-top:20px}
+  .rodape-nota{position:fixed; bottom:0; left:0; right:0; background:var(--surface);
+    border-top:1px solid var(--border); padding:8px 28px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>Fast Pessoas</span> · Metas de Indicadores</h1>
+  <span class="proto-badge">PROTÓTIPO</span>
+  <div class="spacer"></div>
+  <div class="controle">Vendo como:
+    <select id="papel">
+      <option value="rh">RH / DP (edita)</option>
+      <option value="gestor">Gestor (consulta)</option>
+      <option value="diretoria">Diretoria (consulta)</option>
+    </select>
+  </div>
+  <button class="primaria" id="btnNovoIndicador">+ Novo indicador</button>
+</header>
+
+<main>
+  <div class="aviso">
+    Nenhuma meta é fixa no sistema: tudo que está nesta página é <b>dado administrável pelo RH</b>.
+    Alterar uma meta nunca sobrescreve a anterior — <b>cria uma nova versão com data de início de
+    vigência</b>; períodos já apurados continuam avaliados pela meta que valia na época.
+    Metas podem ser globais ou específicas por unidade.
+  </div>
+  <div id="conteudo"></div>
+</main>
+
+<dialog id="dlg">
+  <h3 id="dlgTitulo">Definir meta</h3>
+  <div class="sub" id="dlgSub"></div>
+  <form method="dialog" id="formMeta">
+    <label>Escopo</label>
+    <select id="fEscopo">
+      <option value="global">Global (todas as unidades)</option>
+      <option>Unidade Centro</option><option>Unidade Norte</option><option>Unidade Sul</option>
+      <option>Unidade Leste</option><option>Unidade Oeste</option>
+    </select>
+    <label id="lblValor">Meta</label>
+    <input id="fValor" type="number" step="0.1" required placeholder="ex.: 90">
+    <label>Início de vigência</label>
+    <input id="fVigencia" type="date" required>
+    <div class="acoes">
+      <button type="button" onclick="dlg.close()">Cancelar</button>
+      <button class="primaria" id="btnSalvar" value="ok">Salvar nova versão</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgInd">
+  <h3>Novo indicador</h3>
+  <div class="sub">Entra no catálogo; a meta é definida depois, na própria página.</div>
+  <form method="dialog" id="formInd">
+    <label>Nome</label><input id="iNome" required placeholder="ex.: % de holerites com ciência no prazo">
+    <label>Área</label>
+    <select id="iArea"></select>
+    <label>Unidade de medida</label>
+    <select id="iUnid"><option value="%">% (percentual)</option><option value="qtd">quantidade</option><option value="dias">dias</option></select>
+    <label>Direção</label>
+    <select id="iDir"><option value="maior">Quanto maior, melhor</option><option value="menor">Quanto menor, melhor</option></select>
+    <div class="acoes">
+      <button type="button" onclick="dlgInd.close()">Cancelar</button>
+      <button class="primaria" value="ok">Adicionar</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="rodape-nota">Protótipo para validação com DP/RH — dados de exemplo, salvos só neste navegador (localStorage).
+Regras reproduzidas do desenho: versionamento com vigência · meta por unidade · acesso por papel.</div>
+
+<script>
+const AREAS = ['Desligamento','Clima','Ponto','Férias e afastamentos','Folha e obrigações','Admissão','Avaliação 360','SST','Visão geral (RH)'];
+
+const CATALOGO_SEED = [
+  {id:'entrevista_desligamento', area:'Desligamento', nome:'% de entrevistas de desligamento realizadas',
+   desc:'Realizadas ÷ desligamentos elegíveis no mês da efetivação. Indicador oficial do setor (Diretoria de Pessoas).', unid:'%', dir:'maior'},
+  {id:'adesao_checkin', area:'Clima', nome:'Adesão ao check-in diário',
+   desc:'Colaboradores que responderam ÷ ativos, média do mês.', unid:'%', dir:'maior'},
+  {id:'espelho_prazo', area:'Ponto', nome:'% de espelhos de ponto fechados no prazo',
+   desc:'Espelhos tratados e fechados até o corte da competência.', unid:'%', dir:'maior'},
+  {id:'horas_extras', area:'Ponto', nome:'Horas extras sobre horas trabalhadas',
+   desc:'Total de HE ÷ horas trabalhadas no mês.', unid:'%', dir:'menor'},
+  {id:'ferias_vencidas', area:'Férias e afastamentos', nome:'Períodos de férias vencidos',
+   desc:'Períodos aquisitivos vencidos sem gozo (férias em dobro). Alvo natural: zero.', unid:'qtd', dir:'menor'},
+  {id:'ferias_antecedencia', area:'Férias e afastamentos', nome:'% de férias programadas com 30+ dias de antecedência',
+   desc:'Programações aprovadas respeitando o aviso legal com folga.', unid:'%', dir:'maior'},
+  {id:'folha_prazo', area:'Folha e obrigações', nome:'% de competências fechadas no prazo interno',
+   desc:'Fechamento aprovado até o dia-limite definido pelo DP.', unid:'%', dir:'maior'},
+  {id:'obrigacoes_prazo', area:'Folha e obrigações', nome:'% de obrigações transmitidas no prazo legal',
+   desc:'eSocial, FGTS Digital e DCTFWeb da competência sem atraso.', unid:'%', dir:'maior'},
+  {id:'admissao_prazo', area:'Admissão', nome:'% de admissões com documentação completa no prazo',
+   desc:'Dossiê completo e eventos enviados até a véspera do início.', unid:'%', dir:'maior'},
+  {id:'tempo_admissao', area:'Admissão', nome:'Tempo médio de admissão',
+   desc:'Da aprovação da requisição ao primeiro dia.', unid:'dias', dir:'menor'},
+  {id:'avaliacao_ciclo', area:'Avaliação 360', nome:'% de avaliações concluídas dentro do ciclo',
+   desc:'Avaliações fechadas até o fim do ciclo (experiência e desempenho).', unid:'%', dir:'maior'},
+  {id:'aso_validos', area:'SST', nome:'% de colaboradores com ASO válido',
+   desc:'ASOs dentro da validade sobre o total de ativos.', unid:'%', dir:'maior'},
+  {id:'turnover', area:'Visão geral (RH)', nome:'Turnover mensal',
+   desc:'Desligamentos ÷ headcount médio do mês.', unid:'%', dir:'menor'},
+  {id:'absenteismo', area:'Visão geral (RH)', nome:'Absenteísmo',
+   desc:'Horas de ausência não programada ÷ horas previstas.', unid:'%', dir:'menor'},
+];
+
+const METAS_SEED = [
+  {ind:'entrevista_desligamento', escopo:'global', valor:90, inicio:'2026-08-01', criadoPor:'RH', criadoEm:'2026-07-27', ativa:true},
+  {ind:'ferias_vencidas', escopo:'global', valor:0, inicio:'2026-08-01', criadoPor:'RH', criadoEm:'2026-07-27', ativa:true},
+  {ind:'obrigacoes_prazo', escopo:'global', valor:100, inicio:'2026-08-01', criadoPor:'RH', criadoEm:'2026-07-27', ativa:true},
+];
+
+let catalogo = JSON.parse(localStorage.getItem('fp_catalogo') || 'null') || CATALOGO_SEED;
+let metas    = JSON.parse(localStorage.getItem('fp_metas')    || 'null') || METAS_SEED;
+let historicoAberto = new Set();
+const salvar = () => { localStorage.setItem('fp_catalogo', JSON.stringify(catalogo));
+                       localStorage.setItem('fp_metas', JSON.stringify(metas)); };
+
+const podeEditar = () => document.getElementById('papel').value === 'rh';
+const fmtValor = (m, unid) => unid === '%' ? m + '%' : (unid === 'dias' ? m + ' dias' : m);
+const fmtData = iso => iso.split('-').reverse().join('/');
+
+function metaAtiva(indId, escopo){ return metas.find(m => m.ind === indId && m.escopo === escopo && m.ativa); }
+
+function render(){
+  const cont = document.getElementById('conteudo');
+  cont.innerHTML = '';
+  for (const area of AREAS){
+    const inds = catalogo.filter(i => i.area === area);
+    if (!inds.length) continue;
+    const sec = document.createElement('div');
+    sec.className = 'area';
+    sec.innerHTML = `<h2>${area}</h2>`;
+    const tb = document.createElement('table');
+    tb.innerHTML = `<thead><tr><th style="width:46%">Indicador</th><th>Meta vigente</th>
+                    <th>Vigência</th><th style="width:150px"></th></tr></thead>`;
+    const corpo = document.createElement('tbody');
+    for (const ind of inds){
+      const g = metaAtiva(ind.id, 'global');
+      const overrides = metas.filter(m => m.ind === ind.id && m.escopo !== 'global' && m.ativa);
+      const tr = document.createElement('tr');
+      const dirTxt = ind.dir === 'maior' ? '▲ quanto maior, melhor' : '▼ quanto menor, melhor';
+      tr.innerHTML = `
+        <td><div class="nome-ind">${ind.nome}</div>
+            <div class="desc-ind">${ind.desc}</div>
+            <div class="dir">${dirTxt}</div></td>
+        <td>${g ? `<span class="num">${fmtValor(g.valor, ind.unid)}</span>` : `<span class="sem-meta">meta não definida</span>`}
+            ${overrides.map(o => `<br><span class="chip-unidade">${o.escopo}: ${fmtValor(o.valor, ind.unid)}</span>`).join('')}</td>
+        <td class="vig">${g ? 'desde ' + fmtData(g.inicio) : '—'}</td>
+        <td></td>`;
+      const acoes = tr.lastElementChild;
+      if (podeEditar()){
+        const b = document.createElement('button');
+        b.className = 'primaria'; b.textContent = g ? 'Alterar meta' : 'Definir meta';
+        b.onclick = () => abrirDialogo(ind);
+        acoes.appendChild(b);
+      }
+      const h = document.createElement('button');
+      h.className = 'leve'; h.textContent = historicoAberto.has(ind.id) ? 'ocultar histórico' : 'histórico';
+      h.onclick = () => { historicoAberto.has(ind.id) ? historicoAberto.delete(ind.id) : historicoAberto.add(ind.id); render(); };
+      acoes.appendChild(h);
+      corpo.appendChild(tr);
+
+      if (historicoAberto.has(ind.id)){
+        const versoes = metas.filter(m => m.ind === ind.id)
+                             .sort((a,b) => b.inicio.localeCompare(a.inicio));
+        const trh = document.createElement('tr');
+        const td = document.createElement('td'); td.colSpan = 4;
+        const box = document.createElement('div'); box.className = 'historico';
+        box.innerHTML = versoes.length
+          ? versoes.map(v => `<div class="${v.ativa ? '' : 'encerrada'}">
+              ${v.escopo === 'global' ? 'Global' : v.escopo} · meta ${fmtValor(v.valor, ind.unid)}
+              · vigência a partir de ${fmtData(v.inicio)} · definida por ${v.criadoPor} em ${fmtData(v.criadoEm)}
+              ${v.ativa ? ' · <b>ativa</b>' : ' · encerrada'}</div>`).join('')
+          : '<div>Nenhuma versão registrada ainda.</div>';
+        td.appendChild(box); trh.appendChild(td); corpo.appendChild(trh);
+      }
+    }
+    tb.appendChild(corpo); sec.appendChild(tb); cont.appendChild(sec);
+  }
+  document.getElementById('btnNovoIndicador').style.display = podeEditar() ? '' : 'none';
+}
+
+let indEmEdicao = null;
+function abrirDialogo(ind){
+  indEmEdicao = ind;
+  document.getElementById('dlgTitulo').textContent = 'Meta — ' + ind.nome;
+  document.getElementById('dlgSub').textContent =
+    'Salvar cria uma NOVA versão com vigência; a anterior é encerrada, nunca apagada.';
+  document.getElementById('lblValor').textContent =
+    'Meta (' + (ind.unid === '%' ? '%' : ind.unid) + ') — ' + (ind.dir === 'maior' ? 'quanto maior, melhor' : 'quanto menor, melhor');
+  const g = metaAtiva(ind.id, 'global');
+  document.getElementById('fValor').value = g ? g.valor : '';
+  document.getElementById('fVigencia').value = new Date().toISOString().slice(0,10);
+  document.getElementById('fEscopo').value = 'global';
+  dlg.showModal();
+}
+
+document.getElementById('formMeta').addEventListener('submit', () => {
+  const escopoSel = document.getElementById('fEscopo').value;
+  const escopo = escopoSel === 'global' ? 'global' : escopoSel;
+  metas.forEach(m => { if (m.ind === indEmEdicao.id && m.escopo === escopo && m.ativa) m.ativa = false; });
+  metas.push({ ind: indEmEdicao.id, escopo, valor: parseFloat(document.getElementById('fValor').value),
+    inicio: document.getElementById('fVigencia').value, criadoPor: 'RH',
+    criadoEm: new Date().toISOString().slice(0,10), ativa: true });
+  salvar(); render();
+});
+
+document.getElementById('btnNovoIndicador').onclick = () => {
+  const sel = document.getElementById('iArea');
+  sel.innerHTML = AREAS.map(a => `<option>${a}</option>`).join('');
+  dlgInd.showModal();
+};
+document.getElementById('formInd').addEventListener('submit', () => {
+  catalogo.push({ id: 'custom_' + Date.now(), area: document.getElementById('iArea').value,
+    nome: document.getElementById('iNome').value, desc: 'Indicador criado pelo RH (protótipo).',
+    unid: document.getElementById('iUnid').value, dir: document.getElementById('iDir').value });
+  salvar(); render();
+  document.getElementById('formInd').reset();
+});
+
+document.getElementById('papel').addEventListener('change', render);
+render();
+</script>
+</body>
+</html>
