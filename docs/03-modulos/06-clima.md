@@ -3,17 +3,17 @@
 > Revisado em 2026-07-24 (v2) após decisões do usuário. Substitui integralmente a v1
 > (pesquisas periódicas de clima + pulso + eNPS com k-anonimato pesado), que deixa de ser o
 > desenho do módulo e vira, no máximo, evolução futura opcional.
-> **Status: PROPOSTA — nada aqui é definitivo até validação expressa do usuário. Fase sem código.**
+> **Status: PROPOSTA — nada aqui é definitivo até validação expressa do usuário, exceto o modelo de anonimato (decisão do usuário 2026-07-27, definitiva — ver seção "Modelo de anonimato (decidido)"). Fase sem código.**
 
 **Contexto da v2:** o app de RH nasce como aplicativo próprio e separado do portal corporativo (Fase A), em Next.js + TypeScript + Node.js com PostgreSQL dedicado na SaveinCloud, com autenticação e cadastro próprios (papéis funcionário/gestor/rh/dp/admin). Nada é "herdado" do portal na Fase A — RLS, auditoria e RBAC são implementados neste stack. A incorporação ao portal é a Fase B.
 
-**Fase sugerida:** **MVP na Fase 1** (entrega cedo ao DP/RH, 2–3 meses), junto com autenticação própria, ficha do colaborador e demandas — o clima diário é deliberadamente um dos primeiros módulos em uso porque tem dependência externa zero, risco regulatório administrável e é vitrine de adoção. **Na Fase 0**, protótipo HTML standalone do check-in **nas duas variantes de anonimato** (A e B, abaixo) para o DP/RH escolher vendo as telas, não lendo documento. Pesquisas periódicas/eNPS ficam para Fase 3+ se houver demanda.
+**Fase sugerida:** **MVP na Fase 1** (entrega cedo ao DP/RH, 2–3 meses), junto com autenticação própria, ficha do colaborador e demandas — o clima diário é deliberadamente um dos primeiros módulos em uso porque tem dependência externa zero, risco regulatório administrável e é vitrine de adoção. **Na Fase 0**, protótipo HTML standalone do check-in **no modelo confidencial com acesso restrito** (decisão do usuário 2026-07-27), com foco em validar a tela de transparência ("quem vê o quê") e o recorte mínimo dos agregados vendo as telas, não lendo documento. Pesquisas periódicas/eNPS ficam para Fase 3+ se houver demanda.
 
 ## Objetivo
 
 Medir o clima de forma contínua e leve: em vez de pesquisas longas e espaçadas, um **check-in diário de segundos** — uma pergunta curta ("como você está se sentindo hoje?", "como você tem se sentido a respeito de suas entregas?") respondida numa **escala de 5 emojis** (chorando / triste / neutro / sorrindo / sorrindo com estrelas) mais um **campo de texto opcional**. O valor está na série temporal: tendência por unidade/equipe, detecção precoce de queda de moral e fechamento de ciclo (ver → agir → ver de novo). Objetivo de negócio: taxa de resposta alta e sustentada, o que exige que responder custe menos de 10 segundos e que o funcionário entenda exatamente quem vê o quê.
 
-**Questão central em aberto (decisão do usuário pendente):** anonimato agregado vs identificado — apresentada na seção "Variantes de anonimato", com recomendação.
+**Decisão central tomada (decisão do usuário 2026-07-27):** o check-in é **confidencial com acesso restrito, não anônimo** — detalhada na seção "Modelo de anonimato (decidido)".
 
 ## Funcionalidades
 
@@ -44,12 +44,12 @@ Medir o clima de forma contínua e leve: em vez de pesquisas longas e espaçadas
 
 **5. Alertas de queda**
 - Regras simples e configuráveis pelo RH, por recorte (unidade/equipe): queda da média móvel acima de um limiar (ex.: −0,5 ponto em 7 dias), proporção de respostas negativas (emojis 1–2) acima de um teto (ex.: >30% na semana), ou silêncio anômalo (participação despencou).
-- Alerta gera notificação (n8n) para RH e, conforme a variante escolhida, para o gestor do recorte; alertas têm status (aberto → em tratamento → encerrado com anotação) para fechar o ciclo.
-- Na variante A o alerta é **sempre sobre o recorte**, nunca sobre pessoa; a existência de alerta individual é exatamente o que a variante B acrescenta (ver seção própria).
+- Alerta gera notificação (n8n) para RH e para o gestor do recorte; alertas têm status (aberto → em tratamento → encerrado com anotação) para fechar o ciclo.
+- O alerta é **sempre sobre o recorte**, nunca sobre pessoa: não há alerta individual no MVP. A leitura de resposta individual é prerrogativa exclusiva da Diretoria de Pessoas, sob demanda e auditada (ver seção "Modelo de anonimato (decidido)").
 
 **6. Leitura dos comentários de texto**
-- Textos são exibidos em lista própria para o RH (e gestor, conforme variante), com o valor do emoji e a data — na variante A **sem autor e desassociados de qualquer atributo além da unidade**, com exibição em lote/embaralhada para dificultar dedução por horário.
-- Aviso claro na tela de resposta sobre quem lerá o texto (o texto é o maior vetor de autoidentificação — transparência aqui é obrigatória nas duas variantes).
+- Textos são exibidos em lista própria para o RH (e gestor, conforme política a definir), com o valor do emoji e a data — **sem autor** (minimização de exibição: a FK existe no banco, mas conteúdo + autor juntos só saem pela rota restrita da Diretoria de Pessoas), com exibição em lote/embaralhada para dificultar dedução por horário.
+- Aviso claro na tela de resposta sobre quem lerá o texto e quem pode ver o autor (transparência aqui é obrigatória — ver o texto de transparência na seção "Modelo de anonimato (decidido)").
 
 ### Evolução (Fase 3+)
 
@@ -60,69 +60,46 @@ Medir o clima de forma contínua e leve: em vez de pesquisas longas e espaçadas
 - **Perguntas sob demanda** ("enquete do dia" pontual do RH) reutilizando o mesmo motor.
 - Fora de escopo permanente: canal de denúncia (sigilo com apuração é outro produto) e pesquisa de desligamento (pertence ao processo de desligamento, identificada).
 
-## Variantes de anonimato — decisão central a tomar com DP/RH
+## Modelo de anonimato (decidido) — confidencial com acesso restrito
 
-O formato (5 emojis + texto opcional, diário) está fechado. O que está aberto é **se a resposta é ligada à pessoa**. As duas variantes mudam o dado gravado, as telas, a base legal e a promessa feita ao funcionário — por isso a decisão precede o protótipo final e consta do log de decisões.
+> **Decisão do usuário (2026-07-27), definitiva.** Substitui a questão aberta das variantes A (anônimo agregado) e B (identificado com alerta ao gestor) e a recomendação do arquiteto pela A. O modelo adotado não é nenhuma das duas: o check-in é **confidencial com acesso restrito, não anônimo**.
 
-### Variante A — anônimo agregado (recomendada para o início)
-
-- A resposta é gravada **sem vínculo com o colaborador**: apenas valor, data, pergunta e o recorte mínimo (unidade/equipe) copiado no momento da resposta. O controle de "já respondeu hoje" fica numa tabela separada de participação, sem ligação com o conteúdo.
-- Ninguém — nem RH, nem admin — consegue ver a resposta de uma pessoa; a garantia é estrutural (o dado identificado não existe), não de tela.
-- Dashboards e alertas funcionam **por recorte**. A queda de uma equipe aparece; a queda de uma pessoa específica, não.
-- **Ganha:** honestidade e adesão (a promessa "ninguém sabe o que você marcou" é simples e crível); LGPD muito mais leve (dado de resposta anonimizado, art. 12); risco reputacional baixo num módulo que estreia cedo, quando a confiança no app ainda está sendo construída.
-- **Perde:** o alerta individual — o gestor não fica sabendo que *fulano* marcou "chorando" três dias seguidos; o cuidado individual continua dependendo de olho humano e do canal aberto gestor-equipe.
-
-### Variante B — identificado com alerta ao gestor
-
-- A resposta é gravada **com o colaborador**: o gestor imediato (e o RH) pode ver a série individual e recebe **alerta individual** (ex.: 3 respostas ≤2 em 5 dias) para agir — chamar para conversa, oferecer apoio.
-- **Ganha:** capacidade de agir cedo sobre uma pessoa específica — o argumento humano é forte: de que adianta saber que alguém está mal e não poder ajudar?
-- **Perde/custa:** muda a natureza do dado — vira **dado pessoal que revela estado emocional**, tangenciando dado sensível de saúde na leitura da LGPD; exige base legal robusta, RIPD/parecer do DPO antes do primeiro dia, **transparência total** (o funcionário precisa saber, na própria tela de resposta, exatamente quem vê o quê e que gera alerta ao gestor), trilha de auditoria de leitura (quem consultou a série de quem), retenção curta definida e regras duras de não-uso (proibido usar em avaliação de desempenho, promoção ou desligamento — por escrito). E o custo comportamental: parte das pessoas passa a responder "sorrindo" sempre — a série fica bonita e falsa.
-
-### Comparação resumida
-
-| Critério | A — anônimo agregado | B — identificado |
-|---|---|---|
-| Honestidade/adesão | Alta (promessa simples) | Em risco (resposta performática) |
-| Alerta individual | Não existe | Existe (é o motivo de ser da variante) |
-| Natureza LGPD | Resposta anonimizada; só a participação é dado pessoal | Dado pessoal sensível-adjacente; RIPD, trilha de leitura, retenção, regras de não-uso |
-| Complexidade Fase 1 | Baixa | Média-alta (auditoria de leitura, telas de transparência, política assinada) |
-| Reversibilidade | Pode evoluir para B depois, com aviso prévio e novo consentimento — só para respostas futuras | Voltar para A não apaga o histórico identificado já coletado |
-
-### Recomendação do arquiteto
-
-**Começar pela variante A** (alinhada à recomendação da arquitetura v2). Motivos: (1) o módulo estreia na Fase 1, quando o app ainda está conquistando confiança — uma percepção de vigilância na largada queima o clima e contamina a adoção dos demais módulos; (2) a variante A é reversível: com a série agregada rodando e confiança estabelecida, a Fase 2+ pode introduzir a B **mediante decisão informada, parecer do DPO e comunicação prévia**, valendo só dali em diante; o caminho inverso (B→A) não desfaz o dado já coletado; (3) grande parte do valor do alerta individual é capturado pelo alerta de queda por equipe pequena, que já aponta ao gestor "sua equipe precisa de atenção" sem expor indivíduos. **Os dois protótipos da Fase 0 devem ser apresentados ao DP/RH mesmo assim** — a decisão é do usuário e o custo de mostrar as duas telas é baixo.
+- **Resposta vinculada ao colaborador**: `checkin_resposta` carrega FK para o colaborador. Não há promessa de anonimato — a promessa feita ao funcionário é de **confidencialidade**.
+- **Acesso à resposta individual (conteúdo + autor) é exclusivo do papel Diretoria de Pessoas**, mediante chave de permissão própria (`clima.resposta.individual.ver`), **2FA** na sessão e **trilha de leitura no `audit`** (quem viu a resposta de quem, quando).
+- **Gestores e RH operacional veem apenas agregados** por unidade/equipe, com **recorte mínimo** de respondentes — não se exibe agregado de grupo pequeno que desanonimize na prática.
+- **Transparência obrigatória**: a tela do check-in informa explicitamente quem pode ver o quê — "suas respostas individuais são visíveis apenas à Diretoria de Pessoas; seu gestor vê somente médias da equipe". O texto exato é pendência de redação (pergunta aberta 1).
+- **Risco assumido e registrado**: possível viés de resposta por saber que a diretoria pode ler — mitigado pela transparência e pela restrição do acesso individual a um único papel (ver risco 4).
 
 ## Entidades de dados
 
-Especificação funcional (sem DDL). Schema `rh_clima`, acessado pelo pool dedicado `app_clima` no PostgreSQL dedicado da SaveinCloud. Na variante A, o pool `app_clima` não tem leitura sobre as tabelas de identidade além do mínimo para derivar recorte no momento da escrita.
+Especificação funcional (sem DDL). Schema `rh_clima`, acessado pelo pool dedicado `app_clima` no PostgreSQL dedicado da SaveinCloud. Com a resposta vinculada ao colaborador (decisão de 2026-07-27), o pool `app_clima` **precisa de leitura sobre identidade** (colaborador, lotação/equipe, relação gestor); a segregação deixa de ser por ausência do dado e passa a ser por **GRANT + chave de permissão**: a leitura de resposta individual (conteúdo + autor) só sai pela rota da aplicação protegida pela chave `clima.resposta.individual.ver` (exclusiva da Diretoria de Pessoas), nunca por consulta genérica dos demais papéis.
 
 - **`pergunta_checkin`** — enunciado, tema (humor | entregas | carga | relacionamento | outro), tipo de escala (fixo: emoji_1_5 no MVP), status com vigência (ativa/desativada; enunciado publicado é imutável — alteração = pergunta nova no mesmo tema).
 - **`agenda_checkin`** — configuração de rotação com vigência: pergunta × dias da semana/cadência, janela de resposta, horário do lembrete. Versionada (mudança de agenda não reescreve o passado).
-- **`checkin_resposta`** — data, pergunta_id, valor (1–5), texto opcional. Append-only (edição no dia = nova linha, última vale).
-  - **Variante A:** sem FK para colaborador; carrega apenas unidade_id/equipe_id copiados no momento da resposta; sem IP, sem user-agent, sem timestamp fino (só a data; hora arredondada ou ausente para não correlacionar com a participação).
-  - **Variante B:** com colaborador_id; timestamp normal; toda leitura individual registrada em trilha de auditoria de leitura.
-- **`participacao_checkin`** — data, colaborador_id, status (lembrado | respondeu). Existe para unicidade diária, taxa de participação e supressão de lembrete. **Na variante A não tem nenhuma ligação com `checkin_resposta`** além da data — registra QUE respondeu, nunca O QUE. Retenção curta (tabela de temporalidade).
-- **`alerta_clima`** — tipo (queda_media | negativas_acima_teto | participacao_anomala | individual*), recorte (unidade/equipe; *colaborador_id só existe na variante B), período de referência, valor gatilho, status (aberto → em tratamento → encerrado) com anotação de tratamento. Transições auditadas.
+- **`checkin_resposta`** — data, pergunta_id, valor (1–5), texto opcional, **colaborador_id (FK)** e unidade_id/equipe_id copiados no momento da resposta (recorte histórico estável); timestamp normal. Append-only (edição no dia = nova linha, última vale). Toda leitura individual (conteúdo + autor) passa exclusivamente pela rota com a chave `clima.resposta.individual.ver` e é registrada na trilha de leitura do `audit`.
+- **`participacao_checkin`** — data, colaborador_id, status (lembrado | respondeu). Existe para unicidade diária, taxa de participação e supressão de lembrete — registra QUE respondeu; O QUE respondeu fica em `checkin_resposta`, atrás da rota restrita. Retenção curta (tabela de temporalidade).
+- **`alerta_clima`** — tipo (queda_media | negativas_acima_teto | participacao_anomala), recorte (unidade/equipe — alerta é sempre sobre recorte, nunca sobre pessoa; não há alerta individual no MVP), período de referência, valor gatilho, status (aberto → em tratamento → encerrado) com anotação de tratamento. Transições auditadas.
 - **`snapshot_periodo`** *(leve)* — fechamento mensal dos agregados exibidos (médias, distribuições, participação por recorte), imutável — defensável depois ("o que a gestão viu era isto") e insumo barato para o people analytics futuro.
 
 Fronteiras estruturais:
-- Nada de clima escreve em `evento_colaborador` (linha do tempo do colaborador) — em nenhuma variante o humor entra na ficha da pessoa.
+- Nada de clima escreve em `evento_colaborador` (linha do tempo do colaborador) — em nenhuma hipótese o humor entra na ficha da pessoa.
 - Recorte (unidade/equipe) e relação gestor↔equipe vêm do domínio `rh` (cadastro próprio da Fase A) com vigência; o clima consome, nunca escreve.
-- `audit` (append-only por GRANT) registra: gestão de perguntas e agenda, mudanças de parâmetros de alerta, transições de alerta, e — **somente na variante B** — trilha de leitura de série individual (quem viu a série de quem, quando).
+- `audit` (append-only por GRANT) registra: gestão de perguntas e agenda, mudanças de parâmetros de alerta, transições de alerta, e a **trilha de leitura de resposta/série individual** (quem viu o quê de quem, quando) — obrigatória em toda leitura pela rota da Diretoria de Pessoas.
 
 ## Papéis e permissões
 
-Papéis próprios da Fase A (funcionário / gestor / rh / dp / admin), validados no backend Node (a interface nunca decide); RLS via SET LOCAL onde couber, senão autorização na camada de repositório coberta pela matriz de testes papel × recurso no CI.
+Papéis próprios da Fase A (funcionário / gestor / rh / dp / admin, acrescidos do papel **diretoria de pessoas** exigido pelo clima), validados no backend Node (a interface nunca decide); RLS via SET LOCAL onde couber, senão autorização na camada de repositório coberta pela matriz de testes papel × recurso no CI. A chave `clima.resposta.individual.ver` entra na matriz como caso obrigatório: só o perfil diretoria a possui.
 
 | Papel | Pode |
 |---|---|
-| **Funcionário** | Responder o check-in do dia (uma vez, editável até o fim do dia); ver a própria série histórica **(nas duas variantes — na A a série pessoal fica só no dispositivo/sessão ou não existe, a confirmar no protótipo)**; ver agregado da empresa se o RH marcar como público. |
-| **Gestor** | Dashboard agregado **apenas dos recortes das suas equipes** (relação com vigência); alertas de queda dos seus recortes; textos dos seus recortes conforme política definida. **Variante B (somente):** série individual e alertas individuais dos seus liderados diretos, com leitura auditada. Nunca vê lista nominal de quem não respondeu (default recomendado; a fechar com RH). |
-| **RH** | Administrar catálogo de perguntas, agenda, parâmetros de alerta e mínimo de exibição; ver todos os agregados; ver textos; tratar alertas; exportar agregados. **Variante A:** não vê resposta individual — impossível por estrutura, não por tela. **Variante B:** vê série individual com leitura auditada. |
+| **Funcionário** | Responder o check-in do dia (uma vez, editável até o fim do dia); ver a própria série histórica (existe no servidor, vinculada a ele — acesso restrito ao próprio dado); ver agregado da empresa se o RH marcar como público. |
+| **Gestor** | **Apenas agregados**: dashboard dos recortes das suas equipes (relação com vigência), respeitando o recorte mínimo; alertas de queda dos seus recortes; textos dos seus recortes **sem autor**, conforme política definida. **Nunca vê resposta individual** (bloqueio por chave/GRANT no backend). Nunca vê lista nominal de quem não respondeu (default recomendado; a fechar com RH). |
+| **RH** | Administrar catálogo de perguntas, agenda, parâmetros de alerta e mínimo de exibição; ver todos os agregados; ver textos **sem autor**; tratar alertas; exportar agregados. **Não vê resposta individual** — o RH operacional não recebe a chave `clima.resposta.individual.ver`; o bloqueio é por chave/GRANT no backend, não por tela. |
+| **Diretoria de Pessoas** | **Único papel com a chave `clima.resposta.individual.ver`**: vê resposta e série individuais (conteúdo + autor), mediante **2FA** e com **toda leitura registrada na trilha do `audit`**. Também vê todos os agregados. |
 | **DP** | Sem acesso por padrão (clima não é operação de DP). |
-| **Admin (TI)** | Gestão técnica sem GRANT de leitura sobre respostas na variante A; manutenção excepcional só por acesso nominal e logado. |
+| **Admin (TI)** | Gestão técnica **sem** a chave `clima.resposta.individual.ver` (não vê resposta individual pela aplicação); manutenção excepcional no banco só por acesso nominal e logado. |
 
-Regra transversal: recorte abaixo do mínimo de respondentes não trafega no payload de ninguém (ausência, não máscara), inclusive RH e admin.
+Regra transversal: recorte abaixo do mínimo de respondentes não trafega no payload de ninguém (ausência, não máscara), inclusive RH e admin — o acesso individual da Diretoria de Pessoas sai pela rota própria auditada, nunca por agregado de grupo pequeno.
 
 ## Integrações
 
@@ -134,43 +111,43 @@ Regra transversal: recorte abaixo do mínimo de respondentes não trafega no pay
 
 ## Regulatório
 
-Aqui não há CLT/eSocial/Portaria 671 — clima é iniciativa voluntária. O tema é **LGPD**, e a variante escolhida muda o enquadramento:
+Aqui não há CLT/eSocial/Portaria 671 — clima é iniciativa voluntária. O tema é **LGPD**, sob o modelo decidido (confidencial com acesso restrito, decisão do usuário 2026-07-27):
 
-- **Variante A:** a resposta, sem FK, sem timestamp fino e sem atributos além do recorte, é defensável como **dado anonimizado (art. 12 LGPD)** — fora do escopo dos direitos do titular sobre a resposta em si. `participacao_checkin` é dado pessoal comum (base legal: legítimo interesse com teste documentado; retenção curta na tabela de temporalidade; atendível na esteira de direitos do titular). Registrar os controles técnicos (ausência de atributos, GRANTs, mínimo de exibição) num **RIPD enxuto** antes do primeiro dia de uso.
-- **Variante B:** resposta identificada de estado emocional é dado pessoal com potencial leitura de **dado sensível (saúde/estado psíquico)**. Exige: parecer do DPO e RIPD completo antes da ativação; transparência total na própria tela ("seu gestor e o RH veem sua resposta e recebem alerta"); trilha de auditoria de leitura; retenção curta definida; compromisso formal de não-uso em decisões de desempenho/desligamento; canal para o titular exercer direitos (acesso, eliminação).
-- **Nas duas variantes:** comunicação de lançamento explicando o que é coletado e quem vê o quê — transparência é pré-condição de adesão, não formalidade; logs de aplicação/API não podem registrar corpo de resposta associado a usuário (item de checklist de release — na variante A isso é o canal lateral que poderia religar resposta a pessoa); backups com a mesma disciplina de acesso do banco (backup diário + PITR com restore testado, padrão da plataforma).
+- **Não é anonimização — art. 12 não se aplica à resposta.** Com FK para o colaborador, a resposta é **dado pessoal** que revela estado emocional, tangenciando **dado sensível (saúde/estado psíquico)** na leitura da LGPD. O enquadramento é **confidencialidade + minimização de exibição + trilha de leitura**: acesso individual restrito a um único papel (Diretoria de Pessoas) com chave própria e 2FA; demais papéis só veem agregados com recorte mínimo; toda leitura individual registrada no `audit`.
+- **RIPD continua obrigatório** antes do primeiro dia de uso, com parecer do DPO: base legal documentada (legítimo interesse com teste, dada a voluntariedade e a finalidade de cuidado), retenção curta definida para o microdado, compromisso formal por escrito de não-uso em decisões de desempenho/promoção/desligamento, e canal para o titular exercer direitos (acesso, correção, eliminação) — que agora incidem sobre a resposta em si, pois ela é dado pessoal. `participacao_checkin` segue como dado pessoal comum com retenção curta na tabela de temporalidade.
+- **Sempre:** comunicação de lançamento explicando o que é coletado e quem vê o quê — transparência é pré-condição de adesão, não formalidade (inclui o aviso na própria tela: "suas respostas individuais são visíveis apenas à Diretoria de Pessoas; seu gestor vê somente médias da equipe"); logs de aplicação/API não podem registrar corpo de resposta associado a usuário (item de checklist de release — log é canal lateral que burlaria a rota restrita e sua trilha de leitura); backups com a mesma disciplina de acesso do banco (backup diário + PITR com restore testado, padrão da plataforma).
 - Clima **não substitui canal de denúncia** (sigilo com apuração é outro desenho) nem atendimento de saúde — deixar explícito na interface, com orientação de canais adequados quando o funcionário relatar algo grave no texto.
 
 ## Dependências
 
-- **Fase 0**: protótipos HTML das duas variantes (tela de resposta + dashboard + tela de transparência "quem vê o quê") para decisão do DP/RH; decisão da variante registrada no log; Postgres dedicado provisionado com restore testado; definição do mínimo de exibição por recorte.
+- **Fase 0**: protótipo HTML do modelo confidencial (tela de resposta + dashboard + tela de transparência "quem vê o quê") para validação do DP/RH; decisão do modelo já registrada no log (decisão do usuário 2026-07-27); Postgres dedicado provisionado com restore testado; definição do mínimo de exibição por recorte e do texto exato de transparência.
 - **Fase 1 (mesmo pacote de entrega)**: autenticação e cadastro próprios com papéis; colaborador com lotação/equipe e relação gestor com vigência; `audit` append-only operante; n8n + e-mail transacional configurados (WhatsApp só se a opção com opt-in for aprovada); pool `app_clima` com GRANTs restritos.
 - **Não depende de**: folha própria, ponto/REP-P, eSocial, 360, assinatura, SOC, DW — é o módulo com menor dependência externa do sistema, por isso entra cedo.
 
 ## Riscos
 
 1. **Fadiga de resposta** — o maior risco específico do formato diário: adesão alta na semana 1 e queda ao platô nos meses seguintes. Mitigação: custo de resposta < 10 segundos, lembrete silenciável, rotação de perguntas, devolutiva visível (funcionário percebe que o dado gera ação — plano tratado, alerta encerrado com anotação); aceitar como sucesso um platô realista (ex.: 40–60% dos dias úteis) e medir tendência, não censo.
-2. **Percepção de vigilância** — mesmo na variante A, "o RH quer saber como me sinto todo dia" pode soar como monitoramento. Mitigação: comunicação de lançamento clara, tela de transparência dentro do app, e — se a variante A for a escolhida — reforçar a garantia estrutural em linguagem simples.
-3. **Texto livre como vetor de autoidentificação (variante A)** — o comentário pode identificar o autor pelo conteúdo ("como único analista da loja X…"). Mitigação: aviso na tela, exibição em lote/embaralhada, orientação ao RH de não caçar autoria; risco residual aceito e registrado.
-4. **Resposta performática (variante B)** — se identificado, parte das pessoas responde o que o gestor quer ver; a série perde valor exatamente onde mais importa. É o argumento técnico central da recomendação pela A.
+2. **Percepção de vigilância** — no modelo confidencial, "a diretoria pode ler o que eu marco" pode soar como monitoramento. Mitigação: comunicação de lançamento clara, tela de transparência dentro do app dizendo exatamente quem vê o quê, e reforço em linguagem simples de que gestor e RH veem somente médias.
+3. **Texto livre como vetor de identificação na exibição sem autor** — o comentário exibido a RH/gestor sem autor pode identificá-lo pelo conteúdo ("como único analista da loja X…"). Mitigação: aviso na tela, exibição em lote/embaralhada, orientação a RH/gestor de não caçar autoria; risco residual aceito e registrado.
+4. **Viés de resposta (risco assumido na decisão de 2026-07-27)** — saber que a Diretoria de Pessoas pode ler a resposta individual pode levar parte das pessoas a responder de forma performática. Mitigação registrada: transparência total sobre quem vê o quê e restrição do acesso individual a um único papel (gestor e RH nunca veem).
 5. **Equipes pequenas** — recorte abaixo do mínimo não aparece isolado; gestor de equipe de 3 pessoas só vê o agregado da unidade. Combinar antes do lançamento, não descobrir no dashboard.
 6. **Fadiga/banalização de alertas** — limiar mal calibrado dispara alerta toda semana e o gestor para de olhar. Mitigação: parâmetros ajustáveis pelo RH, início conservador, revisão após os 2 primeiros meses.
-7. **Pressão organizacional por dado individual na variante A** ("quem marcou chorando?") — o sistema torna o não estrutural, mas a política precisa estar assinada por RH/diretoria antes do primeiro dia, senão a pressão cai sobre o time de desenvolvimento.
-8. **Uso indevido do dado (variante B)** — série de humor usada, ainda que informalmente, em decisão de desempenho ou desligamento: risco jurídico e de confiança graves. Mitigação: regra de não-uso formalizada, trilha de leitura auditada, retenção curta.
-9. **Migração A→B mal comunicada** — se um dia a empresa ativar a variante B, valer só dali em diante e com aviso prévio; qualquer sombra de retroatividade destrói a promessa feita na A.
+7. **Pressão organizacional por dado individual fora da rota restrita** ("quem marcou chorando?") — gestor ou RH pedindo o acesso que a chave nega. O sistema torna o "não" técnico (chave/GRANT), mas a política de acesso precisa estar assinada por RH/diretoria antes do primeiro dia, senão a pressão cai sobre o time de desenvolvimento.
+8. **Uso indevido do dado individual** — série de humor lida pela diretoria e usada, ainda que informalmente, em decisão de desempenho ou desligamento: risco jurídico e de confiança graves. Mitigação: regra de não-uso formalizada por escrito, trilha de leitura auditada, 2FA, retenção curta.
+9. **Ampliação futura do rol de acesso mal comunicada** — se um dia a empresa quiser dar leitura individual a mais papéis (ex.: gestor), a mudança exige nova decisão registrada, parecer do DPO, aviso prévio e vigência só dali em diante; qualquer sombra de retroatividade destrói a promessa de confidencialidade feita no lançamento.
 
 ## Perguntas abertas para DP/RH
 
-1. **A decisão central: variante A (anônimo agregado) ou B (identificado com alerta ao gestor)?** Recomendação do arquiteto: começar pela A (justificativa na seção de variantes); decidir vendo os dois protótipos da Fase 0.
+1. **[DECIDIDA — decisão do usuário 2026-07-27]** O modelo é **confidencial com acesso restrito** (ver seção "Modelo de anonimato (decidido)"). O que resta a fechar: **o texto exato de transparência** da tela do check-in (partindo de "suas respostas individuais são visíveis apenas à Diretoria de Pessoas; seu gestor vê somente médias da equipe") e **o recorte mínimo dos agregados** (tamanho mínimo de grupo para exibir média sem desanonimizar na prática — ver também pergunta 5).
 2. Cadência: todo dia útil, ou 3× por semana? Perguntas em rotação (humor diário + entregas semanal) ou uma única fixa no início?
 3. Horário do lembrete e canal adicional: o padrão do lembrete diário é **e-mail transacional / notificação in-app** (política de canais: WhatsApp reservado a urgência, com custo por mensagem). O RH quer habilitar o WhatsApp como canal adicional do lembrete, mediante **opt-in do funcionário**? Se sim, aprovar antes a estimativa de custo recorrente: **nº de colaboradores × dias úteis × preço por mensagem** (ex.: 200 colaboradores × 21 dias úteis × preço unitário da mensagem WhatsApp ≈ 4.200 mensagens/mês a precificar). Qual o horário do disparo? O funcionário pode silenciar? (Sim por padrão — confirmar.)
-4. Quem lê os textos: só RH, ou gestor também (do seu recorte)? Na variante A, aceita-se a exibição embaralhada/em lote?
+4. Quem lê os textos (sempre sem autor): só RH, ou gestor também (do seu recorte)? Aceita-se a exibição embaralhada/em lote?
 5. Mínimo de respondentes para exibir recorte: 5 está bom? Equipes menores aceitam aparecer só no agregado da unidade, ou preferem agrupamentos definidos antes do lançamento?
 6. Limiares iniciais de alerta de queda (proposta: −0,5 na média móvel de 7 dias; >30% de respostas negativas na semana) — calibrar com RH e revisar após 2 meses?
 7. Gestor vê % de participação da equipe? E lista nominal de quem não respondeu? (Recomendação firme: nunca nominal — participação não pode virar dado de cobrança.)
 8. Resultado agregado da empresa é publicado para todos os funcionários (transparência aumenta adesão) ou restrito a RH/gestores? Qual o default?
 9. Escopo de participantes: só CLT, ou também estagiários, aprendizes e temporários? PJ/terceirizados ficam fora?
-10. Retenção: por quanto tempo guardar respostas (proposta: agregados/snapshots por tempo indeterminado; microdado da variante B e participação por prazo curto, ex.: 12–24 meses)? Quem assina o RIPD?
-11. O funcionário deve ver a própria série histórica ("meu humor no mês")? Na variante A isso exige desenho específico (a série identificada não existe no servidor) — vale o custo ou fica de fora?
+10. Retenção: por quanto tempo guardar respostas (proposta: agregados/snapshots por tempo indeterminado; microdado identificado e participação por prazo curto, ex.: 12–24 meses)? Quem assina o RIPD?
+11. O funcionário deve ver a própria série histórica ("meu humor no mês")? Com a resposta vinculada ao colaborador a série existe no servidor — é tela simples; entra no MVP ou fica para depois?
 12. Confirmar fronteiras: pesquisa de desligamento fica no processo de desligamento (identificada) e canal de denúncia é outro produto — ok para RH?
 13. Pesquisas periódicas/eNPS (formato da v1) ficam como evolução futura condicionada a necessidade real — algum compromisso já assumido com diretoria que exija antecipar?
