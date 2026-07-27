@@ -200,6 +200,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #arquitetura #canonico
 
+### [2026-07-27] DECISÃO DO USUÁRIO — Banco de desenvolvimento no Supabase pessoal; produção na SaveinCloud
+
+**Decisão:** Durante o desenvolvimento/teste, o banco é o projeto Supabase "DP/RH" (criado pelo usuário em 2026-07-27, região us-west-2, Postgres 17) na conta pessoal dele. Quando o sistema estiver avançado, sobe para o PostgreSQL dedicado da empresa (SaveinCloud) reexecutando as migrations do zero.
+
+**Motivo:** Proposta do usuário — destrava o desenvolvimento sem esperar o provisionamento da SaveinCloud. A migração futura é limpa porque toda a estrutura vive em migrations versionadas; dado de teste não migra.
+
+**Contexto:** Condições registradas: (1) SOMENTE dados fictícios no Supabase — nenhum dado real de funcionário em conta pessoal (LGPD); (2) credenciais segregadas (app_rh/app_clima/app_folha) e RLS por GRANT ficam adiadas para o banco da empresa — no Supabase usa-se a conexão padrão; (3) região us-west-2 tem latência maior que sa-east-1 — aceitável para dev.
+
+**Tags:** #arquitetura #ingestao #temporario
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.
