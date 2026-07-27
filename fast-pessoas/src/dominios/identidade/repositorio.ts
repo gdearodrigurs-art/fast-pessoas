@@ -36,7 +36,26 @@ export async function buscarPorEmail(
   return { ...linha, id: Number(linha.id) };
 }
 
-export type AcaoIdentidade = "login_sucesso" | "login_falha" | "logout";
+export async function buscarPorId(
+  id: number
+): Promise<UsuarioIdentidade | null> {
+  const linhas = await consultar<LinhaUsuario>(
+    `SELECT id, email, nome, senha_hash, papel, ativo, totp_secret
+       FROM sistema.usuario
+      WHERE id = $1`,
+    [id]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return { ...linha, id: Number(linha.id) };
+}
+
+export type AcaoIdentidade =
+  | "login_sucesso"
+  | "login_falha"
+  | "logout"
+  | "troca_senha"
+  | "troca_senha_falha";
 
 export async function registrarAcao(
   acao: AcaoIdentidade,

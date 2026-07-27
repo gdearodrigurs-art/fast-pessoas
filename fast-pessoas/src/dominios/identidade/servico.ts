@@ -1,7 +1,13 @@
-import { compare, hashSync } from "bcryptjs";
+import { compare, hash, hashSync } from "bcryptjs";
 import * as OTPAuth from "otpauth";
-import { Credenciais, PayloadSessao } from "./esquemas";
-import { buscarPorEmail, registrarAcao } from "./repositorio";
+import { comTransacao } from "../../lib/banco";
+import { Credenciais, PayloadSessao, TrocaSenha } from "./esquemas";
+import {
+  atualizarSenhaHash,
+  buscarPorEmail,
+  buscarPorId,
+  registrarAcao,
+} from "./repositorio";
 
 const PAPEIS_COM_2FA = new Set(["rh", "dp", "diretoria", "admin"]);
 
@@ -95,4 +101,37 @@ export async function registrarSaida(sessao: PayloadSessao): Promise<void> {
     id: sessao.usuario_id,
     papel: sessao.papel,
   });
+}
+
+export type ResultadoTrocaSenha =
+  | { ok: true }
+  | { ok: false; motivo: "senha_atual_invalida" };
+
+export async function trocarSenha(
+  sessao: PayloadSessao,
+  dados: TrocaSenha
+): Promise<ResultadoTrocaSenha> {
+  const usuario = await buscarPorId(sessao.usuario_id);
+  const confere =
+    usuario?.senha_hash && usuario.ativo
+      ? await compare(dados.senha_atual, usuario.senha_hash)
+      : false;
+
+  if (!confere) {
+    await registrarAcao("troca_senha_falha", {
+      id: sessao.usuario_id,
+      papel: sessao.papel,
+    });
+    return { ok: false, motivo: "senha_atual_invalida" };
+  }
+
+  const novoHash = await hash(dados.senha_nova, 12);
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    await atualizarSenhaHash(cliente, sessao.usuario_id, novoHash);
+  });
+  await registrarAcao("troca_senha", {
+    id: sessao.usuario_id,
+    papel: sessao.papel,
+  });
+  return { ok: true };
 }
