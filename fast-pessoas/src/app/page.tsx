@@ -26,6 +26,11 @@ export default async function PaginaInicial() {
           <span>
             {sessao.nome} · {ROTULO_PAPEL[sessao.papel] ?? sessao.papel}
           </span>
+          {sessao.papel === "admin" && (
+            <a className={estilos.acao} href="/usuarios">
+              Usuários
+            </a>
+          )}
           <a className={estilos.acao} href="/trocar-senha">
             Trocar senha
           </a>

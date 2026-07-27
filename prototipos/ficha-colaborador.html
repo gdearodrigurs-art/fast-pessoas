@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fast Pessoas — Ficha do Colaborador (protótipo)</title>
+<style>
+  :root{
+    --primary:#d21217; --primary-hover:#bd1015;
+    --bg:#f7f6f4; --surface:#ffffff; --text:#1c1b1a; --muted:#6b6763;
+    --border:#e3e0dc; --fill:#f0eeeb; --success:#1a7f37; --warning:#b58500; --danger:#c62828;
+    --ev-admissao:#1a7f37; --ev-promocao:#6d4fc2; --ev-reajuste:#b58500;
+    --ev-feedback:#1565c0; --ev-ferias:#00838f; --ev-ocorrencia:#c96f00; --ev-afastamento:#c62828;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#161514; --surface:#211f1e; --text:#f0eeec; --muted:#a09a94;
+           --border:#3a3735; --fill:#2b2927; --success:#4caf6d; --warning:#d9a521; --danger:#ef6461;
+           --ev-admissao:#3f9c5e; --ev-promocao:#8f74d8; --ev-reajuste:#c0922e;
+           --ev-feedback:#4a8fd4; --ev-ferias:#2ba3b2; --ev-ocorrencia:#d08434; --ev-afastamento:#d95a57; }
+  }
+  *{box-sizing:border-box; margin:0}
+  body{background:var(--bg); color:var(--text);
+       font:15px/1.5 'Instrument Sans','Segoe UI',system-ui,sans-serif; padding-bottom:80px}
+  header{background:var(--surface); border-bottom:3px solid var(--primary); padding:16px 28px;
+         display:flex; align-items:center; gap:20px; flex-wrap:wrap}
+  header h1{font-size:20px}
+  header h1 span{color:var(--primary)}
+  .proto-badge{background:var(--warning); color:#fff; font-size:11px; font-weight:700;
+               padding:2px 8px; border-radius:10px; letter-spacing:.5px}
+  .spacer{flex:1}
+  .controle{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted)}
+  select,input,button,textarea{font:inherit; color:var(--text); background:var(--surface);
+    border:1px solid var(--border); border-radius:6px; padding:6px 10px}
+  button{cursor:pointer}
+  button.primaria{background:var(--primary); border-color:var(--primary); color:#fff; font-weight:600}
+  button.primaria:hover{background:var(--primary-hover)}
+  button.leve{background:transparent; color:var(--primary); border:none; font-weight:600; padding:4px 6px}
+  main{max-width:1080px; margin:24px auto; padding:0 20px}
+  .aviso{background:var(--fill); border:1px dashed var(--border); border-radius:8px;
+         padding:10px 14px; font-size:13px; color:var(--muted); margin-bottom:20px}
+
+  /* lista */
+  .grade-colabs{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px}
+  .card-colab{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+              padding:16px; cursor:pointer; display:flex; gap:14px; align-items:flex-start}
+  .card-colab:hover{border-color:var(--primary)}
+  .avatar{width:46px; height:46px; border-radius:50%; background:var(--fill); color:var(--primary);
+          font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0;
+          border:2px solid var(--border)}
+  .card-colab h3{font-size:15px}
+  .card-colab .sub{font-size:12.5px; color:var(--muted)}
+  .chips{margin-top:6px; display:flex; flex-wrap:wrap; gap:4px}
+  .chip{display:inline-block; background:var(--fill); border:1px solid var(--border);
+        border-radius:10px; font-size:11px; padding:1px 8px; font-variant-numeric:tabular-nums}
+  .pill{display:inline-block; border-radius:10px; font-size:11px; font-weight:700; padding:1px 8px; color:#fff}
+  .pill.ativo{background:var(--success)} .pill.afastado{background:var(--warning)} .pill.desligado{background:var(--muted)}
+  .chip.alerta-90{border-color:var(--danger); color:var(--danger); font-weight:700}
+
+  /* ficha */
+  .cabecalho-ficha{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+                   padding:20px; display:flex; gap:18px; flex-wrap:wrap; margin-bottom:16px}
+  .cabecalho-ficha .avatar{width:64px; height:64px; font-size:20px}
+  .cabecalho-ficha h2{font-size:20px; margin-bottom:2px}
+  .cabecalho-ficha .info{flex:1; min-width:260px}
+  .retrato{background:var(--fill); border-radius:8px; padding:10px 14px; font-size:13.5px; margin-top:10px}
+  .retrato b{font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); display:block}
+  .banner-90{background:var(--danger); color:#fff; border-radius:8px; padding:10px 14px;
+             font-size:13.5px; font-weight:600; margin-bottom:16px}
+  .abas{display:flex; gap:4px; border-bottom:2px solid var(--border); margin-bottom:16px; flex-wrap:wrap}
+  .abas button{border:none; background:transparent; border-radius:6px 6px 0 0; padding:8px 14px;
+               font-weight:600; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-2px}
+  .abas button.ativa{color:var(--primary); border-bottom-color:var(--primary)}
+  .acoes-dp{display:flex; gap:8px; margin-left:auto; align-items:center; flex-wrap:wrap}
+
+  .grade-dados{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px}
+  .campo{background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px}
+  .campo .rot{font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted)}
+  .campo .val{font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums}
+  .campo.restrito{border-style:dashed; border-color:var(--warning)}
+  .campo .nota{font-size:11px; color:var(--warning); margin-top:2px}
+
+  /* linha do tempo */
+  .linha-tempo{position:relative; margin:6px 0 0 14px; padding-left:30px; border-left:2px solid var(--border)}
+  .evento{position:relative; margin-bottom:18px}
+  .evento .ponto{position:absolute; left:-45px; top:0; width:28px; height:28px; border-radius:50%;
+                 color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px;
+                 border:2px solid var(--bg)}
+  .evento .cartao{background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px}
+  .evento .meta{font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+  .evento .tipo-rotulo{font-weight:700; text-transform:uppercase; letter-spacing:.5px; font-size:11px}
+  .evento .resumo{margin-top:3px; font-size:14px}
+  .tag-restrito{background:var(--warning); color:#fff; font-size:10px; font-weight:700;
+                padding:1px 7px; border-radius:9px; letter-spacing:.5px}
+
+  /* listas de ocorrencia/feedback */
+  .item-registro{background:var(--surface); border:1px solid var(--border); border-radius:8px;
+                 padding:12px 16px; margin-bottom:10px}
+  .item-registro .topo{display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12.5px; color:var(--muted)}
+  .item-registro .texto{margin-top:4px; font-size:14px}
+  .item-registro .extra{margin-top:4px; font-size:12.5px; color:var(--muted)}
+  .clf{font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.5px}
+  .clf.positivo{color:var(--success)} .clf.negativo{color:var(--danger)}
+  .clf.neutro{color:var(--muted)} .clf.alerta{color:var(--warning)}
+  .vazio{color:var(--muted); font-style:italic; font-size:14px; padding:8px 4px}
+
+  dialog{border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text);
+         padding:24px; width:440px; max-width:92vw}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  dialog h3{margin-bottom:4px}
+  dialog .sub{font-size:13px; color:var(--muted); margin-bottom:16px}
+  dialog label{display:block; font-size:13px; font-weight:600; margin:12px 0 4px}
+  dialog input,dialog select,dialog textarea{width:100%}
+  dialog label.linha{display:flex; align-items:center; gap:8px; font-weight:400}
+  dialog label.linha input{width:auto}
+  dialog .acoes{display:flex; justify-content:flex-end; gap:10px; margin-top:20px}
+  .rodape-nota{position:fixed; bottom:0; left:0; right:0; background:var(--surface);
+    border-top:1px solid var(--border); padding:8px 28px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>Fast Pessoas</span> · Ficha do Colaborador</h1>
+  <span class="proto-badge">PROTÓTIPO</span>
+  <div class="spacer"></div>
+  <div class="controle">Vendo como:
+    <select id="papel">
+      <option value="funcionario">Funcionário (Ana Paula — só a própria ficha)</option>
+      <option value="gestor">Gestor (Carlos — vê a equipe)</option>
+      <option value="dp" selected>DP (vê tudo, inclusive restritos)</option>
+    </select>
+  </div>
+</header>
+
+<main>
+  <div class="aviso">
+    A ficha é a espinha dorsal do sistema: <b>uma por colaborador</b>, com linha do tempo
+    <b>append-only</b> onde todos os módulos penduram eventos. O que o papel não pode ver
+    <b>não é mascarado — simplesmente não é renderizado</b> (no sistema real o dado nem sai do backend):
+    salário e ocorrências restritas só existem na tela do DP, e toda leitura desses dados grava trilha.
+  </div>
+  <div id="conteudo"></div>
+</main>
+
+<dialog id="dlgOco">
+  <h3>Registrar ocorrência</h3>
+  <div class="sub" id="dlgOcoSub"></div>
+  <form method="dialog" id="formOco">
+    <label>Data do fato</label>
+    <input id="oData" type="date" required>
+    <label>Classificação</label>
+    <select id="oClf">
+      <option value="positivo">Positivo</option><option value="neutro">Neutro</option>
+      <option value="alerta">Alerta</option><option value="negativo">Negativo</option>
+    </select>
+    <label>Descrição</label>
+    <textarea id="oDesc" rows="3" required placeholder="fato, impacto, ação combinada"></textarea>
+    <label>Valores Fast relacionados</label>
+    <input id="oValores" placeholder="ex.: Disciplina, Resultado">
+    <label class="linha"><input id="oRestrita" type="checkbox">
+      Disciplinar / restrita (advertência — só DP vê, leitura logada)</label>
+    <div class="acoes">
+      <button type="button" onclick="dlgOco.close()">Cancelar</button>
+      <button class="primaria" value="ok">Registrar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgFb">
+  <h3>Registrar feedback formal</h3>
+  <div class="sub" id="dlgFbSub"></div>
+  <form method="dialog" id="formFb">
+    <label>Data</label>
+    <input id="fData" type="date" required>
+    <label>Resumo da conversa</label>
+    <textarea id="fResumo" rows="3" required></textarea>
+    <label>Acordos / próximos passos</label>
+    <input id="fAcordos" placeholder="ex.: revisar meta em 30 dias">
+    <div class="acoes">
+      <button type="button" onclick="dlgFb.close()">Cancelar</button>
+      <button class="primaria" value="ok">Registrar</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="rodape-nota">Protótipo para validação com DP/RH — dados fictícios, salvos só neste navegador (localStorage).
+Regras reproduzidas do desenho: linha do tempo append-only · evento nasce junto da entidade de origem · dado restrito ausente (não mascarado) · alerta de feedback 90d · acesso por papel.</div>
+
+<script>
+const COLABS = [
+  {id:'ana', nome:'Ana Paula Ribeiro', matricula:'FP-1042', cargo:'Vendedora Pleno',
+   unidade:'Unidade Centro', status:'ativo', admissao:'2023-03-06', vinculo:'CLT',
+   gestor:'Carlos Eduardo Souza', salario:'R$ 2.850,00',
+   retrato:'Vendedora consistente, forte em relacionamento com cliente recorrente. Assumiu o balcão de projetos em 2024.',
+   contexto:'Entrou como Vendedora Jr indicada pela loja Norte; promovida em maio/2024 após ciclo de experiência muito acima da meta.'},
+  {id:'carlos', nome:'Carlos Eduardo Souza', matricula:'FP-0217', cargo:'Gerente de Loja',
+   unidade:'Unidade Centro', status:'ativo', admissao:'2019-08-12', vinculo:'CLT',
+   gestor:'Diretoria Comercial', salario:'R$ 7.400,00',
+   retrato:'Gerente da loja Centro; referência em gestão de equipe e fechamento de mês sem pendências.',
+   contexto:'Começou como Vendedor Sênior; promovido a gerente em 2021. Responde também pelo estoquista da unidade Norte em cobertura.'},
+  {id:'joao', nome:'João Pedro Almeida', matricula:'FP-1188', cargo:'Estoquista',
+   unidade:'Unidade Norte', status:'afastado', admissao:'2024-02-05', vinculo:'CLT',
+   gestor:'Carlos Eduardo Souza', salario:'R$ 2.100,00',
+   retrato:'Estoquista da unidade Norte; bom domínio do fluxo de recebimento, em desenvolvimento na organização de rotina.',
+   contexto:'Admitido em 2024; passou por advertência em 2025 e plano de ajuste de rotina. Afastado pelo INSS desde jul/2026.'},
+  {id:'mariana', nome:'Mariana Costa Lima', matricula:'FP-0733', cargo:'Analista de DP',
+   unidade:'Unidade Sul', status:'ativo', admissao:'2021-11-03', vinculo:'CLT',
+   gestor:'Fernanda Prado (RH)', salario:'R$ 4.600,00',
+   retrato:'Analista de DP na unidade Sul; conduz o saneamento cadastral do eSocial e a conferência da folha.',
+   contexto:'Promovida de Assistente a Analista em 2023; ponto focal da carga inicial do Fast Pessoas.'},
+];
+
+const EQUIPE_GESTOR = {carlos:['ana','joao']};
+const PERSONAS = {funcionario:'ana', gestor:'carlos', dp:null};
+
+const TIPOS_EVENTO = {
+  admissao:   {rotulo:'Admissão',    simbolo:'⚑', cor:'var(--ev-admissao)'},
+  promocao:   {rotulo:'Promoção',    simbolo:'▲', cor:'var(--ev-promocao)'},
+  reajuste:   {rotulo:'Reajuste',    simbolo:'$', cor:'var(--ev-reajuste)'},
+  feedback:   {rotulo:'Feedback',    simbolo:'✎', cor:'var(--ev-feedback)'},
+  ferias:     {rotulo:'Férias',      simbolo:'☀', cor:'var(--ev-ferias)'},
+  ocorrencia: {rotulo:'Ocorrência',  simbolo:'⚠', cor:'var(--ev-ocorrencia)'},
+  afastamento:{rotulo:'Afastamento', simbolo:'✚', cor:'var(--ev-afastamento)'},
+};
+
+const EVENTOS_SEED = [
+  {colab:'ana', tipo:'admissao', data:'2023-03-06', resumo:'Admissão como Vendedora Jr — Unidade Centro (CLT).'},
+  {colab:'ana', tipo:'feedback', data:'2023-09-15', resumo:'Feedback formal com Carlos: adaptação concluída, meta individual definida.'},
+  {colab:'ana', tipo:'ferias', data:'2024-04-01', resumo:'Férias — 20 dias (01/04 a 20/04).'},
+  {colab:'ana', tipo:'promocao', data:'2024-05-02', resumo:'Promoção: Vendedora Jr → Vendedora Pleno (mérito).'},
+  {colab:'ana', tipo:'reajuste', data:'2024-05-02', resumo:'Reajuste salarial: R$ 2.400,00 → R$ 2.850,00 (promoção).', restrito:true},
+  {colab:'ana', tipo:'ocorrencia', data:'2025-07-10', resumo:'Ocorrência positiva: elogio formal de cliente de projeto. Valores: Reconhecimento, Resultado.'},
+  {colab:'ana', tipo:'ferias', data:'2026-04-14', resumo:'Férias — 20 dias (14/04 a 03/05).'},
+  {colab:'ana', tipo:'feedback', data:'2026-06-20', resumo:'Feedback formal: metas do semestre revisadas; acordo de mentoria com vendedora nova.'},
+
+  {colab:'carlos', tipo:'admissao', data:'2019-08-12', resumo:'Admissão como Vendedor Sênior — Unidade Centro (CLT).'},
+  {colab:'carlos', tipo:'promocao', data:'2021-02-01', resumo:'Promoção: Vendedor Sênior → Gerente de Loja.'},
+  {colab:'carlos', tipo:'reajuste', data:'2021-02-01', resumo:'Reajuste salarial: R$ 4.100,00 → R$ 6.200,00 (promoção a gerente).', restrito:true},
+  {colab:'carlos', tipo:'ferias', data:'2025-12-15', resumo:'Férias — 15 dias (15/12 a 29/12).'},
+  {colab:'carlos', tipo:'feedback', data:'2026-05-28', resumo:'Feedback formal com a Diretoria Comercial: plano da loja para o 2º semestre.'},
+
+  {colab:'joao', tipo:'admissao', data:'2024-02-05', resumo:'Admissão como Estoquista — Unidade Norte (CLT).'},
+  {colab:'joao', tipo:'ocorrencia', data:'2024-08-20', resumo:'Ocorrência de alerta: atrasos recorrentes na abertura do estoque; ação combinada de ajuste de rota.'},
+  {colab:'joao', tipo:'ocorrencia', data:'2025-01-10', resumo:'Advertência escrita: descumprimento de procedimento de segurança no recebimento (documento com ciência).', restrito:true},
+  {colab:'joao', tipo:'ferias', data:'2025-06-02', resumo:'Férias — 30 dias (02/06 a 01/07).'},
+  {colab:'joao', tipo:'feedback', data:'2026-03-10', resumo:'Feedback formal: rotina estabilizada; combinado acompanhamento mensal do checklist.'},
+  {colab:'joao', tipo:'afastamento', data:'2026-07-01', resumo:'Afastamento previdenciário (INSS) — início em 01/07. Gestor vê o período; motivo clínico não circula no núcleo.'},
+
+  {colab:'mariana', tipo:'admissao', data:'2021-11-03', resumo:'Admissão como Assistente de DP — Unidade Sul (CLT).'},
+  {colab:'mariana', tipo:'promocao', data:'2023-04-17', resumo:'Promoção: Assistente de DP → Analista de DP.'},
+  {colab:'mariana', tipo:'reajuste', data:'2023-04-17', resumo:'Reajuste salarial: R$ 3.300,00 → R$ 4.600,00 (promoção).', restrito:true},
+  {colab:'mariana', tipo:'ocorrencia', data:'2025-09-08', resumo:'Ocorrência positiva: conduziu o saneamento cadastral do eSocial antes do prazo. Valores: Disciplina, Velocidade.'},
+  {colab:'mariana', tipo:'ferias', data:'2026-01-12', resumo:'Férias — 20 dias (12/01 a 31/01).'},
+  {colab:'mariana', tipo:'feedback', data:'2026-05-05', resumo:'Feedback formal: preparação para a carga inicial do Fast Pessoas; acordo de treinamento interno.'},
+];
+
+const OCORRENCIAS_SEED = [
+  {colab:'ana', data:'2025-07-10', classificacao:'positivo', registradoPor:'Carlos (gestor)',
+   descricao:'Cliente de projeto registrou elogio formal ao atendimento; venda convertida acima do tíquete médio.',
+   valores:'Reconhecimento, Resultado'},
+  {colab:'joao', data:'2024-08-20', classificacao:'alerta', registradoPor:'Carlos (gestor)',
+   descricao:'Atrasos recorrentes na abertura do estoque. Causa provável: rota de transporte. Ação combinada: ajuste de horário por 60 dias.',
+   valores:'Disciplina'},
+  {colab:'joao', data:'2025-01-10', classificacao:'negativo', registradoPor:'DP', restrita:true,
+   descricao:'Advertência escrita por descumprimento de procedimento de segurança no recebimento de carga. Documento no GED com ciência assinada.',
+   valores:'Disciplina, Determinação'},
+  {colab:'mariana', data:'2025-09-08', classificacao:'positivo', registradoPor:'Fernanda (RH)',
+   descricao:'Concluiu o saneamento cadastral do eSocial das 5 unidades duas semanas antes do prazo.',
+   valores:'Disciplina, Velocidade'},
+];
+
+const FEEDBACKS_SEED = [
+  {colab:'ana', data:'2023-09-15', gestor:'Carlos Eduardo Souza',
+   resumo:'Fechamento do ciclo de experiência: adaptação concluída.', acordos:'Meta individual mensal definida.'},
+  {colab:'ana', data:'2026-06-20', gestor:'Carlos Eduardo Souza',
+   resumo:'Revisão das metas do semestre; desempenho consistente.', acordos:'Mentoria da vendedora nova até setembro.'},
+  {colab:'carlos', data:'2026-05-28', gestor:'Diretoria Comercial',
+   resumo:'Plano da loja para o 2º semestre; resultado do 1º semestre acima da meta.', acordos:'Apresentar plano de quadro em agosto.'},
+  {colab:'joao', data:'2026-03-10', gestor:'Carlos Eduardo Souza',
+   resumo:'Rotina de estoque estabilizada após plano de ajuste.', acordos:'Acompanhamento mensal do checklist de recebimento.'},
+  {colab:'mariana', data:'2026-05-05', gestor:'Fernanda Prado (RH)',
+   resumo:'Preparação para a carga inicial do Fast Pessoas.', acordos:'Treinamento interno do DP em julho.'},
+];
+
+let dados = JSON.parse(localStorage.getItem('fp_ficha_colab') || 'null')
+  || {eventos: EVENTOS_SEED, ocorrencias: OCORRENCIAS_SEED, feedbacks: FEEDBACKS_SEED};
+const salvar = () => localStorage.setItem('fp_ficha_colab', JSON.stringify(dados));
+
+let fichaAberta = null;
+let abaAtiva = 'dados';
+
+const papelAtual = () => document.getElementById('papel').value;
+const ehDP = () => papelAtual() === 'dp';
+const fmtData = iso => iso.split('-').reverse().join('/');
+const iniciais = nome => nome.split(' ').map(p => p[0]).slice(0, 2).join('');
+const diasDesde = iso => Math.floor((Date.now() - new Date(iso + 'T00:00:00Z')) / 86400000);
+
+function idsVisiveis(){
+  const papel = papelAtual();
+  if (papel === 'dp') return COLABS.map(c => c.id);
+  if (papel === 'gestor') return [PERSONAS.gestor, ...(EQUIPE_GESTOR[PERSONAS.gestor] || [])];
+  return [PERSONAS.funcionario];
+}
+
+function ultimoFeedback(colabId){
+  const fbs = dados.feedbacks.filter(f => f.colab === colabId).sort((a,b) => b.data.localeCompare(a.data));
+  return fbs[0] || null;
+}
+function feedbackVencido(colabId){
+  const ult = ultimoFeedback(colabId);
+  if (!ult) return {vencido:true, dias:null, ult:null};
+  const dias = diasDesde(ult.data);
+  return {vencido: dias > 90, dias, ult};
+}
+
+function render(){
+  const cont = document.getElementById('conteudo');
+  cont.innerHTML = '';
+  const visiveis = idsVisiveis();
+  if (fichaAberta && !visiveis.includes(fichaAberta)) fichaAberta = null;
+  if (fichaAberta) renderFicha(cont, COLABS.find(c => c.id === fichaAberta));
+  else renderLista(cont, visiveis);
+}
+
+function renderLista(cont, visiveis){
+  const papel = papelAtual();
+  const titulo = document.createElement('h2');
+  titulo.style.cssText = 'font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px;padding-left:4px';
+  titulo.textContent = papel === 'dp' ? 'Todos os colaboradores (5 unidades)'
+    : papel === 'gestor' ? 'Sua ficha e sua equipe (via relação gestor→liderado vigente)'
+    : 'Sua ficha';
+  cont.appendChild(titulo);
+
+  const grade = document.createElement('div');
+  grade.className = 'grade-colabs';
+  for (const id of visiveis){
+    const c = COLABS.find(x => x.id === id);
+    const fv = feedbackVencido(c.id);
+    const card = document.createElement('div');
+    card.className = 'card-colab';
+    card.onclick = () => { fichaAberta = c.id; abaAtiva = 'dados'; render(); };
+    card.innerHTML = `
+      <div class="avatar">${iniciais(c.nome)}</div>
+      <div>
+        <h3>${c.nome}</h3>
+        <div class="sub">${c.cargo} · matrícula ${c.matricula}</div>
+        <div class="chips">
+          <span class="chip">${c.unidade}</span>
+          <span class="pill ${c.status}">${c.status}</span>
+          <span class="chip">admissão ${fmtData(c.admissao)}</span>
+          ${papel !== 'funcionario' && fv.vencido ? `<span class="chip alerta-90">feedback 90d vencido</span>` : ''}
+        </div>
+      </div>`;
+    grade.appendChild(card);
+  }
+  cont.appendChild(grade);
+
+  if (papel === 'funcionario'){
+    const nota = document.createElement('div');
+    nota.className = 'aviso'; nota.style.marginTop = '16px';
+    nota.textContent = 'Como funcionário, você acessa apenas a própria ficha. Correções cadastrais são solicitadas ao DP via demandas.';
+    cont.appendChild(nota);
+  }
+}
+
+function renderFicha(cont, c){
+  const papel = papelAtual();
+  const fv = feedbackVencido(c.id);
+
+  const voltar = document.createElement('button');
+  voltar.className = 'leve'; voltar.textContent = '← Voltar à lista';
+  voltar.style.marginBottom = '10px';
+  voltar.onclick = () => { fichaAberta = null; render(); };
+  cont.appendChild(voltar);
+
+  const cab = document.createElement('div');
+  cab.className = 'cabecalho-ficha';
+  cab.innerHTML = `
+    <div class="avatar">${iniciais(c.nome)}</div>
+    <div class="info">
+      <h2>${c.nome}</h2>
+      <div class="chips">
+        <span class="chip">matrícula ${c.matricula}</span>
+        <span class="chip">${c.cargo}</span>
+        <span class="chip">${c.unidade}</span>
+        <span class="pill ${c.status}">${c.status}</span>
+        <span class="chip">admissão ${fmtData(c.admissao)}</span>
+        <span class="chip">${c.vinculo}</span>
+      </div>
+      <div class="retrato"><b>Retrato atual</b>${c.retrato}</div>
+      <div class="retrato"><b>Contexto histórico</b>${c.contexto}</div>
+    </div>
+    ${ehDP() ? `<div class="acoes-dp">
+      <button class="primaria" id="btnOco">+ Registrar ocorrência</button>
+      <button class="primaria" id="btnFb">+ Registrar feedback</button>
+    </div>` : ''}`;
+  cont.appendChild(cab);
+  if (ehDP()){
+    cab.querySelector('#btnOco').onclick = () => abrirDlgOco(c);
+    cab.querySelector('#btnFb').onclick = () => abrirDlgFb(c);
+  }
+
+  if (papel !== 'funcionario' && fv.vencido){
+    const banner = document.createElement('div');
+    banner.className = 'banner-90';
+    banner.textContent = fv.ult
+      ? `Feedback formal vencido: último em ${fmtData(fv.ult.data)}, há ${fv.dias} dias (cadência padrão: 90 dias). Alerta enviado ao gestor.`
+      : 'Nenhum feedback formal registrado — cadência de 90 dias vencida desde a admissão.';
+    cont.appendChild(banner);
+  }
+
+  const abas = document.createElement('div');
+  abas.className = 'abas';
+  const defs = [['dados','Dados'],['linha','Linha do tempo'],['ocorrencias','Ocorrências'],['feedbacks','Feedbacks']];
+  for (const [id, rotulo] of defs){
+    const b = document.createElement('button');
+    b.textContent = rotulo;
+    if (abaAtiva === id) b.classList.add('ativa');
+    b.onclick = () => { abaAtiva = id; render(); };
+    abas.appendChild(b);
+  }
+  cont.appendChild(abas);
+
+  const corpo = document.createElement('div');
+  if (abaAtiva === 'dados') renderDados(corpo, c, fv);
+  else if (abaAtiva === 'linha') renderLinhaTempo(corpo, c);
+  else if (abaAtiva === 'ocorrencias') renderOcorrencias(corpo, c);
+  else renderFeedbacks(corpo, c, fv);
+  cont.appendChild(corpo);
+}
+
+function renderDados(corpo, c, fv){
+  const grade = document.createElement('div');
+  grade.className = 'grade-dados';
+  const campos = [
+    ['Matrícula própria', c.matricula], ['Tipo de vínculo', c.vinculo],
+    ['Data de admissão', fmtData(c.admissao)], ['Status', c.status],
+    ['Unidade (lotação vigente)', c.unidade], ['Cargo (posição vigente)', c.cargo],
+    ['Gestor atual (relação vigente)', c.gestor],
+    ['Último feedback formal (derivado)', fv.ult ? `${fmtData(fv.ult.data)} — há ${fv.dias} dias` : 'nenhum'],
+  ];
+  grade.innerHTML = campos.map(([r, v]) =>
+    `<div class="campo"><div class="rot">${r}</div><div class="val">${v}</div></div>`).join('');
+  if (ehDP()){
+    const sal = document.createElement('div');
+    sal.className = 'campo restrito';
+    sal.innerHTML = `<div class="rot">Salário — chave rh.salario.ver</div>
+      <div class="val">${c.salario}</div>
+      <div class="nota">visível só para DP/RH · leitura gravada na trilha</div>`;
+    grade.appendChild(sal);
+  }
+  corpo.appendChild(grade);
+}
+
+function renderLinhaTempo(corpo, c){
+  const eventos = dados.eventos
+    .filter(e => e.colab === c.id && (!e.restrito || ehDP()))
+    .sort((a,b) => b.data.localeCompare(a.data));
+  if (!eventos.length){ corpo.innerHTML = '<div class="vazio">Nenhum evento visível para o seu papel.</div>'; return; }
+  const lt = document.createElement('div');
+  lt.className = 'linha-tempo';
+  lt.innerHTML = eventos.map(e => {
+    const t = TIPOS_EVENTO[e.tipo];
+    return `<div class="evento">
+      <div class="ponto" style="background:${t.cor}">${t.simbolo}</div>
+      <div class="cartao">
+        <div class="meta"><span class="tipo-rotulo" style="color:${t.cor}">${t.rotulo}</span>
+          <span>${fmtData(e.data)}</span>
+          ${e.restrito ? '<span class="tag-restrito">RESTRITO · leitura logada</span>' : ''}</div>
+        <div class="resumo">${e.resumo}</div>
+      </div></div>`;
+  }).join('');
+  corpo.appendChild(lt);
+}
+
+function renderOcorrencias(corpo, c){
+  const ocos = dados.ocorrencias
+    .filter(o => o.colab === c.id && (!o.restrita || ehDP()))
+    .sort((a,b) => b.data.localeCompare(a.data));
+  if (!ocos.length){ corpo.innerHTML = '<div class="vazio">Nenhuma ocorrência visível para o seu papel.</div>'; return; }
+  corpo.innerHTML = ocos.map(o => `
+    <div class="item-registro">
+      <div class="topo"><span class="clf ${o.classificacao}">${o.classificacao}</span>
+        <span>${fmtData(o.data)}</span><span>registrado por ${o.registradoPor}</span>
+        ${o.restrita ? '<span class="tag-restrito">RESTRITA · leitura logada</span>' : ''}</div>
+      <div class="texto">${o.descricao}</div>
+      ${o.valores ? `<div class="extra">Valores Fast: ${o.valores}</div>` : ''}
+    </div>`).join('');
+}
+
+function renderFeedbacks(corpo, c, fv){
+  const fbs = dados.feedbacks.filter(f => f.colab === c.id).sort((a,b) => b.data.localeCompare(a.data));
+  const cadencia = document.createElement('div');
+  cadencia.className = 'aviso';
+  cadencia.innerHTML = fv.vencido
+    ? `<b style="color:var(--danger)">Cadência vencida:</b> último feedback formal há ${fv.dias ?? '—'} dias (parâmetro: 90 dias).`
+    : `<b style="color:var(--success)">Cadência em dia:</b> último feedback formal há ${fv.dias} dias (parâmetro: 90 dias).`;
+  corpo.appendChild(cadencia);
+  if (!fbs.length){ corpo.insertAdjacentHTML('beforeend', '<div class="vazio">Nenhum feedback formal registrado.</div>'); return; }
+  corpo.insertAdjacentHTML('beforeend', fbs.map(f => `
+    <div class="item-registro">
+      <div class="topo"><span class="clf neutro">feedback formal</span>
+        <span>${fmtData(f.data)}</span><span>com ${f.gestor}</span></div>
+      <div class="texto">${f.resumo}</div>
+      ${f.acordos ? `<div class="extra">Acordos: ${f.acordos}</div>` : ''}
+    </div>`).join(''));
+}
+
+let colabEmAcao = null;
+function abrirDlgOco(c){
+  colabEmAcao = c;
+  document.getElementById('dlgOcoSub').textContent =
+    c.nome + ' — a ocorrência vira evento na linha do tempo na mesma transação.';
+  document.getElementById('oData').value = new Date().toISOString().slice(0,10);
+  document.getElementById('formOco').reset();
+  document.getElementById('oData').value = new Date().toISOString().slice(0,10);
+  dlgOco.showModal();
+}
+document.getElementById('formOco').addEventListener('submit', () => {
+  const restrita = document.getElementById('oRestrita').checked;
+  const desc = document.getElementById('oDesc').value;
+  const data = document.getElementById('oData').value;
+  dados.ocorrencias.push({colab: colabEmAcao.id, data, restrita,
+    classificacao: document.getElementById('oClf').value, registradoPor: 'DP',
+    descricao: desc, valores: document.getElementById('oValores').value});
+  dados.eventos.push({colab: colabEmAcao.id, tipo: 'ocorrencia', data,
+    resumo: (restrita ? 'Advertência: ' : 'Ocorrência: ') + desc, restrito: restrita});
+  salvar(); abaAtiva = 'linha'; render();
+});
+
+function abrirDlgFb(c){
+  colabEmAcao = c;
+  document.getElementById('dlgFbSub').textContent =
+    c.nome + ' — atualiza o "último feedback formal" da ficha e zera o alerta de 90 dias.';
+  document.getElementById('formFb').reset();
+  document.getElementById('fData').value = new Date().toISOString().slice(0,10);
+  dlgFb.showModal();
+}
+document.getElementById('formFb').addEventListener('submit', () => {
+  const data = document.getElementById('fData').value;
+  const resumo = document.getElementById('fResumo').value;
+  dados.feedbacks.push({colab: colabEmAcao.id, data, gestor: 'DP (registro assistido)',
+    resumo, acordos: document.getElementById('fAcordos').value});
+  dados.eventos.push({colab: colabEmAcao.id, tipo: 'feedback', data, resumo: 'Feedback formal: ' + resumo});
+  salvar(); abaAtiva = 'linha'; render();
+});
+
+document.getElementById('papel').addEventListener('change', () => { fichaAberta = null; render(); });
+render();
+</script>
+</body>
+</html>

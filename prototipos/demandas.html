@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fast Pessoas — Demandas DP ↔ Funcionário (protótipo)</title>
+<style>
+  :root{
+    --primary:#d21217; --primary-hover:#bd1015;
+    --bg:#f7f6f4; --surface:#ffffff; --text:#1c1b1a; --muted:#6b6763;
+    --border:#e3e0dc; --fill:#f0eeeb; --success:#1a7f37; --warning:#b58500; --danger:#c62828; --info:#0b6bcb;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#161514; --surface:#211f1e; --text:#f0eeec; --muted:#a09a94;
+           --border:#3a3735; --fill:#2b2927; --success:#4caf6d; --warning:#d9a521; --danger:#ef6461; --info:#6cb6ff; }
+  }
+  *{box-sizing:border-box; margin:0}
+  body{background:var(--bg); color:var(--text);
+       font:15px/1.5 'Instrument Sans','Segoe UI',system-ui,sans-serif; padding-bottom:80px}
+  header{background:var(--surface); border-bottom:3px solid var(--primary); padding:16px 28px;
+         display:flex; align-items:center; gap:20px; flex-wrap:wrap}
+  header h1{font-size:20px}
+  header h1 span{color:var(--primary)}
+  .proto-badge{background:var(--warning); color:#fff; font-size:11px; font-weight:700;
+               padding:2px 8px; border-radius:10px; letter-spacing:.5px}
+  .spacer{flex:1}
+  .controle{display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted)}
+  select,input,textarea,button{font:inherit; color:var(--text); background:var(--surface);
+    border:1px solid var(--border); border-radius:6px; padding:6px 10px}
+  button{cursor:pointer}
+  button.primaria{background:var(--primary); border-color:var(--primary); color:#fff; font-weight:600}
+  button.primaria:hover{background:var(--primary-hover)}
+  button.leve{background:transparent; color:var(--primary); border:none; font-weight:600; padding:4px 6px}
+  main{max-width:1080px; margin:24px auto; padding:0 20px}
+  .aviso{background:var(--fill); border:1px dashed var(--border); border-radius:8px;
+         padding:10px 14px; font-size:13px; color:var(--muted); margin-bottom:20px}
+  .area{margin-bottom:28px}
+  .area>h2{font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--muted);
+           margin-bottom:8px; padding-left:4px}
+  .vazio{color:var(--muted); font-style:italic; font-size:14px; padding:8px 4px}
+
+  .indicadores{display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap}
+  .card-ind{flex:1; min-width:150px; background:var(--surface); border:1px solid var(--border);
+            border-radius:10px; padding:12px 16px}
+  .card-ind .n{font-size:26px; font-weight:700; font-variant-numeric:tabular-nums}
+  .card-ind .l{font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted)}
+  .card-ind.alerta .n{color:var(--danger)}
+  .card-ind.hoje .n{color:var(--warning)}
+
+  .abas{display:flex; gap:4px; margin-bottom:12px; border-bottom:1px solid var(--border)}
+  .abas button{border:none; background:transparent; border-radius:6px 6px 0 0; padding:8px 14px;
+               font-weight:600; color:var(--muted); border-bottom:3px solid transparent}
+  .abas button.ativa{color:var(--text); border-bottom-color:var(--primary)}
+  .filtros{display:flex; gap:10px; align-items:center; font-size:13px; color:var(--muted);
+           margin-bottom:14px; flex-wrap:wrap}
+
+  .demanda{background:var(--surface); border:1px solid var(--border); border-radius:10px;
+           padding:14px 16px; margin-bottom:12px}
+  .dem-topo{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+  .dem-num{font-variant-numeric:tabular-nums; font-weight:700; color:var(--muted); font-size:13px}
+  .dem-tipo{font-weight:600}
+  .badge{font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; border:1px solid;
+         white-space:nowrap}
+  .b-neutro{color:var(--muted); border-color:var(--border); background:var(--fill)}
+  .b-info{color:var(--info); border-color:var(--info)}
+  .b-success{color:var(--success); border-color:var(--success)}
+  .b-warning{color:var(--warning); border-color:var(--warning)}
+  .b-danger{color:var(--danger); border-color:var(--danger)}
+  .dem-meta{font-size:12.5px; color:var(--muted); margin-top:4px; font-variant-numeric:tabular-nums}
+  .dem-desc{font-size:14px; margin-top:6px}
+  .dem-acoes{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center}
+  .detalhe{background:var(--fill); border-radius:8px; margin-top:12px; padding:12px 14px; font-size:13px}
+  .detalhe h4{font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:10px 0 4px}
+  .detalhe h4:first-child{margin-top:0}
+  .historico div{padding:3px 0; border-bottom:1px dotted var(--border); font-variant-numeric:tabular-nums}
+  .historico div:last-child{border-bottom:none}
+  .comentario{padding:6px 0; border-bottom:1px dotted var(--border)}
+  .comentario:last-child{border-bottom:none}
+  .comentario .autor{font-weight:600}
+  .comentario .quando{color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums}
+  .form-coment{display:flex; gap:8px; margin-top:8px}
+  .form-coment input{flex:1}
+
+  dialog{border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text);
+         padding:24px; width:440px; max-width:92vw}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  dialog h3{margin-bottom:4px}
+  dialog .sub{font-size:13px; color:var(--muted); margin-bottom:16px}
+  dialog label{display:block; font-size:13px; font-weight:600; margin:12px 0 4px}
+  dialog input,dialog select,dialog textarea{width:100%}
+  dialog textarea{min-height:80px; resize:vertical}
+  dialog .acoes{display:flex; justify-content:flex-end; gap:10px; margin-top:20px}
+  .dica-sla{font-size:12.5px; color:var(--muted); margin-top:6px}
+  .rodape-nota{position:fixed; bottom:0; left:0; right:0; background:var(--surface);
+    border-top:1px solid var(--border); padding:8px 28px; font-size:12px; color:var(--muted)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>Fast Pessoas</span> · Demandas DP ↔ Funcionário</h1>
+  <span class="proto-badge">PROTÓTIPO</span>
+  <div class="spacer"></div>
+  <div class="controle">Vendo como:
+    <select id="papel">
+      <option value="funcionario">Funcionário (João Pereira)</option>
+      <option value="gestor">Gestor (Ricardo Gomes)</option>
+      <option value="dp">DP (Carla Nunes)</option>
+    </select>
+  </div>
+  <button class="primaria" id="btnNova">+ Nova solicitação</button>
+</header>
+
+<main>
+  <div class="aviso">
+    Motor de solicitações funcionário ↔ DP: cada demanda tem número, tipo, SLA e
+    <b>histórico de transições</b>. Tipos como <b>ajuste de ponto</b> passam por
+    <b>aprovação do gestor antes de entrar na fila do DP</b>. O DP assume, responde,
+    conclui ou recusa com motivo. Troque o papel acima para ver as três visões.
+  </div>
+  <div id="conteudo"></div>
+</main>
+
+<dialog id="dlgNova">
+  <h3>Nova solicitação</h3>
+  <div class="sub">O prazo é calculado pelo SLA do tipo; você acompanha tudo em "Minhas solicitações".</div>
+  <form method="dialog" id="formNova">
+    <label>Tipo</label>
+    <select id="fTipo"></select>
+    <div class="dica-sla" id="dicaSla"></div>
+    <label>Descreva o que você precisa</label>
+    <textarea id="fDesc" required placeholder="ex.: preciso da declaração para financiamento imobiliário"></textarea>
+    <div class="acoes">
+      <button type="button" onclick="dlgNova.close()">Cancelar</button>
+      <button class="primaria" value="ok">Abrir solicitação</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgMotivo">
+  <h3 id="mTitulo"></h3>
+  <div class="sub" id="mSub"></div>
+  <form method="dialog" id="formMotivo">
+    <label id="mLabel">Motivo</label>
+    <textarea id="mTexto" required></textarea>
+    <div class="acoes">
+      <button type="button" onclick="dlgMotivo.close()">Cancelar</button>
+      <button class="primaria" id="mBotao" value="ok"></button>
+    </div>
+  </form>
+</dialog>
+
+<div class="rodape-nota">Protótipo para validação com DP/RH — dados de exemplo, salvos só neste navegador (localStorage).
+Regras reproduzidas do desenho: aprovação do gestor antes da fila · SLA e prazo por tipo · histórico de transições · comentários · recusa sempre com motivo.</div>
+
+<script>
+const TIPOS = {
+  declaracao_vinculo:  {nome:'Declaração de vínculo',   sla:3, aprovacao:false},
+  informe_rendimentos: {nome:'Informe de rendimentos',  sla:2, aprovacao:false},
+  ajuste_ponto:        {nome:'Ajuste de ponto',         sla:5, aprovacao:true},
+  duvida_folha:        {nome:'Dúvida de folha',         sla:4, aprovacao:false},
+  outros:              {nome:'Outros',                  sla:7, aprovacao:false},
+};
+const STATUS = {
+  aguardando_aprovacao: {rot:'Aguardando aprovação do gestor', cls:'b-warning'},
+  aberta:               {rot:'Aberta',                          cls:'b-neutro'},
+  em_atendimento:       {rot:'Em atendimento',                  cls:'b-info'},
+  concluida:            {rot:'Concluída',                       cls:'b-success'},
+  recusada:             {rot:'Recusada pelo DP',                cls:'b-danger'},
+  reprovada:            {rot:'Reprovada pelo gestor',           cls:'b-danger'},
+};
+const USUARIOS = {
+  funcionario: {nome:'João Pereira',  rot:'Funcionário'},
+  gestor:      {nome:'Ricardo Gomes', rot:'Gestor'},
+  dp:          {nome:'Carla Nunes',   rot:'DP'},
+};
+
+const hoje = () => new Date().toISOString().slice(0,10);
+const diaRel = n => { const d = new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+const fmtData = iso => iso.split('-').reverse().join('/');
+const difDias = iso => Math.round((new Date(iso) - new Date(hoje())) / 86400000);
+
+function seed(){
+  return [
+    {num:'DEM-0001', tipo:'declaracao_vinculo', solicitante:'Ana Souza', unidade:'Loja Centro',
+     criadaEm:diaRel(-12), prazo:diaRel(-9), status:'concluida', executor:'Carla Nunes',
+     desc:'Declaração de vínculo empregatício para financiamento imobiliário.',
+     eventos:[
+       {q:diaRel(-12), t:'Aberta por Ana Souza'},
+       {q:diaRel(-11), t:'Assumida por Carla Nunes (DP)'},
+       {q:diaRel(-10), t:'Concluída — declaração emitida e publicada no GED'}],
+     comentarios:[
+       {q:diaRel(-11), autor:'Ana Souza', rot:'Funcionário', txt:'Se possível até sexta, o banco pediu com urgência.'},
+       {q:diaRel(-10), autor:'Carla Nunes', rot:'DP', txt:'Declaração disponível no GED. Boa sorte com o financiamento!'}]},
+    {num:'DEM-0002', tipo:'ajuste_ponto', solicitante:'Bruno Lima', unidade:'Loja Norte',
+     criadaEm:diaRel(-1), prazo:diaRel(4), status:'aguardando_aprovacao', executor:null,
+     desc:'Esqueci de registrar a volta do almoço no dia 21/07; saída correta às 18:02.',
+     eventos:[
+       {q:diaRel(-1), t:'Aberta por Bruno Lima'},
+       {q:diaRel(-1), t:'Enviada para aprovação do gestor (regra do tipo ajuste de ponto)'}],
+     comentarios:[
+       {q:diaRel(-1), autor:'Bruno Lima', rot:'Funcionário', txt:'Estava em atendimento externo, tenho o registro da visita se precisarem.'}]},
+    {num:'DEM-0003', tipo:'informe_rendimentos', solicitante:'João Pereira', unidade:'Loja Centro',
+     criadaEm:diaRel(-5), prazo:diaRel(-3), status:'aberta', executor:null,
+     desc:'Preciso do informe de rendimentos de 2025 para declaração retificadora do IR.',
+     eventos:[
+       {q:diaRel(-5), t:'Aberta por João Pereira'}],
+     comentarios:[
+       {q:diaRel(-4), autor:'João Pereira', rot:'Funcionário', txt:'O prazo da retificadora está próximo, consigo o documento essa semana?'}]},
+    {num:'DEM-0004', tipo:'duvida_folha', solicitante:'Maria Ferreira', unidade:'Loja Sul',
+     criadaEm:diaRel(-4), prazo:diaRel(0), status:'em_atendimento', executor:'Carla Nunes',
+     desc:'O desconto de vale-transporte veio maior que no mês passado; podem verificar?',
+     eventos:[
+       {q:diaRel(-4), t:'Aberta por Maria Ferreira'},
+       {q:diaRel(-3), t:'Assumida por Carla Nunes (DP)'}],
+     comentarios:[
+       {q:diaRel(-3), autor:'Carla Nunes', rot:'DP', txt:'Estamos conferindo com a competência de junho; retorno até amanhã.'}]},
+    {num:'DEM-0005', tipo:'outros', solicitante:'Pedro Alves', unidade:'Loja Leste',
+     criadaEm:diaRel(-2), prazo:diaRel(5), status:'aberta', executor:null,
+     desc:'Solicito segunda via do cartão do plano odontológico.',
+     eventos:[
+       {q:diaRel(-2), t:'Aberta por Pedro Alves'}],
+     comentarios:[]},
+    {num:'DEM-0006', tipo:'ajuste_ponto', solicitante:'João Pereira', unidade:'Loja Centro',
+     criadaEm:diaRel(-9), prazo:diaRel(-4), status:'recusada', executor:'Carla Nunes',
+     desc:'A marcação das 07:58 do dia 15/07 não aparece no meu espelho de ponto.',
+     eventos:[
+       {q:diaRel(-9), t:'Aberta por João Pereira'},
+       {q:diaRel(-9), t:'Enviada para aprovação do gestor (regra do tipo ajuste de ponto)'},
+       {q:diaRel(-8), t:'Aprovada pelo gestor Ricardo Gomes'},
+       {q:diaRel(-7), t:'Assumida por Carla Nunes (DP)'},
+       {q:diaRel(-6), t:'Recusada — motivo: espelho confere com a marcação original do REP; sem inconsistência a ajustar'}],
+     comentarios:[
+       {q:diaRel(-8), autor:'João Pereira', rot:'Funcionário', txt:'Tenho certeza que registrei na entrada.'},
+       {q:diaRel(-6), autor:'Carla Nunes', rot:'DP', txt:'Verificamos o arquivo do REP: a marcação das 07:58 consta e o espelho está correto.'}]},
+  ];
+}
+
+let demandas = JSON.parse(localStorage.getItem('fp_demandas') || 'null') || seed();
+const salvar = () => localStorage.setItem('fp_demandas', JSON.stringify(demandas));
+let detalhesAbertos = new Set();
+let abaDP = 'abertas';
+let filtroTipo = 'todos';
+let filtroPrazo = 'todos';
+
+const papel = () => document.getElementById('papel').value;
+const ATIVAS = ['aguardando_aprovacao','aberta','em_atendimento'];
+const ativa = d => ATIVAS.includes(d.status);
+const proxNum = () => 'DEM-' + String(Math.max(...demandas.map(d => +d.num.slice(4))) + 1).padStart(4,'0');
+
+function badgePrazo(d){
+  if (!ativa(d)) return '';
+  const dif = difDias(d.prazo);
+  if (dif < 0)  return `<span class="badge b-danger">atrasada há ${-dif} dia${dif < -1 ? 's' : ''}</span>`;
+  if (dif === 0) return `<span class="badge b-warning">vence hoje</span>`;
+  return `<span class="badge b-neutro">vence em ${dif} dia${dif > 1 ? 's' : ''}</span>`;
+}
+
+function cardDemanda(d){
+  const t = TIPOS[d.tipo], s = STATUS[d.status];
+  const el = document.createElement('div');
+  el.className = 'demanda';
+  el.innerHTML = `
+    <div class="dem-topo">
+      <span class="dem-num">${d.num}</span>
+      <span class="dem-tipo">${t.nome}</span>
+      <span class="badge ${s.cls}">${s.rot}</span>
+      ${badgePrazo(d)}
+      <div class="spacer"></div>
+    </div>
+    <div class="dem-meta">Solicitante: <b>${d.solicitante}</b> · ${d.unidade}
+      · criada em ${fmtData(d.criadaEm)} · prazo ${fmtData(d.prazo)} (SLA ${t.sla} dias)
+      ${d.executor ? ' · executor: ' + d.executor : ''}</div>
+    <div class="dem-desc">${d.desc}</div>`;
+
+  const acoes = document.createElement('div');
+  acoes.className = 'dem-acoes';
+  const p = papel();
+  if (p === 'gestor' && d.status === 'aguardando_aprovacao'){
+    botao(acoes, 'Aprovar', 'primaria', () => aprovar(d));
+    botao(acoes, 'Reprovar…', '', () => pedirMotivo('Reprovar ' + d.num,
+      'A justificativa é obrigatória e fica registrada no histórico.', 'Reprovar', m => reprovar(d, m)));
+  }
+  if (p === 'dp'){
+    if (d.status === 'aberta') botao(acoes, 'Assumir', 'primaria', () => assumir(d));
+    if (d.status === 'em_atendimento')
+      botao(acoes, 'Concluir…', 'primaria', () => pedirMotivo('Concluir ' + d.num,
+        'Descreva a entrega/resposta ao solicitante.', 'Concluir', m => concluir(d, m), 'Resposta'));
+    if (d.status === 'aberta' || d.status === 'em_atendimento')
+      botao(acoes, 'Recusar…', '', () => pedirMotivo('Recusar ' + d.num,
+        'O motivo é obrigatório e o solicitante o verá no histórico.', 'Recusar', m => recusar(d, m)));
+  }
+  const bd = document.createElement('button');
+  bd.className = 'leve';
+  bd.textContent = detalhesAbertos.has(d.num) ? 'ocultar histórico e comentários' : 'histórico e comentários';
+  bd.onclick = () => { detalhesAbertos.has(d.num) ? detalhesAbertos.delete(d.num) : detalhesAbertos.add(d.num); render(); };
+  acoes.appendChild(bd);
+  el.appendChild(acoes);
+
+  if (detalhesAbertos.has(d.num)) el.appendChild(detalhe(d));
+  return el;
+}
+
+function botao(pai, txt, cls, fn){
+  const b = document.createElement('button');
+  if (cls) b.className = cls;
+  b.textContent = txt; b.onclick = fn;
+  pai.appendChild(b);
+}
+
+function detalhe(d){
+  const box = document.createElement('div');
+  box.className = 'detalhe';
+  const hist = d.eventos.map(e => `<div>${fmtData(e.q)} — ${e.t}</div>`).join('');
+  const coms = d.comentarios.length
+    ? d.comentarios.map(c => `<div class="comentario"><span class="autor">${c.autor}</span>
+        <span class="quando">(${c.rot} · ${fmtData(c.q)})</span><br>${c.txt}</div>`).join('')
+    : '<div class="vazio">Nenhum comentário ainda.</div>';
+  box.innerHTML = `<h4>Histórico de transições</h4><div class="historico">${hist}</div>
+                   <h4>Comentários</h4><div>${coms}</div>`;
+  const p = papel();
+  const podeComentar = ativa(d) &&
+    (p === 'dp' || p === 'gestor' || (p === 'funcionario' && d.solicitante === USUARIOS.funcionario.nome));
+  if (podeComentar){
+    const form = document.createElement('div');
+    form.className = 'form-coment';
+    const inp = document.createElement('input');
+    inp.placeholder = 'Escreva um comentário…';
+    const b = document.createElement('button');
+    b.className = 'primaria'; b.textContent = 'Comentar';
+    b.onclick = () => {
+      if (!inp.value.trim()) return;
+      const u = USUARIOS[p];
+      d.comentarios.push({q:hoje(), autor:u.nome, rot:u.rot, txt:inp.value.trim()});
+      salvar(); render();
+    };
+    form.appendChild(inp); form.appendChild(b);
+    box.appendChild(form);
+  }
+  return box;
+}
+
+function evento(d, txt){ d.eventos.push({q:hoje(), t:txt}); }
+function aprovar(d){ d.status = 'aberta'; evento(d, 'Aprovada pelo gestor Ricardo Gomes — entrou na fila do DP'); salvar(); render(); }
+function reprovar(d, m){ d.status = 'reprovada'; evento(d, 'Reprovada pelo gestor Ricardo Gomes — motivo: ' + m); salvar(); render(); }
+function assumir(d){ d.status = 'em_atendimento'; d.executor = 'Carla Nunes'; evento(d, 'Assumida por Carla Nunes (DP)'); salvar(); render(); }
+function concluir(d, m){ d.status = 'concluida'; evento(d, 'Concluída — ' + m);
+  d.comentarios.push({q:hoje(), autor:'Carla Nunes', rot:'DP', txt:m}); salvar(); render(); }
+function recusar(d, m){ d.status = 'recusada'; evento(d, 'Recusada — motivo: ' + m); salvar(); render(); }
+
+let motivoCb = null;
+function pedirMotivo(titulo, sub, botaoTxt, cb, label){
+  motivoCb = cb;
+  document.getElementById('mTitulo').textContent = titulo;
+  document.getElementById('mSub').textContent = sub;
+  document.getElementById('mLabel').textContent = label || 'Motivo';
+  document.getElementById('mBotao').textContent = botaoTxt;
+  document.getElementById('mTexto').value = '';
+  dlgMotivo.showModal();
+}
+document.getElementById('formMotivo').addEventListener('submit', () => {
+  if (motivoCb) motivoCb(document.getElementById('mTexto').value.trim());
+});
+
+function secao(pai, titulo, lista, vazioTxt){
+  const sec = document.createElement('div');
+  sec.className = 'area';
+  sec.innerHTML = `<h2>${titulo}</h2>`;
+  if (!lista.length) sec.innerHTML += `<div class="vazio">${vazioTxt}</div>`;
+  else lista.forEach(d => sec.appendChild(cardDemanda(d)));
+  pai.appendChild(sec);
+}
+
+function renderFuncionario(cont){
+  const minhas = demandas.filter(d => d.solicitante === USUARIOS.funcionario.nome)
+                         .sort((a,b) => b.num.localeCompare(a.num));
+  secao(cont, 'Minhas solicitações', minhas.filter(ativa), 'Nenhuma solicitação em andamento.');
+  secao(cont, 'Encerradas', minhas.filter(d => !ativa(d)), 'Nenhuma solicitação encerrada.');
+}
+
+function renderGestor(cont){
+  const pendentes = demandas.filter(d => d.status === 'aguardando_aprovacao');
+  secao(cont, 'Aprovações pendentes (sua equipe)', pendentes, 'Nenhuma aprovação pendente.');
+  const decididas = demandas.filter(d => TIPOS[d.tipo].aprovacao && d.status !== 'aguardando_aprovacao');
+  secao(cont, 'Já passaram pela sua aprovação', decididas, 'Nada por aqui ainda.');
+}
+
+function renderDP(cont){
+  const abertas = demandas.filter(d => d.status === 'aberta' || d.status === 'em_atendimento');
+  const atrasadas = abertas.filter(d => difDias(d.prazo) < 0);
+  const vencendoHoje = abertas.filter(d => difDias(d.prazo) === 0);
+  const ind = document.createElement('div');
+  ind.className = 'indicadores';
+  ind.innerHTML = `
+    <div class="card-ind"><div class="n">${abertas.length}</div><div class="l">na fila (abertas + em atendimento)</div></div>
+    <div class="card-ind hoje"><div class="n">${vencendoHoje.length}</div><div class="l">vencendo hoje</div></div>
+    <div class="card-ind ${atrasadas.length ? 'alerta' : ''}"><div class="n">${atrasadas.length}</div><div class="l">atrasadas</div></div>`;
+  cont.appendChild(ind);
+
+  const aguardando = demandas.filter(d => d.status === 'aguardando_aprovacao').length;
+  if (aguardando){
+    const n = document.createElement('div');
+    n.className = 'aviso';
+    n.innerHTML = `${aguardando} demanda(s) <b>aguardando aprovação do gestor</b> — ainda fora da fila do DP.`;
+    cont.appendChild(n);
+  }
+
+  const abas = document.createElement('div');
+  abas.className = 'abas';
+  [['abertas','Abertas'],['atendimento','Em atendimento'],['concluidas','Concluídas / encerradas']].forEach(([k, rot]) => {
+    const b = document.createElement('button');
+    b.textContent = rot;
+    if (abaDP === k) b.className = 'ativa';
+    b.onclick = () => { abaDP = k; render(); };
+    abas.appendChild(b);
+  });
+  cont.appendChild(abas);
+
+  const filtros = document.createElement('div');
+  filtros.className = 'filtros';
+  filtros.innerHTML = `Tipo:
+    <select id="fltTipo"><option value="todos">todos</option>
+      ${Object.entries(TIPOS).map(([k,t]) => `<option value="${k}">${t.nome}</option>`).join('')}</select>
+    Prazo:
+    <select id="fltPrazo"><option value="todos">todos</option>
+      <option value="no_prazo">no prazo</option><option value="hoje">vence hoje</option>
+      <option value="atrasadas">atrasadas</option></select>`;
+  cont.appendChild(filtros);
+  const sT = document.getElementById('fltTipo'), sP = document.getElementById('fltPrazo');
+  sT.value = filtroTipo; sP.value = filtroPrazo;
+  sT.onchange = () => { filtroTipo = sT.value; render(); };
+  sP.onchange = () => { filtroPrazo = sP.value; render(); };
+
+  let lista = demandas.filter(d =>
+    abaDP === 'abertas'     ? d.status === 'aberta' :
+    abaDP === 'atendimento' ? d.status === 'em_atendimento' :
+    ['concluida','recusada','reprovada'].includes(d.status));
+  if (filtroTipo !== 'todos') lista = lista.filter(d => d.tipo === filtroTipo);
+  if (filtroPrazo !== 'todos') lista = lista.filter(d => {
+    const dif = difDias(d.prazo);
+    return filtroPrazo === 'atrasadas' ? dif < 0 : filtroPrazo === 'hoje' ? dif === 0 : dif > 0;
+  });
+  lista.sort((a,b) => a.prazo.localeCompare(b.prazo));
+  const sec = document.createElement('div');
+  sec.className = 'area';
+  if (!lista.length) sec.innerHTML = '<div class="vazio">Nenhuma demanda com esses filtros.</div>';
+  else lista.forEach(d => sec.appendChild(cardDemanda(d)));
+  cont.appendChild(sec);
+}
+
+function render(){
+  const cont = document.getElementById('conteudo');
+  cont.innerHTML = '';
+  const p = papel();
+  if (p === 'funcionario') renderFuncionario(cont);
+  else if (p === 'gestor') renderGestor(cont);
+  else renderDP(cont);
+  document.getElementById('btnNova').style.display = p === 'funcionario' ? '' : 'none';
+}
+
+document.getElementById('btnNova').onclick = () => {
+  const sel = document.getElementById('fTipo');
+  sel.innerHTML = Object.entries(TIPOS).map(([k,t]) => `<option value="${k}">${t.nome}</option>`).join('');
+  atualizaDica();
+  document.getElementById('fDesc').value = '';
+  dlgNova.showModal();
+};
+function atualizaDica(){
+  const t = TIPOS[document.getElementById('fTipo').value];
+  document.getElementById('dicaSla').textContent =
+    `SLA: ${t.sla} dias` + (t.aprovacao ? ' · este tipo exige aprovação do seu gestor antes de ir ao DP' : '');
+}
+document.getElementById('fTipo').addEventListener('change', atualizaDica);
+
+document.getElementById('formNova').addEventListener('submit', () => {
+  const tipo = document.getElementById('fTipo').value;
+  const t = TIPOS[tipo];
+  const d = {
+    num:proxNum(), tipo, solicitante:USUARIOS.funcionario.nome, unidade:'Loja Centro',
+    criadaEm:hoje(), prazo:diaRel(t.sla), executor:null,
+    status:t.aprovacao ? 'aguardando_aprovacao' : 'aberta',
+    desc:document.getElementById('fDesc').value.trim(),
+    eventos:[{q:hoje(), t:'Aberta por ' + USUARIOS.funcionario.nome}],
+    comentarios:[],
+  };
+  if (t.aprovacao) evento(d, 'Enviada para aprovação do gestor (regra do tipo ' + t.nome.toLowerCase() + ')');
+  demandas.push(d);
+  detalhesAbertos.add(d.num);
+  salvar(); render();
+});
+
+document.getElementById('papel').addEventListener('change', render);
+render();
+</script>
+</body>
+</html>
