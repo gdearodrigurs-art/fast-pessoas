@@ -119,3 +119,229 @@ export const esquemaFiltroColaboradores = z.object({
 });
 
 export type FiltroColaboradores = z.infer<typeof esquemaFiltroColaboradores>;
+
+// ------------------------------------------------------------------ ocorrência
+
+export const TIPOS_OCORRENCIA = [
+  "positivo",
+  "negativo",
+  "neutro",
+  "alerta",
+] as const;
+
+export type TipoOcorrencia = (typeof TIPOS_OCORRENCIA)[number];
+
+export const ROTULOS_OCORRENCIA: Record<TipoOcorrencia, string> = {
+  positivo: "Positivo",
+  negativo: "Negativo",
+  neutro: "Neutro",
+  alerta: "Alerta",
+};
+
+export const esquemaCriacaoOcorrencia = z.object({
+  tipo: z.enum(TIPOS_OCORRENCIA),
+  restrita: z.boolean().optional().default(false),
+  descricao: z.string().trim().min(3, "Descreva a ocorrência").max(4000),
+  impacto: z.string().trim().max(2000).optional(),
+  acao_combinada: z.string().trim().max(2000).optional(),
+  ocorrida_em: esquemaData,
+});
+
+export type CriacaoOcorrencia = z.infer<typeof esquemaCriacaoOcorrencia>;
+
+// ------------------------------------------------------------------ feedback formal
+
+export const CADENCIA_FEEDBACK_DIAS = 90;
+
+export const esquemaCriacaoFeedback = z.object({
+  realizado_em: esquemaData,
+  resumo: z.string().trim().min(3, "Resuma a conversa").max(4000),
+});
+
+export type CriacaoFeedback = z.infer<typeof esquemaCriacaoFeedback>;
+
+// ------------------------------------------------------------------ ação aberta
+
+export const STATUS_ACAO = ["aberta", "concluida", "cancelada"] as const;
+
+export type StatusAcao = (typeof STATUS_ACAO)[number];
+
+export const ROTULOS_STATUS_ACAO: Record<StatusAcao, string> = {
+  aberta: "Aberta",
+  concluida: "Concluída",
+  cancelada: "Cancelada",
+};
+
+export const esquemaCriacaoAcao = z.object({
+  descricao: z.string().trim().min(3, "Descreva a ação").max(2000),
+  prazo: esquemaData,
+});
+
+export type CriacaoAcao = z.infer<typeof esquemaCriacaoAcao>;
+
+export const esquemaAtualizacaoAcao = z
+  .object({
+    descricao: z.string().trim().min(3).max(2000).optional(),
+    prazo: esquemaData.optional(),
+    status: z.enum(["concluida", "cancelada"]).optional(),
+  })
+  .refine(
+    (dados) => Object.values(dados).some((valor) => valor !== undefined),
+    { message: "Informe ao menos um campo para atualizar" }
+  );
+
+export type AtualizacaoAcao = z.infer<typeof esquemaAtualizacaoAcao>;
+
+// ------------------------------------------------------------------ posição (cargo + salário — sensível)
+
+export const MOTIVOS_POSICAO = [
+  "admissao",
+  "promocao",
+  "merito",
+  "reajuste",
+  "enquadramento",
+  "transferencia",
+] as const;
+
+export type MotivoPosicao = (typeof MOTIVOS_POSICAO)[number];
+
+export const ROTULOS_MOTIVO_POSICAO: Record<MotivoPosicao, string> = {
+  admissao: "Admissão",
+  promocao: "Promoção",
+  merito: "Mérito",
+  reajuste: "Reajuste",
+  enquadramento: "Enquadramento",
+  transferencia: "Transferência",
+};
+
+const esquemaSalario = z
+  .number()
+  .min(0, "Salário não pode ser negativo")
+  .max(9_999_999, "Salário acima do limite")
+  .transform((valor) => Math.round(valor * 100) / 100);
+
+export const esquemaCriacaoPosicao = z.object({
+  cargo_id: z.number().int().positive(),
+  salario: esquemaSalario,
+  inicio_vigencia: esquemaData,
+  motivo: z.enum(MOTIVOS_POSICAO),
+});
+
+export type CriacaoPosicao = z.infer<typeof esquemaCriacaoPosicao>;
+
+// ------------------------------------------------------------------ relação gestor → liderado
+
+export const esquemaDefinicaoGestor = z.object({
+  gestor_colaborador_id: z.number().int().positive().nullable(),
+  inicio_vigencia: esquemaData,
+});
+
+export type DefinicaoGestor = z.infer<typeof esquemaDefinicaoGestor>;
+
+// ------------------------------------------------------------------ lotação
+
+export const esquemaDefinicaoLotacao = z.object({
+  estabelecimento_id: z.number().int().positive(),
+  centro_custo: z.string().trim().min(1, "Informe o centro de custo").max(30),
+  inicio_vigencia: esquemaData,
+});
+
+export type DefinicaoLotacao = z.infer<typeof esquemaDefinicaoLotacao>;
+
+// ------------------------------------------------------------------ cargo + versões + faixa salarial
+
+export const esquemaCha = z.object({
+  conhecimentos: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+  habilidades: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+  atitudes: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+});
+
+export type Cha = z.infer<typeof esquemaCha>;
+
+const camposVersaoCargo = {
+  nome: z.string().trim().min(2, "Informe o nome do cargo").max(120),
+  descricao: z.string().trim().max(4000).optional(),
+  cha: esquemaCha.optional(),
+  inicio_vigencia: esquemaData,
+};
+
+export const esquemaCriacaoCargo = z
+  .object({
+    ...camposVersaoCargo,
+    faixa_min: esquemaSalario.optional(),
+    faixa_max: esquemaSalario.optional(),
+  })
+  .superRefine((dados, contexto) => {
+    const temMin = dados.faixa_min !== undefined;
+    const temMax = dados.faixa_max !== undefined;
+    if (temMin !== temMax) {
+      contexto.addIssue({
+        code: "custom",
+        path: [temMin ? "faixa_max" : "faixa_min"],
+        message: "Informe a faixa completa (mínimo e máximo)",
+      });
+    }
+    if (
+      dados.faixa_min !== undefined &&
+      dados.faixa_max !== undefined &&
+      dados.faixa_max < dados.faixa_min
+    ) {
+      contexto.addIssue({
+        code: "custom",
+        path: ["faixa_max"],
+        message: "Faixa máxima deve ser maior ou igual à mínima",
+      });
+    }
+  });
+
+export type CriacaoCargo = z.infer<typeof esquemaCriacaoCargo>;
+
+export const esquemaNovaVersaoCargo = z.object(camposVersaoCargo);
+
+export type NovaVersaoCargo = z.infer<typeof esquemaNovaVersaoCargo>;
+
+export const esquemaNovaFaixaSalarial = z
+  .object({
+    faixa_min: esquemaSalario,
+    faixa_max: esquemaSalario,
+    inicio_vigencia: esquemaData,
+  })
+  .refine((dados) => dados.faixa_max >= dados.faixa_min, {
+    path: ["faixa_max"],
+    message: "Faixa máxima deve ser maior ou igual à mínima",
+  });
+
+export type NovaFaixaSalarial = z.infer<typeof esquemaNovaFaixaSalarial>;
+
+// ------------------------------------------------------------------ estabelecimento
+
+const esquemaCnpj = z
+  .string()
+  .transform((valor) => valor.replace(/\D/g, ""))
+  .refine((valor) => /^\d{14}$/.test(valor), {
+    message: "CNPJ deve ter 14 dígitos",
+  });
+
+const camposVersaoEstabelecimento = {
+  razao_social: z.string().trim().min(2, "Informe a razão social").max(200),
+  unidade: z.string().trim().min(2, "Informe o nome da unidade").max(120),
+  endereco_resumido: z.string().trim().max(300).optional(),
+  inicio_vigencia: esquemaData,
+};
+
+export const esquemaCriacaoEstabelecimento = z.object({
+  cnpj: esquemaCnpj,
+  ...camposVersaoEstabelecimento,
+});
+
+export type CriacaoEstabelecimento = z.infer<
+  typeof esquemaCriacaoEstabelecimento
+>;
+
+export const esquemaNovaVersaoEstabelecimento = z.object(
+  camposVersaoEstabelecimento
+);
+
+export type NovaVersaoEstabelecimento = z.infer<
+  typeof esquemaNovaVersaoEstabelecimento
+>;

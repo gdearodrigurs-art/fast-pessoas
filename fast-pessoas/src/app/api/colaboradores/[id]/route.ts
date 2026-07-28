@@ -4,7 +4,7 @@ import {
   obterColaborador,
 } from "@/dominios/colaboradores/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import { ErroHttp, exigirPermissao, lerSessao } from "@/lib/sessao";
 
 function validarId(id: string): number | null {
   const idNumero = Number(id);
@@ -16,13 +16,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await exigirPermissao("rh.colaborador.ver");
+    // Escopo por sessão/papel no repositório: fora do alcance responde 404.
+    const sessao = await lerSessao();
+    if (!sessao) {
+      throw new ErroHttp(401, "Não autenticado");
+    }
     const { id } = await params;
     const idNumero = validarId(id);
     if (idNumero === null) {
       return Response.json({ erro: "Identificador inválido" }, { status: 400 });
     }
-    const resultado = await obterColaborador(idNumero);
+    const resultado = await obterColaborador(sessao, idNumero);
     return Response.json(resultado);
   } catch (erro) {
     return responderErro(erro);

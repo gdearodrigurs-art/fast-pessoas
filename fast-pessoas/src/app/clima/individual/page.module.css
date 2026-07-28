@@ -1,0 +1,180 @@
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 28px;
+  background: #fff;
+  border-bottom: 3px solid #d21217;
+}
+
+.marca {
+  font-size: 20px;
+  font-weight: 700;
+  color: #d21217;
+}
+
+.navegacao {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.acao {
+  color: #d21217;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.acao:hover {
+  text-decoration: underline;
+}
+
+.conteudo {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.conteudo h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 0 0 20px;
+  color: #6b6763;
+}
+
+.avisoAuditoria {
+  margin: 0 0 20px;
+  padding: 12px 16px;
+  background: #fdf3f3;
+  border: 1px solid #f0c8c9;
+  border-left: 4px solid #d21217;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.cartao h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.formulario {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.campoGrupo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 200px;
+}
+
+.rotulo {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.campo {
+  font-size: 0.95rem;
+  padding: 9px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+}
+
+.campo:focus {
+  outline: 2px solid #d21217;
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.botao {
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: #d21217;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.botao:hover:enabled {
+  background: #b30f13;
+}
+
+.botao:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.erro {
+  font-size: 0.85rem;
+  color: #d21217;
+  margin-bottom: 10px;
+}
+
+.tabelaEnvolucro {
+  overflow-x: auto;
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tabela th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #e3e0dc;
+  color: #6b6763;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabela td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0eeeb;
+  vertical-align: top;
+}
+
+.matricula {
+  color: #6b6763;
+  font-size: 0.85rem;
+}
+
+.celulaNota {
+  white-space: nowrap;
+}
+
+.celulaComentario {
+  max-width: 320px;
+}
+
+.celulaRegistro {
+  white-space: nowrap;
+  color: #6b6763;
+}

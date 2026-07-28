@@ -28,7 +28,9 @@ export default function PaginaEntrar() {
       const dados = await resposta.json().catch(() => ({}));
 
       if (resposta.ok) {
-        window.location.assign("/");
+        window.location.assign(
+          dados.precisa_configurar_2fa ? "/configurar-2fa" : "/"
+        );
         return;
       }
       if (dados.precisa_totp) {

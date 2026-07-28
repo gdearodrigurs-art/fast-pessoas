@@ -8,11 +8,16 @@ import {
   listarColaboradores,
 } from "@/dominios/colaboradores/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import { ErroHttp, exigirPermissao, lerSessao } from "@/lib/sessao";
 
 export async function GET(request: NextRequest) {
   try {
-    await exigirPermissao("rh.colaborador.ver");
+    // Sem chave fixa: o alcance vem do escopo por sessão/papel no repositório
+    // (funcionário vê só a própria ficha; gestor, a equipe vigente).
+    const sessao = await lerSessao();
+    if (!sessao) {
+      throw new ErroHttp(401, "Não autenticado");
+    }
     const parametros = request.nextUrl.searchParams;
     const analise = esquemaFiltroColaboradores.safeParse({
       busca: parametros.get("busca") || undefined,
@@ -24,8 +29,8 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
-    const colaboradores = await listarColaboradores(analise.data);
-    return Response.json({ colaboradores });
+    const resultado = await listarColaboradores(sessao, analise.data);
+    return Response.json(resultado);
   } catch (erro) {
     return responderErro(erro);
   }

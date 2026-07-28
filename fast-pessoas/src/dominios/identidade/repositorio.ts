@@ -55,7 +55,9 @@ export type AcaoIdentidade =
   | "login_falha"
   | "logout"
   | "troca_senha"
-  | "troca_senha_falha";
+  | "troca_senha_falha"
+  | "ativacao_2fa_falha"
+  | "desativacao_2fa_falha";
 
 export async function registrarAcao(
   acao: AcaoIdentidade,
@@ -72,6 +74,17 @@ export async function registrarAcao(
       usuario ? String(usuario.id) : null,
       detalhe ? JSON.stringify(detalhe) : null,
     ]
+  );
+}
+
+export async function atualizarTotpSecret(
+  cliente: PoolClient,
+  usuarioId: number,
+  totpSecret: string | null
+): Promise<void> {
+  await cliente.query(
+    "UPDATE sistema.usuario SET totp_secret = $2 WHERE id = $1",
+    [usuarioId, totpSecret]
   );
 }
 

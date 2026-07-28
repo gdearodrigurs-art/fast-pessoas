@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
+import { Cabecalho } from "@/app/cabecalho";
 import { PAPEIS, Papel } from "@/dominios/identidade/esquemas";
 import { ROTULOS_PAPEL } from "@/dominios/usuarios/esquemas";
 import estilos from "./page.module.css";
@@ -116,12 +116,7 @@ export function PainelUsuarios() {
 
   return (
     <div className={estilos.pagina}>
-      <header className={estilos.cabecalho}>
-        <span className={estilos.marca}>Fast Pessoas</span>
-        <Link className={estilos.acao} href="/">
-          Início
-        </Link>
-      </header>
+      <Cabecalho />
 
       <main className={estilos.conteudo}>
         <h1>Usuários</h1>

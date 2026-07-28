@@ -1,6 +1,6 @@
 "use client";
 
-import estilos from "./page.module.css";
+import estilos from "./cabecalho.module.css";
 
 export function BotaoSair() {
   async function sair() {

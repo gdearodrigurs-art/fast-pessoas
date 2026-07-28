@@ -210,6 +210,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #arquitetura #ingestao #temporario
 
+### [2026-07-28] DECISÃO DA DIRETORIA — Validação em bloco único, não por etapa
+
+**Decisão:** A Diretora de Pessoas pediu uma grande aprovação ao final em vez de aprovar cada etapa/protótipo. O desenvolvimento passa a construir o máximo de módulos agora, com validação consolidada depois.
+
+**Motivo:** Pedido da diretoria via usuário. Risco registrado e assumido: o método protótipo-por-etapa existia para baratear correção de fluxo — validação em bloco aumenta o custo de retrabalho se o DP/RH pedir mudanças estruturais. Mitigações: os protótipos de ficha, demandas e metas já existem e guiam as telas; os desenhos de clima e permissões estão fechados por decisão do usuário; auditoria/transações/minimização continuam inegociáveis (não dependem de validação de fluxo).
+
+**Contexto:** Rodada grande iniciada em 2026-07-28: núcleo de pessoas completo (ocorrências, feedback 90d, cargos/posições com salário sensível, relação gestor, estabelecimentos), demandas, clima diário, Central de Metas, GED mínimo (arquivo em banco no dev, com limite e interface isolada para trocar por object storage) e configuração de 2FA. Fora da rodada (dependências externas mantidas): ponto/REP-P, folha, eSocial, 360/btime.
+
+**Tags:** #regra-negocio #canonico #divida-tecnica
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.

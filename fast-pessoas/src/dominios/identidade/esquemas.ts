@@ -37,6 +37,19 @@ export const esquemaTrocaSenha = z
 
 export type TrocaSenha = z.infer<typeof esquemaTrocaSenha>;
 
+export const esquemaConfirmacao2fa = z.object({
+  codigo: z.string().regex(/^\d{6}$/, "Código deve ter 6 dígitos"),
+});
+
+export type Confirmacao2fa = z.infer<typeof esquemaConfirmacao2fa>;
+
+export const esquemaDesativacao2fa = z.object({
+  senha: z.string().min(1, "Informe a senha atual").max(200),
+  codigo: z.string().regex(/^\d{6}$/, "Código deve ter 6 dígitos"),
+});
+
+export type Desativacao2fa = z.infer<typeof esquemaDesativacao2fa>;
+
 export const esquemaSessao = z.object({
   usuario_id: z.number().int().positive(),
   papel: z.enum(PAPEIS),
