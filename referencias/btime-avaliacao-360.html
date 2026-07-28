@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FastDrywall · Avaliação 360 — Mockup Funcional</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sidebar:#0F2338; --sidebar-2:#16324F; --ink:#16202E; --ink-2:#33475F;
+    --bg:#F3F5F8; --card:#FFFFFF; --line:#E4E8EE; --line-2:#EEF1F5;
+    --muted:#6B7A8D; --muted-2:#93A0AF;
+    --brand:#137A6F; --brand-600:#0E5F56; --brand-050:#E6F2F0; --brand-100:#CDE6E2;
+    --indigo:#5646D6; --indigo-050:#ECEAFB;
+    --red:#D6483B; --red-bg:#FBECEA;
+    --amber:#B9820A; --amber-bg:#FAF0D8;
+    --green:#1C9E52; --green-bg:#E6F5EC;
+    --greenX:#0B7A3B; --greenX-bg:#DDF0E3;
+    --shadow:0 1px 2px rgba(16,32,54,.06),0 8px 24px rgba(16,32,54,.06);
+    --shadow-sm:0 1px 2px rgba(16,32,54,.08);
+    --r:14px; --r-sm:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--ink);
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  h1,h2,h3,h4,.num{font-family:'Space Grotesk','Inter',sans-serif}
+  .app{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
+
+  /* ---------- Sidebar ---------- */
+  .sidebar{background:var(--sidebar);color:#DCE6F0;display:flex;flex-direction:column;
+    position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:center;gap:11px;padding:20px 20px 18px}
+  .brand .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--brand),#1AA192);
+    display:grid;place-items:center;color:#fff;font-family:'Space Grotesk';font-weight:700;font-size:17px;
+    box-shadow:0 4px 12px rgba(19,122,111,.4)}
+  .brand b{font-family:'Space Grotesk';font-weight:700;font-size:15px;color:#fff;letter-spacing:.2px;display:block;line-height:1.15}
+  .brand span{font-size:11px;color:#8FA4BC}
+  .nav{padding:6px 12px;flex:1;overflow-y:auto}
+  .nav-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:#6E85A0;
+    padding:14px 10px 6px;font-weight:600}
+  .nav-item{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;
+    cursor:pointer;color:#B9C8DB;font-weight:500;font-size:13.3px;transition:.15s;position:relative}
+  .nav-item svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.9;flex-shrink:0}
+  .nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+  .nav-item.active{background:var(--brand);color:#fff;box-shadow:0 4px 12px rgba(19,122,111,.35)}
+  .nav-item .ph{margin-left:auto;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:20px;
+    background:rgba(255,255,255,.12);color:#CBD8E6;letter-spacing:.03em}
+  .nav-item.active .ph{background:rgba(255,255,255,.22);color:#fff}
+  .side-foot{padding:14px 16px;border-top:1px solid rgba(255,255,255,.08);font-size:11px;color:#8398B2}
+  .side-foot .legend{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+  .side-foot .legend span{display:flex;align-items:center;gap:7px}
+  .dot{width:8px;height:8px;border-radius:3px;display:inline-block}
+
+  /* ---------- Topbar ---------- */
+  .main{min-width:0}
+  .topbar{background:rgba(255,255,255,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+    padding:13px 30px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:20}
+  .topbar h1{font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .topbar .crumb{font-size:11.5px;color:var(--muted);margin-bottom:1px;font-weight:500}
+  .topbar .spacer{flex:1}
+  .unit-select{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);
+    padding:7px 13px;border-radius:9px;font-size:13px;font-weight:500;color:var(--ink-2);cursor:pointer}
+  .unit-select svg{width:15px;height:15px;stroke:var(--muted);fill:none;stroke-width:2}
+  .user{display:flex;align-items:center;gap:10px}
+  .avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#2E7D6E,#3AA88F);
+    color:#fff;display:grid;place-items:center;font-weight:600;font-size:13px;font-family:'Space Grotesk'}
+  .user small{display:block;color:var(--muted);font-size:11px}
+  .user b{font-size:13px;font-weight:600}
+
+  /* ---------- Views ---------- */
+  .view{display:none;padding:26px 30px 60px;max-width:1240px}
+  .view.active{display:block;animation:fade .3s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .view-head{margin-bottom:20px}
+  .view-head h2{font-size:22px;font-weight:600;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+  .view-head p{color:var(--muted);margin-top:5px;font-size:13.5px;max-width:760px}
+
+  /* Cards & grid */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-sm)}
+  .card.pad{padding:20px}
+  .grid{display:grid;gap:16px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g-2-1{grid-template-columns:1.55fr 1fr}
+  .card-h{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line-2)}
+  .card-h h3{font-size:15px;font-weight:600}
+  .card-h .sub{font-size:12px;color:var(--muted);font-weight:400;margin-top:2px}
+  .card-b{padding:18px 20px}
+
+  /* KPI */
+  .kpi{padding:18px 20px}
+  .kpi .lbl{font-size:12px;color:var(--muted);font-weight:500;display:flex;align-items:center;gap:7px}
+  .kpi .lbl svg{width:15px;height:15px;stroke:var(--brand);fill:none;stroke-width:2}
+  .kpi .val{font-family:'Space Grotesk';font-size:30px;font-weight:600;margin-top:9px;letter-spacing:-.02em}
+  .kpi .val small{font-size:15px;color:var(--muted);font-weight:500}
+  .kpi .delta{font-size:11.5px;margin-top:5px;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+  .delta.up{color:var(--green)} .delta.down{color:var(--red)} .delta.flat{color:var(--muted)}
+
+  /* badges / chips */
+  .ph-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:.03em;vertical-align:middle}
+  .ph-f1{background:var(--brand-050);color:var(--brand-600)}
+  .ph-f2{background:var(--indigo-050);color:var(--indigo)}
+  .ph-f3{background:#EEF1F5;color:var(--muted)}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 11px;border-radius:20px}
+  .flag{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 11px;border-radius:20px}
+  .f-red{background:var(--red-bg);color:var(--red)} .f-amber{background:var(--amber-bg);color:var(--amber)}
+  .f-green{background:var(--green-bg);color:var(--green)} .f-greenX{background:var(--greenX-bg);color:var(--greenX)}
+  .tag{font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:7px;background:var(--bg);color:var(--ink-2);border:1px solid var(--line)}
+  .ai-tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:4px 10px;
+    border-radius:20px;background:var(--indigo-050);color:var(--indigo)}
+  .ai-tag svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+
+  /* buttons */
+  .btn{display:inline-flex;align-items:center;gap:8px;font-family:'Inter';font-size:13.3px;font-weight:600;
+    padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink-2);cursor:pointer;transition:.15s}
+  .btn:hover{border-color:var(--muted-2);background:#fafbfc}
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2}
+  .btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  .btn.primary:hover{background:var(--brand-600)}
+  .btn.indigo{background:var(--indigo);border-color:var(--indigo);color:#fff}
+  .btn.indigo:hover{filter:brightness(.94)}
+  .btn.ghost{background:transparent;border-color:transparent;color:var(--brand-600)}
+  .btn.sm{padding:6px 12px;font-size:12.5px}
+  .btn.danger{color:var(--red);border-color:#F0C9C4}
+  .btn.danger:hover{background:var(--red-bg)}
+
+  /* filter chips */
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .fchip{font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:20px;border:1px solid var(--line);
+    background:#fff;color:var(--ink-2);cursor:pointer;transition:.15s}
+  .fchip:hover{border-color:var(--brand-100)}
+  .fchip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+  /* table */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+    font-weight:600;padding:11px 20px;border-bottom:1px solid var(--line-2)}
+  td{padding:13px 20px;border-bottom:1px solid var(--line-2);font-size:13.3px;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#FAFBFC}
+  .who{display:flex;align-items:center;gap:11px}
+  .who .av{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:600;
+    font-size:12px;color:#fff;font-family:'Space Grotesk';flex-shrink:0}
+  .who b{font-weight:600;font-size:13.3px} .who small{color:var(--muted);font-size:11.5px}
+
+  /* progress / bars */
+  .bar{height:8px;background:var(--line-2);border-radius:20px;overflow:hidden}
+  .bar>i{display:block;height:100%;border-radius:20px;background:var(--brand)}
+  .barwrap{display:flex;align-items:center;gap:11px}
+  .barwrap .bar{flex:1} .barwrap .pct{font-family:'Space Grotesk';font-weight:600;font-size:12.5px;width:38px;text-align:right}
+
+  /* alert */
+  .alert{display:flex;align-items:center;gap:13px;padding:14px 18px;border-radius:12px;
+    background:var(--amber-bg);border:1px solid #EAD9A8;color:#7A5602;font-size:13.3px;margin-bottom:18px}
+  .alert svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;flex-shrink:0}
+  .alert.info{background:var(--indigo-050);border-color:#D3CDF3;color:#3D31A6}
+  .alert b{font-weight:700}
+
+  /* eval form */
+  .pilar{border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+  .pilar-h{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:#FAFBFC;border-bottom:1px solid var(--line-2)}
+  .pilar-h .t{display:flex;align-items:center;gap:10px}
+  .pilar-h .t b{font-size:14.5px;font-weight:600}
+  .pilar-h .peso{font-size:11.5px;color:var(--muted);font-weight:600;background:#fff;border:1px solid var(--line);padding:3px 9px;border-radius:7px}
+  .ind{display:flex;align-items:center;gap:16px;padding:13px 18px;border-bottom:1px solid var(--line-2)}
+  .ind:last-child{border-bottom:none}
+  .ind .name{flex:1}
+  .ind .name b{font-weight:600;font-size:13.3px;display:block}
+  .ind .name small{color:var(--muted);font-size:11.5px}
+  .scale{display:flex;gap:6px}
+  .scale button{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:#fff;
+    font-family:'Space Grotesk';font-weight:600;font-size:13.5px;color:var(--ink-2);cursor:pointer;transition:.12s}
+  .scale button:hover{border-color:var(--brand)}
+  .scale button.sel{background:var(--brand);border-color:var(--brand);color:#fff}
+  .memo{background:#FAFBFC;border:1px solid var(--line);border-radius:12px;padding:16px 18px;font-size:12.8px;color:var(--ink-2)}
+  .memo .row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);}
+  .memo .row:last-child{border-bottom:none;padding-top:9px;margin-top:3px;border-top:2px solid var(--line);font-weight:600}
+  .memo .row .num{font-family:'Space Grotesk';font-weight:600}
+
+  .score-panel{position:sticky;top:78px}
+  .gauge{text-align:center;padding:6px 0 2px}
+  .gauge .big{font-family:'Space Grotesk';font-size:46px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .gauge .lbl{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .track{height:12px;border-radius:20px;margin:16px 0 6px;overflow:hidden;display:flex}
+  .track i{height:100%}
+  .track .s1{background:var(--red);flex:40} .track .s2{background:var(--amber);flex:20}
+  .track .s3{background:var(--green);flex:20} .track .s4{background:var(--greenX);flex:20}
+  .track-marks{display:flex;justify-content:space-between;font-size:10px;color:var(--muted-2);font-family:'Space Grotesk'}
+
+  /* value chips grid */
+  .vgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .vitem{border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .vitem .vn{font-size:12.5px;font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between}
+  .vitem .vn small{font-family:'Space Grotesk';color:var(--brand-600)}
+
+  /* PDI */
+  .gap{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+  .gap .gh{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .gap .gh b{font-size:13.5px;font-weight:600}
+  .gap .cmp{display:flex;align-items:center;gap:14px;font-size:12.5px;color:var(--muted)}
+  .gap .cmp .from{color:var(--amber);font-weight:700;font-family:'Space Grotesk'}
+  .gap .cmp .to{color:var(--green);font-weight:700;font-family:'Space Grotesk'}
+  .action{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px dashed var(--line);font-size:12.8px}
+  .action a{color:var(--indigo);font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:5px}
+  .action svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+
+  /* career track */
+  .track-career{display:flex;align-items:center;gap:0;flex-wrap:wrap}
+  .tc-node{border:1.5px solid var(--line);border-radius:10px;padding:10px 15px;font-size:12.8px;font-weight:600;text-align:center;background:#fff}
+  .tc-node.now{border-color:var(--brand);background:var(--brand-050);color:var(--brand-600)}
+  .tc-node.next{border-style:dashed;border-color:var(--indigo);color:var(--indigo)}
+  .tc-node small{display:block;font-weight:500;color:var(--muted);font-size:10.5px;margin-top:2px}
+  .tc-arrow{color:var(--muted-2);padding:0 10px;font-size:16px}
+
+  /* ciência */
+  .ciencia{border:1.5px dashed var(--brand-100);border-radius:12px;padding:20px;text-align:center;background:var(--brand-050)}
+  .ciencia.done{border-style:solid;border-color:var(--green);background:var(--green-bg)}
+  .hashline{font-family:'Space Grotesk';font-size:11px;color:var(--muted);word-break:break-all;margin-top:8px}
+
+  /* card do colaborador */
+  .bcard{background:linear-gradient(160deg,#123049,#0F2338);border-radius:18px;color:#fff;padding:0;overflow:hidden;box-shadow:0 12px 40px rgba(15,35,56,.3)}
+  .bcard .bhead{padding:22px 24px;display:flex;align-items:center;gap:16px;border-bottom:1px solid rgba(255,255,255,.1)}
+  .bcard .bav{width:60px;height:60px;border-radius:16px;background:linear-gradient(135deg,#2E7D6E,#3AA88F);
+    display:grid;place-items:center;font-family:'Space Grotesk';font-weight:700;font-size:22px}
+  .bcard .bhead h3{font-size:19px;font-weight:600}
+  .bcard .bhead small{color:#9DB3CC;font-size:12.5px}
+  .cred{margin-left:auto;text-align:right}
+  .cred .cv{font-family:'Space Grotesk';font-size:26px;font-weight:700;color:#4FD1B5}
+  .cred small{color:#9DB3CC;font-size:10.5px;display:block}
+  .bbody{padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .bsec h5{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#8FA6C0;margin-bottom:11px;font-weight:600}
+  .bpill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.08);border-radius:8px;
+    padding:6px 11px;font-size:12.3px;margin:0 6px 6px 0}
+  .bpill.strong{background:rgba(79,209,181,.15);color:#8FE9D4}
+  .bpill.dev{background:rgba(230,168,10,.15);color:#F1C868}
+  .bevo{margin-top:2px}
+  .bevo .er{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .bevo .er .en{font-size:12px;color:#B9C8DB;width:98px}
+  .bevo .bar{flex:1;background:rgba(255,255,255,.12)}
+  .bevo .bar>i{background:#4FD1B5}
+  .bevo .ep{font-family:'Space Grotesk';font-size:12px;color:#fff;width:34px;text-align:right}
+
+  /* config */
+  .cfg-ind{display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--line-2)}
+  .cfg-ind:last-child{border-bottom:none}
+  .cfg-ind .cn{flex:1;font-size:13.3px;font-weight:500}
+  .cfg-ind .w{width:74px}
+  .cfg-ind input{width:64px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;font-family:'Space Grotesk';
+    font-weight:600;text-align:center;font-size:13px;color:var(--ink-2)}
+  .flagrow{display:flex;align-items:center;gap:12px;padding:11px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:9px}
+  .flagrow .sw{width:16px;height:16px;border-radius:5px}
+  .flagrow .rng{font-family:'Space Grotesk';font-weight:600;font-size:13px;width:82px}
+  .flagrow .dc{flex:1;font-size:12.8px;color:var(--ink-2)}
+
+  .note{font-size:11.8px;color:var(--muted);margin-top:12px;display:flex;gap:8px;align-items:flex-start}
+  .note svg{width:14px;height:14px;stroke:var(--muted-2);fill:none;stroke-width:2;flex-shrink:0;margin-top:2px}
+  .mb16{margin-bottom:16px} .mb20{margin-bottom:20px} .mt16{margin-top:16px}
+  .banner-360{display:flex;align-items:center;gap:14px;background:linear-gradient(100deg,var(--brand-050),#fff);
+    border:1px solid var(--brand-100);border-radius:14px;padding:16px 20px;margin-bottom:22px}
+  .banner-360 .ic{width:40px;height:40px;border-radius:11px;background:var(--brand);display:grid;place-items:center;flex-shrink:0}
+  .banner-360 .ic svg{width:21px;height:21px;stroke:#fff;fill:none;stroke-width:2}
+  .banner-360 b{font-size:14px} .banner-360 p{font-size:12.5px;color:var(--ink-2);margin-top:2px}
+
+  @media(max-width:960px){
+    .app{grid-template-columns:1fr}
+    .sidebar{position:fixed;left:-260px;transition:.2s;z-index:60}
+    .sidebar.open{left:0}
+    .g4{grid-template-columns:repeat(2,1fr)} .g3,.g2,.g-2-1{grid-template-columns:1fr}
+    .bbody{grid-template-columns:1fr}
+    .menu-btn{display:grid!important}
+  }
+  .menu-btn{display:none;width:38px;height:38px;border-radius:9px;border:1px solid var(--line);background:#fff;place-items:center;cursor:pointer}
+  .menu-btn svg{width:18px;height:18px;stroke:var(--ink);fill:none;stroke-width:2}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">F</div>
+      <div><b>FastDrywall</b><span>Avaliação 360 · plataforma</span></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-label">Gestão do ciclo</div>
+      <div class="nav-item active" data-target="v-dashboard" data-title="Visão geral" data-crumb="Dashboards · RH & Diretoria">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        Visão geral <span class="ph">F1</span>
+      </div>
+      <div class="nav-item" data-target="v-ciclos" data-title="Ciclos & pendências" data-crumb="Motor de ciclos · Agendamento">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        Ciclos & pendências <span class="ph">F1</span>
+      </div>
+      <div class="nav-item" data-target="v-aval" data-title="Avaliação" data-crumb="Execução · Líder → Liderado">
+        <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        Avaliação <span class="ph">F1</span>
+      </div>
+      <div class="nav-item" data-target="v-resultado" data-title="Resultado & ciência" data-crumb="Colaborador · Ciência digital">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/></svg>
+        Resultado & ciência <span class="ph">F1</span>
+      </div>
+
+      <div class="nav-label">Desenvolvimento</div>
+      <div class="nav-item" data-target="v-pdi" data-title="PDI com IA" data-crumb="Plano de Desenvolvimento Individual">
+        <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/><path d="M9 21h6"/></svg>
+        PDI com IA <span class="ph">F2</span>
+      </div>
+      <div class="nav-item" data-target="v-card" data-title="Card do Colaborador" data-crumb="Perfil consolidado · Teoria dos Cartões">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M15 8h4M15 12h4M6 16h12"/></svg>
+        Card do Colaborador <span class="ph">F2</span>
+      </div>
+
+      <div class="nav-label">Configuração</div>
+      <div class="nav-item" data-target="v-modelos" data-title="Modelos de avaliação" data-crumb="Pilares · Indicadores · Pesos · Flags">
+        <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.82 1.17V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 7.5 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 3.6 15H3.5a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 8.5"/></svg>
+        Modelos de avaliação <span class="ph">F1</span>
+      </div>
+    </nav>
+    <div class="side-foot">
+      Liberação faseada por <b>feature flag</b>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--brand)"></i> Fase 1 — MVP (ativo)</span>
+        <span><i class="dot" style="background:var(--indigo)"></i> Fase 2 — Feedback, PDI, Card</span>
+        <span><i class="dot" style="background:var(--muted-2)"></i> Fase 3 — 360 completo</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <div class="topbar">
+      <button class="menu-btn" onclick="document.getElementById('sidebar').classList.toggle('open')">
+        <svg viewBox="0 0 24 24"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+      <div>
+        <div class="crumb" id="crumb">Dashboards · RH & Diretoria</div>
+        <h1 id="ptitle">Visão geral</h1>
+      </div>
+      <div class="spacer"></div>
+      <div class="unit-select">
+        <svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01"/></svg>
+        Todas as unidades
+        <svg viewBox="0 0 24 24" style="width:13px"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="user">
+        <div class="avatar">BG</div>
+        <div><b>Bárbara Garcone</b><small>Administrador RH</small></div>
+      </div>
+    </div>
+
+    <!-- ========== VIEW: DASHBOARD ========== -->
+    <section class="view active" id="v-dashboard">
+      <div class="banner-360">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M19.1 4.9l-2.8 2.8M7.7 16.3l-2.8 2.8"/></svg></div>
+        <div>
+          <b>Arquitetura 360-nativa, liberação por fases</b>
+          <p>O modelo de dados já suporta líder→liderado, liderado→líder, pares e autoavaliação. Hoje ativo: <b>Líder → Liderado (Fase 1)</b>. Os demais blocos são ligados por feature flag conforme a maturidade cultural.</p>
+        </div>
+      </div>
+
+      <div class="grid g4 mb16">
+        <div class="card kpi">
+          <div class="lbl"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>Colaboradores ativos</div>
+          <div class="val num">300</div>
+          <div class="delta flat">5 unidades · ~50 líderes avaliadores</div>
+        </div>
+        <div class="card kpi">
+          <div class="lbl"><svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>Avaliações no prazo</div>
+          <div class="val num">87<small>%</small></div>
+          <div class="delta up">▲ 9 pts vs. ciclo anterior</div>
+        </div>
+        <div class="card kpi">
+          <div class="lbl"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>Ciclos vencidos</div>
+          <div class="val num" style="color:var(--red)">12</div>
+          <div class="delta down">Escalonados ao RH</div>
+        </div>
+        <div class="card kpi">
+          <div class="lbl"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/></svg>Fit cultural médio</div>
+          <div class="val num">74<small>%</small></div>
+          <div class="delta up">▲ 3 pts · 9 valores</div>
+        </div>
+      </div>
+
+      <div class="grid g-2-1 mb16">
+        <div class="card">
+          <div class="card-h"><div><h3>Distribuição por faixa de resultado (flag)</h3><div class="sub">Todas as avaliações concluídas · ciclo atual</div></div></div>
+          <div class="card-b" style="display:flex;gap:26px;align-items:center">
+            <svg width="150" height="150" viewBox="0 0 42 42">
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--line-2)" stroke-width="6"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--red)" stroke-width="6" stroke-dasharray="6 94" stroke-dashoffset="25"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--amber)" stroke-width="6" stroke-dasharray="18 82" stroke-dashoffset="19"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--green)" stroke-width="6" stroke-dasharray="54 46" stroke-dashoffset="1"/>
+              <circle cx="21" cy="21" r="15.9" fill="none" stroke="var(--greenX)" stroke-width="6" stroke-dasharray="22 78" stroke-dashoffset="-53"/>
+              <text x="21" y="20" text-anchor="middle" style="font:600 6px 'Space Grotesk';fill:var(--ink)">300</text>
+              <text x="21" y="26" text-anchor="middle" style="font:500 2.6px Inter;fill:var(--muted)">avaliações</text>
+            </svg>
+            <div style="flex:1;display:flex;flex-direction:column;gap:11px">
+              <div style="display:flex;align-items:center;gap:10px"><span class="flag f-red">0–40% · Desligar / recuperar</span><b class="num" style="margin-left:auto">6%</b></div>
+              <div style="display:flex;align-items:center;gap:10px"><span class="flag f-amber">40–60% · Atenção</span><b class="num" style="margin-left:auto">18%</b></div>
+              <div style="display:flex;align-items:center;gap:10px"><span class="flag f-green">60–80% · Desenvolver p/ liderança</span><b class="num" style="margin-left:auto">54%</b></div>
+              <div style="display:flex;align-items:center;gap:10px"><span class="flag f-greenX">80–100% · Sucessão</span><b class="num" style="margin-left:auto">22%</b></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>Adesão por gestor</h3></div>
+          <div class="card-b" style="display:flex;flex-direction:column;gap:14px">
+            <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>Comercial · Atacado</span></div><div class="barwrap"><div class="bar"><i style="width:96%"></i></div><span class="pct">96%</span></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>Comercial · Televendas</span></div><div class="barwrap"><div class="bar"><i style="width:88%;background:var(--green)"></i></div><span class="pct">88%</span></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>Logística / Operacional</span></div><div class="barwrap"><div class="bar"><i style="width:72%;background:var(--amber)"></i></div><span class="pct">72%</span></div></div>
+            <div><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px"><span>Administrativo</span></div><div class="barwrap"><div class="bar"><i style="width:58%;background:var(--red)"></i></div><span class="pct">58%</span></div></div>
+            <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Leitura de disciplina da liderança — % de avaliações realizadas no prazo (RF-DSH-06).</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h">
+          <div><h3>Consulta analítica multidimensional</h3><div class="sub">Cruzamento por unidade · setor · cargo · indicador · fit cultural · faixa</div></div>
+          <button class="btn sm"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Exportar</button>
+        </div>
+        <div class="card-b">
+          <div class="filters" style="margin-bottom:14px">
+            <span class="fchip on">Vendedores</span>
+            <span class="fchip on">Setor: Atacado</span>
+            <span class="fchip on">Fit cultural &lt; 60%</span>
+            <span class="fchip">+ adicionar filtro</span>
+          </div>
+          <table>
+            <thead><tr><th>Colaborador</th><th>Cargo</th><th>Unidade</th><th>Fit cultural</th><th>Resultado</th><th>Flag</th></tr></thead>
+            <tbody>
+              <tr><td><div class="who"><div class="av" style="background:#B9820A">MR</div><div><b>Marcos Ribeiro</b><small>adm. 14 meses</small></div></div></td><td>Vendedor</td><td>São Paulo</td><td><b class="num" style="color:var(--red)">48%</b></td><td><b class="num">54%</b></td><td><span class="flag f-amber">Atenção</span></td></tr>
+              <tr><td><div class="who"><div class="av" style="background:#D6483B">TL</div><div><b>Tatiane Lima</b><small>adm. 7 meses</small></div></div></td><td>Vendedor</td><td>Campinas</td><td><b class="num" style="color:var(--red)">39%</b></td><td><b class="num">44%</b></td><td><span class="flag f-amber">Atenção</span></td></tr>
+              <tr><td><div class="who"><div class="av" style="background:#B9820A">JS</div><div><b>Jonas Silveira</b><small>adm. 22 meses</small></div></div></td><td>Vendedor</td><td>São Paulo</td><td><b class="num" style="color:var(--amber)">55%</b></td><td><b class="num">61%</b></td><td><span class="flag f-green">Desenvolver</span></td></tr>
+              <tr><td><div class="who"><div class="av" style="background:#D6483B">PC</div><div><b>Paula Corrêa</b><small>adm. 4 meses</small></div></div></td><td>Vendedor</td><td>Santos</td><td><b class="num" style="color:var(--red)">42%</b></td><td><b class="num">51%</b></td><td><span class="flag f-amber">Atenção</span></td></tr>
+            </tbody>
+          </table>
+          <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Responde exatamente à pergunta levantada no discovery: <i>“quais vendedores do Atacado estão com fit cultural abaixo de 60%?”</i> (RF-DSH-03).</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== VIEW: CICLOS ========== -->
+    <section class="view" id="v-ciclos">
+      <div class="alert">
+        <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <div><b>3 colaboradores</b> completam 45 dias nesta semana — avaliação de experiência pendente. Alertas enviados aos gestores por app e e-mail.</div>
+      </div>
+
+      <div class="filters">
+        <span class="fchip on">Todas</span>
+        <span class="fchip">Agendadas</span>
+        <span class="fchip">Em andamento</span>
+        <span class="fchip">Vencidas</span>
+        <span class="fchip">Concluídas</span>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><div><h3>Painel de pendências</h3><div class="sub">Ciclos gerados automaticamente pelo motor · Experiência (45/90) e Desempenho (semestral, dia 1)</div></div></div>
+        <table>
+          <thead><tr><th>Colaborador</th><th>Tipo de ciclo</th><th>Gestor responsável</th><th>Vencimento</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="who"><div class="av" style="background:#137A6F">RN</div><div><b>Rafael Nunes</b><small>Vendedor · Atacado</small></div></div></td>
+              <td><span class="tag">Experiência · 45 dias</span></td><td>Bruno Alves</td>
+              <td><b style="color:var(--red)">em 3 dias</b></td><td><span class="chip f-amber">Em andamento</span></td>
+              <td><button class="btn sm primary" data-goto="v-aval">Abrir</button></td>
+            </tr>
+            <tr>
+              <td><div class="who"><div class="av" style="background:#5646D6">CA</div><div><b>Carla Antunes</b><small>Assistente ADM</small></div></div></td>
+              <td><span class="tag">Experiência · 45 dias</span></td><td>Denise Rocha</td>
+              <td><b style="color:var(--amber)">em 5 dias</b></td><td><span class="chip f-amber">Agendada</span></td>
+              <td><button class="btn sm">Abrir</button></td>
+            </tr>
+            <tr>
+              <td><div class="who"><div class="av" style="background:#B9820A">EM</div><div><b>Eduardo Matos</b><small>Conferente · Logística</small></div></div></td>
+              <td><span class="tag">Experiência · 90 dias</span></td><td>Sérgio Pinto</td>
+              <td><b style="color:var(--red)">vencida há 2 dias</b></td><td><span class="chip f-red">Vencida</span></td>
+              <td><button class="btn sm">Abrir</button></td>
+            </tr>
+            <tr>
+              <td><div class="who"><div class="av" style="background:#1C9E52">LF</div><div><b>Letícia Franco</b><small>Coordenadora · Televendas</small></div></div></td>
+              <td><span class="tag">Desempenho · semestral</span></td><td>Marcos Vidal</td>
+              <td>18/07/2026</td><td><span class="chip f-amber">Agendada</span></td>
+              <td><button class="btn sm">Abrir</button></td>
+            </tr>
+            <tr>
+              <td><div class="who"><div class="av" style="background:#0B7A3B">HG</div><div><b>Hugo Guedes</b><small>Vendedor · Atacado</small></div></div></td>
+              <td><span class="tag">Desempenho · semestral</span></td><td>Bruno Alves</td>
+              <td>02/07/2026</td><td><span class="chip f-green">Concluída</span></td>
+              <td><button class="btn sm" data-goto="v-resultado">Ver resultado</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Regra FastDrywall: a Avaliação de Desempenho conta a cada 6 meses a partir do <b>dia 1 da admissão</b>, mesmo durante a experiência (RN-03). Desligamento interrompe ciclos futuros e preserva o histórico (RN-20).</div>
+    </section>
+
+    <!-- ========== VIEW: AVALIAÇÃO ========== -->
+    <section class="view" id="v-aval">
+      <div class="card pad mb16" style="display:flex;align-items:center;gap:16px">
+        <div class="who"><div class="av" style="width:46px;height:46px;font-size:16px;background:#137A6F">RN</div>
+          <div><b style="font-size:15px">Rafael Nunes</b><small>Vendedor · Comercial / Atacado · Unidade São Paulo · admitido em 03/06/2026</small></div></div>
+        <div style="margin-left:auto;text-align:right">
+          <span class="tag" style="background:var(--brand-050);color:var(--brand-600);border-color:var(--brand-100)">Experiência · 1ª (45 dias)</span>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:6px">Modelo v3 · escala 1–5 · pesos parametrizados pelo RH</div>
+        </div>
+      </div>
+
+      <div class="grid g-2-1">
+        <div>
+          <!-- Pilar Dever -->
+          <div class="pilar">
+            <div class="pilar-h"><div class="t"><b>1 · Dever</b><span class="tag">5 indicadores</span></div><span class="peso">Peso do pilar: 30%</span></div>
+            <div class="ind"><div class="name"><b>Pontualidade</b><small>Cumprimento de horários e prazos</small></div><div class="scale" data-w="6"><button>1</button><button>2</button><button>3</button><button>4</button><button class="sel">5</button></div></div>
+            <div class="ind"><div class="name"><b>Assiduidade</b><small>Presença e constância</small></div><div class="scale" data-w="6"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Apresentação pessoal</b><small>Postura e adequação</small></div><div class="scale" data-w="6"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Interesse em aprender</b><small>Proatividade no desenvolvimento</small></div><div class="scale" data-w="6"><button>1</button><button>2</button><button>3</button><button>4</button><button class="sel">5</button></div></div>
+            <div class="ind"><div class="name"><b>Comunicação</b><small>Clareza e relacionamento</small></div><div class="scale" data-w="6"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+          </div>
+
+          <!-- Pilar Desenvolvimento -->
+          <div class="pilar">
+            <div class="pilar-h"><div class="t"><b>2 · Desenvolvimento</b><span class="tag">CHA do cargo Vendedor</span></div><span class="peso">Peso do pilar: 40%</span></div>
+            <div class="ind"><div class="name"><b>Conhecimento do produto</b><small>Portfólio drywall e aplicações</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Técnica de vendas e negociação</b><small>Condução e fechamento</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button class="sel">3</button><button>4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Organização da carteira</b><small>Gestão e follow-up de clientes</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Qualidade do atendimento</b><small>Satisfação e recorrência</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+          </div>
+
+          <!-- Pilar Fit Cultural -->
+          <div class="pilar">
+            <div class="pilar-h"><div class="t"><b>3 · Fit Cultural</b><span class="tag">9 valores · exibindo 3</span></div><span class="peso">Peso do pilar: 30%</span></div>
+            <div class="ind"><div class="name"><b>Disciplina</b><small>“Faz o combinado, com consistência”</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button class="sel">3</button><button>4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Determinação</b><small>“Persegue o resultado apesar dos obstáculos”</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+            <div class="ind"><div class="name"><b>Colaboração</b><small>“Soma com o time antes de si”</small></div><div class="scale" data-w="10"><button>1</button><button>2</button><button>3</button><button class="sel">4</button><button>5</button></div></div>
+          </div>
+
+          <div class="card pad">
+            <b style="font-size:13.5px;display:block;margin-bottom:8px">Decisão do gestor <span class="tag" style="margin-left:6px">a flag é recomendação — decisão é humana (RN-06)</span></b>
+            <div style="display:flex;gap:10px;margin-top:6px">
+              <button class="btn primary">Renovar contrato (+45 dias)</button>
+              <button class="btn danger">Desligar</button>
+              <button class="btn ghost">Salvar rascunho</button>
+            </div>
+            <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Decisão divergente da recomendação exige justificativa registrada. Após concluída, a avaliação torna-se imutável (retificação só via fluxo auditado).</div>
+          </div>
+        </div>
+
+        <!-- Score panel -->
+        <div>
+          <div class="score-panel">
+            <div class="card pad mb16">
+              <div class="gauge">
+                <div class="big num" id="scoreVal" style="color:var(--green)">—</div>
+                <div class="lbl">Resultado ponderado</div>
+              </div>
+              <div id="scoreFlag" style="text-align:center;margin-top:8px"></div>
+              <div class="track"><i class="s1"></i><i class="s2"></i><i class="s3"></i><i class="s4"></i></div>
+              <div class="track-marks"><span>0</span><span>40</span><span>60</span><span>80</span><span>100</span></div>
+            </div>
+
+            <div class="card pad mb16">
+              <b style="font-size:13px;display:block;margin-bottom:12px">Memória de cálculo</b>
+              <div class="memo">
+                <div class="row"><span>Dever <span class="tag" style="font-size:10px">×30%</span></span><span class="num" id="mDever">—</span></div>
+                <div class="row"><span>Desenvolvimento <span class="tag" style="font-size:10px">×40%</span></span><span class="num" id="mDes">—</span></div>
+                <div class="row"><span>Fit Cultural <span class="tag" style="font-size:10px">×30%</span></span><span class="num" id="mFit">—</span></div>
+                <div class="row"><span>Resultado final</span><span class="num" id="mFinal">—</span></div>
+              </div>
+              <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Pesos somam 100% ✓ · valores serão co-criados nos workshops btime × RH.</div>
+            </div>
+
+            <div class="alert info" style="margin-bottom:0">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+              <div><b>Contexto de apoio (Fase 2):</b> faltas, atrasos, licenças e advertências do período virão do Nasajon e aparecem aqui durante o preenchimento.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== VIEW: RESULTADO & CIÊNCIA ========== -->
+    <section class="view" id="v-resultado">
+      <div class="grid g-2-1">
+        <div>
+          <div class="card mb16">
+            <div class="card-h"><div><h3>Seu resultado · Avaliação de Experiência (1ª)</h3><div class="sub">Rafael Nunes · liberado por Bruno Alves em 15/07/2026</div></div><span class="flag f-green" style="font-size:13px">72% · Desenvolver</span></div>
+            <div class="card-b">
+              <div class="barwrap mb16"><span style="width:120px;font-size:12.5px">Dever</span><div class="bar"><i style="width:88%;background:var(--green)"></i></div><span class="pct">88%</span></div>
+              <div class="barwrap mb16"><span style="width:120px;font-size:12.5px">Desenvolvimento</span><div class="bar"><i style="width:70%;background:var(--green)"></i></div><span class="pct">70%</span></div>
+              <div class="barwrap"><span style="width:120px;font-size:12.5px">Fit Cultural</span><div class="bar"><i style="width:73%;background:var(--green)"></i></div><span class="pct">73%</span></div>
+            </div>
+          </div>
+
+          <div class="card mb16">
+            <div class="card-h"><h3>Sua trilha de carreira</h3></div>
+            <div class="card-b">
+              <div class="track-career">
+                <div class="tc-node now">Vendedor<small>cargo atual</small></div>
+                <span class="tc-arrow">→</span>
+                <div class="tc-node next">Vendedor Líder<small>próximo passo</small></div>
+                <span class="tc-arrow">→</span>
+                <div class="tc-node">Coordenador<small></small></div>
+                <span class="tc-arrow">→</span>
+                <div class="tc-node">Gerente<small></small></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card pad mb16">
+            <h3 style="font-size:14px;margin-bottom:4px">Ciência digital</h3>
+            <p style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Substitui a assinatura física da Folha 4. Registro com data, identificação e hash do conteúdo.</p>
+            <div class="ciencia" id="cienciaBox">
+              <svg viewBox="0 0 24 24" style="width:26px;height:26px;stroke:var(--brand);fill:none;stroke-width:2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>
+              <p style="font-size:13px;margin:10px 0 14px">Confirmo que li e tomei ciência do resultado desta avaliação.</p>
+              <button class="btn primary" id="btnCiencia" onclick="registrarCiencia()">Registrar ciência</button>
+            </div>
+          </div>
+
+          <div class="card pad">
+            <b style="font-size:13px;display:block;margin-bottom:10px">Resumo do plano de ação</b>
+            <div style="font-size:12.8px;color:var(--ink-2);line-height:1.7">
+              Foco em <b>técnica de vendas e negociação</b> e <b>disciplina</b>. PDI detalhado disponível após a próxima Avaliação de Desempenho.
+            </div>
+            <button class="btn sm mt16" data-goto="v-pdi"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>Ver PDI sugerido</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== VIEW: PDI ========== -->
+    <section class="view" id="v-pdi">
+      <div class="alert info">
+        <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/><path d="M9 21h6"/></svg>
+        <div><b>Sugestão gerada por IA.</b> Nenhum conteúdo chega ao colaborador sem validação do gestor (RN-17). Revise, ajuste e libere.</div>
+      </div>
+
+      <div class="card mb16">
+        <div class="card-h">
+          <div><h3>PDI sugerido · Rafael Nunes</h3><div class="sub">Cruzamento: resultado por indicador × CHA do cargo-alvo × histórico de treinamentos</div></div>
+          <span class="ai-tag"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>IA · Fase 2</span>
+        </div>
+        <div class="card-b">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;font-size:13px">
+            <span style="color:var(--muted)">Objetivo de carreira:</span>
+            <div class="tc-node now" style="padding:7px 12px">Vendedor</div><span class="tc-arrow">→</span><div class="tc-node next" style="padding:7px 12px">Vendedor Líder</div>
+          </div>
+
+          <div class="gap">
+            <div class="gh"><b>Técnica de vendas e negociação</b><div class="cmp">atual <span class="from">60%</span> → alvo <span class="to">80%</span></div></div>
+            <div class="action"><svg viewBox="0 0 24 24" style="stroke:var(--indigo)"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Concluir trilha “Negociação Consultiva” <a href="#">Sults <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></a></div>
+            <div class="action"><svg viewBox="0 0 24 24" style="stroke:var(--indigo)"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Curso “Fechamento de vendas” <a href="#">Conquer <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg></a> · prazo 60 dias</div>
+          </div>
+
+          <div class="gap">
+            <div class="gh"><b>Disciplina (fit cultural)</b><div class="cmp">atual <span class="from">60%</span> → alvo <span class="to">75%</span></div></div>
+            <div class="action"><svg viewBox="0 0 24 24" style="stroke:var(--indigo)"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Acompanhamento quinzenal com o líder · registrar rotina de follow-up</div>
+          </div>
+
+          <div style="display:flex;gap:10px;margin-top:6px" id="pdiActions">
+            <button class="btn indigo" onclick="validarPDI()">Validar e liberar ao colaborador</button>
+            <button class="btn">Editar sugestão</button>
+          </div>
+          <div id="pdiDone" style="display:none;margin-top:6px"><span class="chip f-green">✓ PDI liberado ao colaborador · aguardando execução</span></div>
+        </div>
+      </div>
+      <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Sem API do módulo universidade do Sults: os links de treinamento são inseridos manualmente (paliativo acordado no discovery — RF-PDI-03).</div>
+    </section>
+
+    <!-- ========== VIEW: CARD ========== -->
+    <section class="view" id="v-card">
+      <div class="alert info">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M15 8h4M15 12h4M6 16h12"/></svg>
+        <div><b>Módulo proposto pela btime</b> (não estava no discovery) — inspirado na “Teoria dos Cartões” de Ray Dalio. Nasce <b>privado</b> (colaborador + gestor + RH); ampliação de visibilidade só por feature flag aprovada pela diretoria (RN-21).</div>
+      </div>
+
+      <div class="bcard mb16">
+        <div class="bhead">
+          <div class="bav">RN</div>
+          <div><h3>Rafael Nunes</h3><small>Vendedor · Comercial / Atacado · 5 ciclos concluídos</small></div>
+          <div class="cred"><div class="cv num">B+</div><small>índice de<br>credibilidade</small></div>
+        </div>
+        <div class="bbody">
+          <div class="bsec">
+            <h5>Forças consistentes</h5>
+            <span class="bpill strong">Pontualidade</span><span class="bpill strong">Interesse em aprender</span>
+            <span class="bpill strong">Qualidade do atendimento</span><span class="bpill strong">Determinação</span>
+          </div>
+          <div class="bsec">
+            <h5>Pontos de desenvolvimento</h5>
+            <span class="bpill dev">Técnica de negociação</span><span class="bpill dev">Disciplina</span>
+            <span class="bpill dev">Organização da carteira</span>
+          </div>
+          <div class="bsec" style="grid-column:1/-1">
+            <h5>Evolução por pilar (últimos ciclos)</h5>
+            <div class="bevo">
+              <div class="er"><span class="en">Dever</span><div class="bar"><i style="width:88%"></i></div><span class="ep num">88%</span></div>
+              <div class="er"><span class="en">Desenvolvimento</span><div class="bar"><i style="width:70%"></i></div><span class="ep num">70%</span></div>
+              <div class="er"><span class="en">Fit Cultural</span><div class="bar"><i style="width:73%"></i></div><span class="ep num">73%</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>O card exibe apenas perfil agregado de desenvolvimento. Dados sensíveis (advertências, licenças, decisões de desligamento, notas brutas) ficam <b>estruturalmente fora</b> do card (RN-22). Estilo de trabalho, tendências de decisão e complementaridade de equipe entram na Fase 3.</div>
+    </section>
+
+    <!-- ========== VIEW: MODELOS ========== -->
+    <section class="view" id="v-modelos">
+      <div class="view-head" style="margin-bottom:6px">
+        <p>Toda regra de avaliação é <b>dado administrável pelo RH</b> — pilares, indicadores, escalas, pesos, faixas e periodicidades — sem depender de desenvolvimento (RNF-08). Alterações valem apenas para ciclos abertos após a mudança (RN-18).</p>
+      </div>
+      <div class="filters mt16">
+        <span class="fchip on">Experiência</span><span class="fchip">Feedback</span><span class="fchip">Desempenho</span><span class="fchip">+ novo modelo</span>
+      </div>
+
+      <div class="grid g2 mb16">
+        <div class="card">
+          <div class="card-h"><div><h3>Pilar: Dever</h3><div class="sub">Peso no modelo: 30%</div></div><button class="btn sm"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Indicador</button></div>
+          <div class="card-b" style="padding-top:6px;padding-bottom:6px">
+            <div class="cfg-ind"><span class="cn">Pontualidade</span><div class="w"><input value="20%"></div></div>
+            <div class="cfg-ind"><span class="cn">Assiduidade</span><div class="w"><input value="20%"></div></div>
+            <div class="cfg-ind"><span class="cn">Apresentação pessoal</span><div class="w"><input value="20%"></div></div>
+            <div class="cfg-ind"><span class="cn">Interesse em aprender</span><div class="w"><input value="20%"></div></div>
+            <div class="cfg-ind"><span class="cn">Comunicação</span><div class="w"><input value="20%"></div></div>
+          </div>
+          <div style="padding:10px 20px;border-top:1px solid var(--line-2);font-size:12px;color:var(--green);font-weight:600">Soma dos pesos: 100% ✓</div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><div><h3>Escala de resposta</h3><div class="sub">Configurável por modelo</div></div></div>
+          <div class="card-b">
+            <div class="filters" style="margin-bottom:14px">
+              <span class="fchip on">1 – 5 (numérica)</span><span class="fchip">1 – 4</span><span class="fchip">1 – 3</span><span class="fchip">Textual</span>
+            </div>
+            <b style="font-size:13px;display:block;margin:14px 0 10px">Faixas de resultado (flags)</b>
+            <div class="flagrow"><span class="sw" style="background:var(--red)"></span><span class="rng">0 – 40%</span><span class="dc">Desligar / plano de recuperação</span></div>
+            <div class="flagrow"><span class="sw" style="background:var(--amber)"></span><span class="rng">40 – 60%</span><span class="dc">Atenção · desenvolver</span></div>
+            <div class="flagrow"><span class="sw" style="background:var(--green)"></span><span class="rng">60 – 80%</span><span class="dc">Desenvolver para liderança</span></div>
+            <div class="flagrow" style="margin-bottom:0"><span class="sw" style="background:var(--greenX)"></span><span class="rng">80 – 100%</span><span class="dc">Alto desempenho · sucessão</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Pesos, faixas e a escala final são pontos <b>“A DEFINIR”</b> — serão co-criados em workshops btime × RH antes do desenvolvimento do motor de cálculo. Os valores acima são ilustrativos.</div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+  // ---- navigation ----
+  const items=document.querySelectorAll('.nav-item');
+  function goto(id){
+    const item=[...items].find(i=>i.dataset.target===id);
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    items.forEach(i=>i.classList.remove('active'));
+    if(item){item.classList.add('active');
+      document.getElementById('ptitle').textContent=item.dataset.title;
+      document.getElementById('crumb').textContent=item.dataset.crumb;}
+    window.scrollTo({top:0,behavior:'smooth'});
+    document.getElementById('sidebar').classList.remove('open');
+  }
+  items.forEach(i=>i.addEventListener('click',()=>goto(i.dataset.target)));
+  document.querySelectorAll('[data-goto]').forEach(b=>b.addEventListener('click',()=>goto(b.dataset.goto)));
+
+  // ---- live score on Avaliação ----
+  const pilarWeights={dever:0.30,des:0.40,fit:0.30};
+  function pilarOf(el){ // determine pillar by index of parent .pilar
+    const pilars=[...document.querySelectorAll('#v-aval .pilar')];
+    const p=el.closest('.pilar'); const idx=pilars.indexOf(p);
+    return idx===0?'dever':idx===1?'des':'fit';
+  }
+  function calc(){
+    const groups={dever:[],des:[],fit:[]};
+    document.querySelectorAll('#v-aval .scale').forEach(s=>{
+      const sel=s.querySelector('.sel'); const val=sel?parseInt(sel.textContent):0;
+      groups[pilarOf(s)].push(val/5);
+    });
+    const avg=a=>a.length?a.reduce((x,y)=>x+y,0)/a.length:0;
+    const d=avg(groups.dever),de=avg(groups.des),f=avg(groups.fit);
+    const final=(d*pilarWeights.dever+de*pilarWeights.des+f*pilarWeights.fit)*100;
+    document.getElementById('mDever').textContent=Math.round(d*100)+'%';
+    document.getElementById('mDes').textContent=Math.round(de*100)+'%';
+    document.getElementById('mFit').textContent=Math.round(f*100)+'%';
+    document.getElementById('mFinal').textContent=Math.round(final)+'%';
+    const sv=document.getElementById('scoreVal'); sv.textContent=Math.round(final)+'%';
+    let color,flag,cls;
+    if(final<40){color='var(--red)';flag='Desligar / recuperar';cls='f-red';}
+    else if(final<60){color='var(--amber)';flag='Atenção · desenvolver';cls='f-amber';}
+    else if(final<80){color='var(--green)';flag='Desenvolver p/ liderança';cls='f-green';}
+    else{color='var(--greenX)';flag='Alto desempenho · sucessão';cls='f-greenX';}
+    sv.style.color=color;
+    document.getElementById('scoreFlag').innerHTML='<span class="flag '+cls+'" style="font-size:12.5px">'+flag+'</span>';
+  }
+  document.querySelectorAll('#v-aval .scale button').forEach(b=>{
+    b.addEventListener('click',()=>{
+      b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('sel'));
+      b.classList.add('sel'); calc();
+    });
+  });
+  calc();
+
+  // ---- ciência ----
+  function registrarCiencia(){
+    const box=document.getElementById('cienciaBox');
+    const ts=new Date().toLocaleString('pt-BR');
+    box.classList.add('done');
+    box.innerHTML='<svg viewBox="0 0 24 24" style="width:26px;height:26px;stroke:var(--green);fill:none;stroke-width:2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="10"/></svg>'+
+      '<p style="font-size:13px;margin:10px 0 4px;font-weight:600;color:var(--greenX)">Ciência registrada</p>'+
+      '<p style="font-size:12px;color:var(--ink-2)">Rafael Nunes · '+ts+'</p>'+
+      '<div class="hashline">hash SHA-256: 7f3a…c91e · substitui a assinatura física da Folha 4</div>';
+  }
+  // ---- PDI ----
+  function validarPDI(){
+    document.getElementById('pdiActions').style.display='none';
+    document.getElementById('pdiDone').style.display='block';
+  }
+</script>
+</body>
+</html>
