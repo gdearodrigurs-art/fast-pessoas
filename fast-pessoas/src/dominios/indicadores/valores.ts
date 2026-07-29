@@ -1,7 +1,9 @@
 import { valorIndicadorAdmissoesNoPrazo } from "../admissao/servico";
 import { valorIndicadorEntrevistas } from "../desligamento/servico";
 import { valorIndicadorFeriasVencidas } from "../ferias/servico";
+import { valorIndicadorFolhaNoPrazo } from "../folha/servico";
 import { valorIndicadorVagasNoPrazo } from "../recrutamento/servico";
+import { valorIndicadorAsosValidos } from "../sst/servico";
 import { ESCOPO_GLOBAL, formatarValorMeta } from "./esquemas";
 import { listarIndicadoresAtivos, listarMetasVigentes } from "./repositorio";
 
@@ -51,6 +53,26 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
         valor === null
           ? "nenhuma vaga fechada em 12 meses"
           : "vagas fechadas até o prazo-alvo (12 meses)",
+    };
+  },
+  folha_no_prazo: async () => {
+    const valor = await valorIndicadorFolhaNoPrazo();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhuma competência mensal com prazo vencido"
+          : "competências mensais fechadas até o dia 5 do mês seguinte (12 meses)",
+    };
+  },
+  asos_validos: async () => {
+    const valor = await valorIndicadorAsosValidos();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhum colaborador ativo"
+          : "colaboradores ativos com ASO vigente",
     };
   },
 };

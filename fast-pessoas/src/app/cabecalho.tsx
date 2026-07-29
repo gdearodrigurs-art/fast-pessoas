@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { BotaoSair } from "./botao-sair";
+import { SinoNotificacoes } from "./sino-notificacoes";
 import estilos from "./cabecalho.module.css";
 
 /**
@@ -28,6 +29,7 @@ export function Cabecalho({
           </Link>
         )}
         {children}
+        <SinoNotificacoes />
         <BotaoSair />
       </nav>
     </header>

@@ -5,6 +5,7 @@ import { ErroHttpCampo } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { inserirEvento } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
+import { notificar, notificarLote } from "../notificacoes/servico";
 import {
   CriacaoDemanda,
   FiltroDemandas,
@@ -24,6 +25,7 @@ import {
   DemandaParaTransicao,
   DemandaResumo,
   ehGestorDoUsuario,
+  gestoresDoUsuario,
   IndicadoresFila,
   inserirComentario,
   inserirTransicao,
@@ -169,6 +171,22 @@ export async function criarDemanda(
         Prazo: { de: null, para: formatarData(demanda.prazo) },
       },
     });
+    // Aviso neutro ao(s) gestor(es) vigente(s) — o conteúdo fica na tela.
+    if (statusInicial === "aguardando_aprovacao") {
+      const gestores = await gestoresDoUsuario(cliente, sessao.usuario_id);
+      await notificarLote(
+        cliente,
+        gestores
+          .filter((usuarioId) => usuarioId !== sessao.usuario_id)
+          .map((usuarioId) => ({
+            usuarioId,
+            tipo: "demanda.aprovacao_pendente",
+            titulo: "Demanda aguardando sua aprovação",
+            corpo: `${sessao.nome} abriu a demanda ${formatarNumeroDemanda(demanda.numero)} e aguarda sua decisão.`,
+            link: `/demandas/${demanda.id}`,
+          }))
+      );
+    }
     return demanda;
   });
 
@@ -253,6 +271,29 @@ async function registrarTransicao(
   });
 }
 
+/**
+ * Aviso neutro ao solicitante sobre o andamento da própria demanda — sempre
+ * dentro da transação da transição; nada de motivo/resposta no corpo (o
+ * conteúdo mora na página da demanda, atrás das checagens de acesso).
+ */
+async function notificarSolicitante(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  demanda: DemandaParaTransicao,
+  tipo: string,
+  titulo: string,
+  corpo: string
+): Promise<void> {
+  if (demanda.solicitante_usuario_id === sessao.usuario_id) return;
+  await notificar(cliente, {
+    usuarioId: demanda.solicitante_usuario_id,
+    tipo,
+    titulo,
+    corpo,
+    link: `/demandas/${demanda.id}`,
+  });
+}
+
 async function resumoAposTransicao(id: number): Promise<DemandaResumo> {
   const resumo = await buscarResumo(id);
   if (!resumo) {
@@ -294,6 +335,14 @@ export async function aprovarDemanda(
   await comTransacao(sessao.usuario_id, async (cliente) => {
     const demanda = await exigirDemandaParaAprovacao(cliente, sessao, id);
     await registrarTransicao(cliente, sessao, demanda, "aberta", null);
+    await notificarSolicitante(
+      cliente,
+      sessao,
+      demanda,
+      "demanda.aprovada",
+      "Demanda aprovada pelo gestor",
+      `A demanda ${formatarNumeroDemanda(demanda.numero)} foi aprovada e entrou na fila do DP.`
+    );
   });
   return resumoAposTransicao(id);
 }
@@ -308,6 +357,14 @@ export async function reprovarDemanda(
     await registrarTransicao(cliente, sessao, demanda, "recusada", motivo, {
       "Motivo da reprovação": { de: null, para: motivo },
     });
+    await notificarSolicitante(
+      cliente,
+      sessao,
+      demanda,
+      "demanda.reprovada",
+      "Demanda reprovada pelo gestor",
+      `A demanda ${formatarNumeroDemanda(demanda.numero)} foi reprovada. Veja o motivo na página da demanda.`
+    );
   });
   return resumoAposTransicao(id);
 }
@@ -335,6 +392,14 @@ export async function assumirDemanda(
       null,
       { Atendente: { de: null, para: sessao.nome } },
       sessao.usuario_id
+    );
+    await notificarSolicitante(
+      cliente,
+      sessao,
+      demanda,
+      "demanda.em_atendimento",
+      "Demanda em atendimento",
+      `A demanda ${formatarNumeroDemanda(demanda.numero)} foi assumida pelo DP e está em atendimento.`
     );
   });
   return resumoAposTransicao(id);
@@ -378,6 +443,14 @@ export async function concluirDemanda(
         registrado_por: sessao.usuario_id,
       });
     }
+    await notificarSolicitante(
+      cliente,
+      sessao,
+      demanda,
+      "demanda.concluida",
+      "Demanda concluída pelo DP",
+      `A demanda ${formatarNumeroDemanda(demanda.numero)} foi concluída. Veja a resposta na página da demanda.`
+    );
   });
   return resumoAposTransicao(id);
 }
@@ -401,6 +474,14 @@ export async function recusarDemanda(
     await registrarTransicao(cliente, sessao, demanda, "recusada", motivo, {
       "Motivo da recusa": { de: null, para: motivo },
     });
+    await notificarSolicitante(
+      cliente,
+      sessao,
+      demanda,
+      "demanda.recusada",
+      "Demanda recusada pelo DP",
+      `A demanda ${formatarNumeroDemanda(demanda.numero)} foi recusada. Veja o motivo na página da demanda.`
+    );
   });
   return resumoAposTransicao(id);
 }

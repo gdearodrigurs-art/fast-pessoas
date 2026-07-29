@@ -15,6 +15,8 @@ interface Permissoes extends Record<string, unknown> {
   beneficios_acessar: boolean;
   avaliacao_acessar: boolean;
   recrutamento_acessar: boolean;
+  folha_ver: boolean;
+  sst_ver: boolean;
   clima_responder: boolean;
   clima_agregado_ver: boolean;
   clima_individual_ver: boolean;
@@ -49,6 +51,8 @@ export default async function PaginaInicial() {
         OR sistema.tem_permissao($1, 'avaliacao.resultado.ver'))   AS avaliacao_acessar,
        (sistema.tem_permissao($1, 'rs.ver')
         OR sistema.tem_permissao($1, 'rs.requisicao.criar'))       AS recrutamento_acessar,
+       sistema.tem_permissao($1, 'folha.ver')                      AS folha_ver,
+       sistema.tem_permissao($1, 'sst.ver')                        AS sst_ver,
        sistema.tem_permissao($1, 'clima.responder')                AS clima_responder,
        sistema.tem_permissao($1, 'clima.agregado.ver')             AS clima_agregado_ver,
        sistema.tem_permissao($1, 'clima.resposta.individual.ver')  AS clima_individual_ver,
@@ -86,6 +90,12 @@ export default async function PaginaInicial() {
       mostrar: pode?.afastamento_ver ?? false,
     },
     {
+      href: "/sst",
+      titulo: "Saúde e segurança",
+      descricao: "ASOs, CATs e entregas de EPI com registro de ciência.",
+      mostrar: pode?.sst_ver ?? false,
+    },
+    {
       href: "/recrutamento",
       titulo: "Recrutamento",
       descricao: "Requisições de vaga, kanban de candidatos e ofertas.",
@@ -108,6 +118,12 @@ export default async function PaginaInicial() {
       titulo: "Benefícios",
       descricao: "Catálogo de benefícios, adesões e dependentes.",
       mostrar: pode?.beneficios_acessar ?? false,
+    },
+    {
+      href: "/folha",
+      titulo: "Folha de pagamento",
+      descricao: "Competências, cálculo, conferência e fechamento da folha.",
+      mostrar: pode?.folha_ver ?? false,
     },
     {
       href: "/avaliacoes",

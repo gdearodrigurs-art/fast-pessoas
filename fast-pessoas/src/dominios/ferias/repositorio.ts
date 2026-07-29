@@ -19,6 +19,19 @@ export async function colaboradorDoUsuario(
   return linhas.length > 0 ? Number(linhas[0].id) : null;
 }
 
+/** Usuário dono da ficha do colaborador (null quando não há conta vinculada). */
+export async function usuarioDoColaborador(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ usuario_id: string | null }>(
+    "SELECT usuario_id FROM rh.colaborador WHERE id = $1",
+    [colaboradorId]
+  );
+  const usuarioId = rows[0]?.usuario_id ?? null;
+  return usuarioId === null ? null : Number(usuarioId);
+}
+
 export async function temPermissao(
   usuarioId: number,
   chave: string

@@ -230,6 +230,14 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #arquitetura #canonico
 
+### [2026-07-29] Onda B concluída (360 + R&S + 2FA real); backlog de hardening registrado
+
+**Decisão:** Onda B verificada (37/37 PASS) e commitada (074f419). O motor da 360 impossibilita por design os erros da btime (validado por recálculo manual independente). Onda C (folha F1 + SST base + notificações internas) aguarda ordem do usuário.
+
+**Contexto:** Backlog de hardening apontado pelo verificador (lacunas de produto, não regressões): (a) sem rate-limit/lockout no login; (b) sem proteção contra replay de código TOTP dentro da janela; (c) telas de 360/R&S verificadas por API+banco, não dirigidas por browser; (d) concorrência da geração lazy de ciclos protegida por constraint mas não exercitada com corrida real. Tratar num bloco de hardening antes de produção.
+
+**Tags:** #arquitetura #validacao #divida-tecnica
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.

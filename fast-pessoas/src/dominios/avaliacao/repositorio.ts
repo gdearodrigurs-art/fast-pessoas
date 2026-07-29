@@ -457,6 +457,8 @@ export interface CicloCriado {
   colaborador_nome: string;
   matricula: string;
   avaliador_nome: string;
+  /** Usuário do avaliador (null quando o gestor não tem conta) — alvo do aviso. */
+  avaliador_usuario_id: number | null;
   tipo: TipoCiclo;
   prazo: string;
 }
@@ -471,11 +473,14 @@ async function detalharCriados(
     colaborador_nome: string;
     matricula: string;
     avaliador_nome: string;
+    avaliador_usuario_id: string | null;
     tipo: TipoCiclo;
     prazo: string;
   }>(
     `SELECT ca.id, c.nome_completo AS colaborador_nome, c.matricula,
-            g.nome_completo AS avaliador_nome, ca.tipo, ca.prazo::text AS prazo
+            g.nome_completo AS avaliador_nome,
+            g.usuario_id AS avaliador_usuario_id,
+            ca.tipo, ca.prazo::text AS prazo
        FROM rh.ciclo_avaliacao ca
        JOIN rh.colaborador c ON c.id = ca.colaborador_id
        JOIN rh.colaborador g ON g.id = ca.avaliador_colaborador_id
@@ -483,7 +488,14 @@ async function detalharCriados(
       ORDER BY ca.id`,
     [ids]
   );
-  return rows.map((linha) => ({ ...linha, id: Number(linha.id) }));
+  return rows.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    avaliador_usuario_id:
+      linha.avaliador_usuario_id === null
+        ? null
+        : Number(linha.avaliador_usuario_id),
+  }));
 }
 
 /** Cria a linha de resposta (rascunho) de cada ciclo recém-aberto. */

@@ -17,6 +17,7 @@ import {
   StatusDemanda,
 } from "../demandas/esquemas";
 import { PayloadSessao } from "../identidade/esquemas";
+import { notificar } from "../notificacoes/servico";
 import {
   CriacaoProgramacao,
   nivelAlerta,
@@ -51,6 +52,7 @@ import {
   ProgramacaoParaAtualizar,
   ProgramacaoResumo,
   temPermissao,
+  usuarioDoColaborador,
 } from "./repositorio";
 
 const TABELA_PERIODO = "rh.periodo_aquisitivo";
@@ -289,6 +291,25 @@ async function aplicarAprovacao(
     },
     registrado_por: decisorUsuarioId,
   });
+
+  // Aviso neutro ao solicitante — vale para os dois caminhos de aprovação
+  // (demanda do gestor sincronizada e exceção do DP/RH).
+  const solicitanteUsuarioId = await usuarioDoColaborador(
+    cliente,
+    programacao.colaborador_id
+  );
+  if (
+    solicitanteUsuarioId !== null &&
+    solicitanteUsuarioId !== decisorUsuarioId
+  ) {
+    await notificar(cliente, {
+      usuarioId: solicitanteUsuarioId,
+      tipo: "ferias.programacao_aprovada",
+      titulo: "Programação de férias aprovada",
+      corpo: `Sua programação de férias de ${formatarData(programacao.inicio)} a ${formatarData(programacao.fim)} foi aprovada.`,
+      link: "/ferias",
+    });
+  }
 }
 
 /**

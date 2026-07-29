@@ -5,6 +5,7 @@ import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
 import { inserirEvento } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
+import { notificar } from "../notificacoes/servico";
 import { calcularResultado, EstruturaCongelada } from "./calculo";
 import {
   Decisao,
@@ -163,6 +164,32 @@ async function auditarCicloCriado(
   });
 }
 
+/**
+ * Aviso neutro ao avaliador na abertura do ciclo (lazy 45/90 ou lote de
+ * desempenho) — sem nota/resultado; o conteúdo mora na página do ciclo.
+ * Sem aviso quando o gestor não tem conta ou quando ele mesmo disparou a
+ * geração ao abrir o painel.
+ */
+async function notificarAvaliador(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  criado: CicloCriado
+): Promise<void> {
+  if (
+    criado.avaliador_usuario_id === null ||
+    criado.avaliador_usuario_id === sessao.usuario_id
+  ) {
+    return;
+  }
+  await notificar(cliente, {
+    usuarioId: criado.avaliador_usuario_id,
+    tipo: "avaliacao.ciclo_aberto",
+    titulo: "Nova avaliação para responder",
+    corpo: `Ciclo "${ROTULOS_TIPO_CICLO[criado.tipo]}" de ${criado.colaborador_nome} aberto — prazo ${formatarData(criado.prazo)}.`,
+    link: `/avaliacoes/${criado.id}`,
+  });
+}
+
 // ------------------------------------------------------------------ painel
 
 export interface PainelAvaliacoes {
@@ -224,6 +251,7 @@ async function gerarExperienciaLazy(
           modeloAtivo.versao,
           "Geração automática (marcos 45/90 do contrato de experiência)"
         );
+        await notificarAvaliador(cliente, sessao, criado);
       }
       return criados.length;
     });
@@ -268,6 +296,7 @@ export async function abrirLote(
         modeloAtivo.versao,
         `Abertura em lote (prazo ${formatarData(prazo)})`
       );
+      await notificarAvaliador(cliente, sessao, criado);
     }
     return lista;
   });

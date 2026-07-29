@@ -150,6 +150,21 @@ export async function trocarSenha(
   return { ok: true };
 }
 
+/**
+ * Revalidação pontual de TOTP para operações críticas de outros domínios
+ * (ex.: aprovação de folha). Não emite sessão — só confere o código.
+ */
+export async function validarTotpDoUsuario(
+  usuarioId: number,
+  codigo: string
+): Promise<"ok" | "sem_2fa" | "invalido"> {
+  const usuario = await buscarPorId(usuarioId);
+  if (!usuario || !usuario.ativo || !usuario.totp_secret) {
+    return "sem_2fa";
+  }
+  return validarCodigoTotp(usuario.totp_secret, codigo) ? "ok" : "invalido";
+}
+
 // ---------------------------------------------------------------------------
 // Configuração de 2FA (enrolamento TOTP)
 // ---------------------------------------------------------------------------

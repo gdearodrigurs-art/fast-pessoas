@@ -461,6 +461,30 @@ export async function inserirComentario(
   return Number(rows[0].id);
 }
 
+/**
+ * Usuários (com conta) que são gestores vigentes do solicitante — alvo dos
+ * avisos de aprovação pendente. Vazio quando o solicitante não tem gestor
+ * vigente ou o gestor não tem usuário.
+ */
+export async function gestoresDoUsuario(
+  cliente: PoolClient,
+  solicitanteUsuarioId: number
+): Promise<number[]> {
+  const { rows } = await cliente.query<{ usuario_id: string }>(
+    `SELECT DISTINCT gc.usuario_id
+       FROM rh.colaborador sc
+       JOIN rh.relacao_gestor rg
+         ON rg.liderado_colaborador_id = sc.id
+        AND rg.fim_vigencia IS NULL
+        AND rg.inicio_vigencia <= ${HOJE_SP}
+       JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
+      WHERE sc.usuario_id = $1
+        AND gc.usuario_id IS NOT NULL`,
+    [solicitanteUsuarioId]
+  );
+  return rows.map((linha) => Number(linha.usuario_id));
+}
+
 /** O usuário é gestor vigente do solicitante? (rh.relacao_gestor sem fim.) */
 export async function ehGestorDoUsuario(
   gestorUsuarioId: number,
