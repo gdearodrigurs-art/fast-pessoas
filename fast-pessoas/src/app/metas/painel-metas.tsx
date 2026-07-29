@@ -23,6 +23,7 @@ interface MetaVigente {
 
 interface Indicador {
   id: number;
+  chave: string;
   nome: string;
   area: string;
   descricao: string;
@@ -30,6 +31,14 @@ interface Indicador {
   direcao: Direcao;
   meta_global: MetaVigente | null;
   metas_unidade: MetaVigente[];
+}
+
+interface ValorIndicador {
+  chave: string;
+  valor: number | null;
+  valor_formatado: string | null;
+  detalhe: string | null;
+  situacao: "dentro" | "fora" | "sem_meta" | "sem_dados";
 }
 
 interface VersaoMeta {
@@ -74,6 +83,7 @@ function hojeEmSaoPaulo(): string {
 
 export function PainelMetas() {
   const [central, setCentral] = useState<Central | null>(null);
+  const [valores, setValores] = useState<Record<string, ValorIndicador>>({});
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -109,12 +119,37 @@ export function PainelMetas() {
     return dados as Central;
   }, []);
 
+  // Valores atuais são complemento: falha aqui não derruba a página —
+  // as linhas sem valor apenas mostram "sem dados".
+  const carregarValores = useCallback(async (): Promise<
+    Record<string, ValorIndicador>
+  > => {
+    try {
+      const resposta = await fetch("/api/indicadores/valores");
+      const dados = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) return {};
+      const porChave: Record<string, ValorIndicador> = {};
+      for (const valor of (dados.valores ?? []) as ValorIndicador[]) {
+        porChave[valor.chave] = valor;
+      }
+      return porChave;
+    } catch {
+      return {};
+    }
+  }, []);
+
   useEffect(() => {
     let ativo = true;
     (async () => {
       try {
-        const dados = await carregarCentral();
-        if (ativo) setCentral(dados);
+        const [dados, valoresAtuais] = await Promise.all([
+          carregarCentral(),
+          carregarValores(),
+        ]);
+        if (ativo) {
+          setCentral(dados);
+          setValores(valoresAtuais);
+        }
       } catch (falha) {
         if (ativo) {
           setErro(
@@ -130,12 +165,16 @@ export function PainelMetas() {
     return () => {
       ativo = false;
     };
-  }, [carregarCentral]);
+  }, [carregarCentral, carregarValores]);
 
   async function recarregar() {
     try {
-      const dados = await carregarCentral();
+      const [dados, valoresAtuais] = await Promise.all([
+        carregarCentral(),
+        carregarValores(),
+      ]);
       setCentral(dados);
+      setValores(valoresAtuais);
       setErro(null);
     } catch (falha) {
       setErro(
@@ -334,6 +373,7 @@ export function PainelMetas() {
                   <tr>
                     <th className={estilos.colunaIndicador}>Indicador</th>
                     <th>Meta vigente</th>
+                    <th>Valor atual</th>
                     <th>Vigência</th>
                     <th className={estilos.colunaAcoes}></th>
                   </tr>
@@ -347,6 +387,7 @@ export function PainelMetas() {
                         <IndicadorLinha
                           key={indicador.id}
                           indicador={indicador}
+                          valorAtual={valores[indicador.chave]}
                           historico={historico}
                           podeAdministrar={podeAdministrar}
                           aoDefinirMeta={() => abrirDialogoMeta(indicador)}
@@ -572,20 +613,35 @@ export function PainelMetas() {
   );
 }
 
+const ROTULOS_FAROL: Record<ValorIndicador["situacao"], string> = {
+  dentro: "dentro da meta",
+  fora: "fora da meta",
+  sem_meta: "sem meta definida",
+  sem_dados: "sem dados",
+};
+
 function IndicadorLinha({
   indicador,
+  valorAtual,
   historico,
   podeAdministrar,
   aoDefinirMeta,
   aoAlternarHistorico,
 }: {
   indicador: Indicador;
+  valorAtual: ValorIndicador | undefined;
   historico: VersaoMeta[] | "carregando" | "erro" | undefined;
   podeAdministrar: boolean;
   aoDefinirMeta: () => void;
   aoAlternarHistorico: () => void;
 }) {
   const metaGlobal = indicador.meta_global;
+  const classesFarol: Record<ValorIndicador["situacao"], string> = {
+    dentro: estilos.farolDentro,
+    fora: estilos.farolFora,
+    sem_meta: estilos.farolNeutro,
+    sem_dados: estilos.farolNeutro,
+  };
   return (
     <>
       <tr>
@@ -615,6 +671,26 @@ function IndicadorLinha({
             </span>
           ))}
         </td>
+        <td className={estilos.celulaValor}>
+          {valorAtual && valorAtual.valor_formatado !== null ? (
+            <>
+              <span
+                className={`${estilos.farol} ${classesFarol[valorAtual.situacao]}`}
+                title={ROTULOS_FAROL[valorAtual.situacao]}
+                role="img"
+                aria-label={ROTULOS_FAROL[valorAtual.situacao]}
+              />
+              <span className={estilos.valorAtual}>
+                {valorAtual.valor_formatado}
+              </span>
+              {valorAtual.detalhe && (
+                <div className={estilos.detalheValor}>{valorAtual.detalhe}</div>
+              )}
+            </>
+          ) : (
+            <span className={estilos.semMeta}>sem dados</span>
+          )}
+        </td>
         <td className={estilos.vigencia}>
           {metaGlobal ? `desde ${formatarData(metaGlobal.inicio_vigencia)}` : "—"}
         </td>
@@ -641,7 +717,7 @@ function IndicadorLinha({
       </tr>
       {historico !== undefined && (
         <tr>
-          <td colSpan={4} className={estilos.celulaHistorico}>
+          <td colSpan={5} className={estilos.celulaHistorico}>
             <div className={estilos.historico}>
               {historico === "carregando" && <div>Carregando histórico…</div>}
               {historico === "erro" && (

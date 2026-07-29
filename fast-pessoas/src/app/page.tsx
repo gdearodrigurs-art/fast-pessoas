@@ -8,6 +8,11 @@ import estilos from "./page.module.css";
 
 interface Permissoes extends Record<string, unknown> {
   demanda_criar: boolean;
+  ferias_programar: boolean;
+  afastamento_ver: boolean;
+  admissao_ver: boolean;
+  desligamento_ver: boolean;
+  beneficios_acessar: boolean;
   clima_responder: boolean;
   clima_agregado_ver: boolean;
   clima_individual_ver: boolean;
@@ -28,6 +33,14 @@ export default async function PaginaInicial() {
   const linhas = await consultar<Permissoes>(
     `SELECT
        sistema.tem_permissao($1, 'demanda.criar')                  AS demanda_criar,
+       sistema.tem_permissao($1, 'ferias.programar')               AS ferias_programar,
+       sistema.tem_permissao($1, 'afastamento.ver')                AS afastamento_ver,
+       sistema.tem_permissao($1, 'admissao.ver')                   AS admissao_ver,
+       sistema.tem_permissao($1, 'desligamento.ver')               AS desligamento_ver,
+       (sistema.tem_permissao($1, 'adesao.solicitar')
+        OR sistema.tem_permissao($1, 'adesao.gerir')
+        OR sistema.tem_permissao($1, 'beneficio.administrar')
+        OR sistema.tem_permissao($1, 'beneficio.ver'))             AS beneficios_acessar,
        sistema.tem_permissao($1, 'clima.responder')                AS clima_responder,
        sistema.tem_permissao($1, 'clima.agregado.ver')             AS clima_agregado_ver,
        sistema.tem_permissao($1, 'clima.resposta.individual.ver')  AS clima_individual_ver,
@@ -51,6 +64,36 @@ export default async function PaginaInicial() {
       titulo: "Demandas",
       descricao: "Pedidos e aprovações entre você, seu gestor e o DP.",
       mostrar: pode?.demanda_criar ?? false,
+    },
+    {
+      href: "/ferias",
+      titulo: "Férias",
+      descricao: "Períodos aquisitivos, programação e aprovação de férias.",
+      mostrar: pode?.ferias_programar ?? false,
+    },
+    {
+      href: "/afastamentos",
+      titulo: "Afastamentos",
+      descricao: "Afastamentos e licenças, com dado de saúde protegido.",
+      mostrar: pode?.afastamento_ver ?? false,
+    },
+    {
+      href: "/admissoes",
+      titulo: "Admissões",
+      descricao: "Processos de admissão com checklist até o primeiro dia.",
+      mostrar: pode?.admissao_ver ?? false,
+    },
+    {
+      href: "/desligamentos",
+      titulo: "Desligamentos",
+      descricao: "Condução do desligamento, devoluções e entrevista.",
+      mostrar: pode?.desligamento_ver ?? false,
+    },
+    {
+      href: "/beneficios",
+      titulo: "Benefícios",
+      descricao: "Catálogo de benefícios, adesões e dependentes.",
+      mostrar: pode?.beneficios_acessar ?? false,
     },
     {
       href: "/clima",

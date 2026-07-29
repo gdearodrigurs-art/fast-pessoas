@@ -220,6 +220,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #regra-negocio #canonico #divida-tecnica
 
+### [2026-07-28] DECISÃO DO USUÁRIO — Construir tudo que não depende de decisão dele ou de contratação
+
+**Decisão:** Autorização ampla: seguir com todos os módulos e funções sem dependência externa, em três ondas encadeadas com verificação entre elas. Onda A: férias/afastamentos + desligamento (com entrevista e KPI calculado) + benefícios cadastro + admissão interna. Onda B: 360 (motor refeito conforme auditoria btime) + R&S núcleo. Onda C: motor de folha F1 (tabelas legais como dado versionado, valores marcados "conferir com DP") + SST base + notificações internas.
+
+**Motivo:** Validação com a diretoria é em bloco; maximizar o que estará pronto para a grande aprovação.
+
+**Contexto:** Continuam bloqueados por terceiros/decisões: ponto (contratar REP-P), transmissor eSocial (certificado digital + produção restrita), canal público de admissão (construir × Gupy × Unico em aberto), e-mail/WhatsApp (credenciais). Cifra de dado de saúde: AES na camada de aplicação com CHAVE_CIFRA_SAUDE no ambiente (secret manager em produção).
+
+**Tags:** #arquitetura #canonico
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.

@@ -160,6 +160,44 @@
   font-variant-numeric: tabular-nums;
 }
 
+.celulaValor {
+  min-width: 140px;
+}
+
+.farol {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: 1px;
+}
+
+.farolDentro {
+  background: #1e8a44;
+}
+
+.farolFora {
+  background: #d21217;
+}
+
+.farolNeutro {
+  background: #b8b3ad;
+}
+
+.valorAtual {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.detalheValor {
+  font-size: 11.5px;
+  color: #6b6763;
+  margin-top: 2px;
+  max-width: 220px;
+}
+
 .vigencia {
   font-size: 12px;
   color: #6b6763;

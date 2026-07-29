@@ -1,0 +1,123 @@
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1080px;
+  margin: 32px auto;
+  padding: 0 20px;
+}
+
+.linhaTitulo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.linhaTitulo h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 4px 0 24px;
+  color: #6b6763;
+}
+
+.abasPrincipais {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e3e0dc;
+  flex-wrap: wrap;
+}
+
+.aba {
+  border: none;
+  background: transparent;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  color: #6b6763;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+}
+
+.abaAtiva {
+  color: #1c1b1a;
+  border-bottom-color: #d21217;
+}
+
+.area {
+  margin-bottom: 28px;
+}
+
+.tituloArea {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #6b6763;
+  margin: 0 0 8px;
+  padding-left: 4px;
+}
+
+.vazio {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 14px;
+  padding: 8px 4px;
+}
+
+.erro {
+  font-size: 0.9rem;
+  color: #d21217;
+  margin: 10px 0;
+}
+
+.indicadores {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.cardIndicador {
+  flex: 1;
+  min-width: 170px;
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.numeroIndicador {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.rotuloIndicador {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b6763;
+}
+
+.indicadorAlerta .numeroIndicador {
+  color: #c62828;
+}
+
+.notaLeitura {
+  background: #f0eeeb;
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #6b6763;
+  margin-bottom: 20px;
+}

@@ -1,0 +1,140 @@
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 860px;
+  margin: 32px auto;
+  padding: 0 20px;
+}
+
+.voltar {
+  display: inline-block;
+  margin-bottom: 16px;
+  color: #d21217;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.voltar:hover {
+  text-decoration: underline;
+}
+
+.bloco {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+
+.bloco h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #6b6763;
+}
+
+.notaFuso {
+  font-size: 12px;
+  color: #6b6763;
+  margin: -4px 0 10px;
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px dotted #e3e0dc;
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+.ordemItem {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #6b6763;
+  font-size: 13px;
+  min-width: 22px;
+  padding-top: 2px;
+}
+
+.corpoItem {
+  flex: 1;
+}
+
+.descricaoItem {
+  font-size: 14px;
+}
+
+.itemResolvido .descricaoItem {
+  color: #6b6763;
+}
+
+.autoriaItem {
+  font-size: 12px;
+  color: #6b6763;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.acoesItem {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding-top: 2px;
+}
+
+.botaoItem {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  color: #1c1b1a;
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.botaoItem:hover:enabled {
+  border-color: #d21217;
+  color: #d21217;
+}
+
+.botaoItem:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.acoesProcesso {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.dicaConcluir {
+  font-size: 12.5px;
+  color: #b58500;
+}
+
+.vazio {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 14px;
+  padding: 6px 0;
+}
+
+.erro {
+  font-size: 0.9rem;
+  color: #d21217;
+  margin: 10px 0;
+}
