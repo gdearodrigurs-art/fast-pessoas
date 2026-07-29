@@ -8,9 +8,12 @@ import {
   AgregadoDia,
   AgregadoGeral,
   AgregadoPergunta,
+  AgregadoUnidade,
   agregadoGeral,
   agregadoPorDia,
   agregadoPorPergunta,
+  agregadoPorUnidade,
+  adesaoCheckinPorDia,
   buscarColaboradorPorUsuario,
   inserirResposta,
   listarPerguntasAtivas,
@@ -25,6 +28,15 @@ const CHAVE_INDIVIDUAL = "clima.resposta.individual.ver";
 const RECURSO_INDIVIDUAL = "clima.checkin_resposta.individual";
 const FUSO_EXIBICAO = "America/Sao_Paulo";
 const DIAS_JANELA_AGREGADO = 30;
+/** Recorte "recente" comparado com o restante da janela, por unidade. */
+const DIAS_RECORTE_RECENTE = 7;
+/**
+ * Piso de respondentes para uma unidade aparecer no agregado. Média de um
+ * grupo pequeno demais deixa de ser agregado e vira dedução de quem respondeu.
+ */
+const MINIMO_RESPONDENTES_UNIDADE = 5;
+/** Queda (em pontos da escala 1–5) a partir da qual a unidade é destacada. */
+const QUEDA_RELEVANTE = 0.3;
 
 export interface PerguntaDoDia {
   id: number;
@@ -38,11 +50,21 @@ export interface CheckinDoDia {
   perguntas: PerguntaDoDia[];
 }
 
+export interface UnidadeNoAgregado extends AgregadoUnidade {
+  /** media_recente − media_anterior; null quando falta um dos dois lados. */
+  variacao: number | null;
+  /** Queda igual ou maior que QUEDA_RELEVANTE — a tela destaca. */
+  em_queda: boolean;
+}
+
 export interface AgregadoClima {
   periodo: { inicio: string; fim: string };
   geral: AgregadoGeral;
   por_dia: AgregadoDia[];
   por_pergunta: AgregadoPergunta[];
+  por_unidade: UnidadeNoAgregado[];
+  /** Parâmetros do recorte, para a tela explicar o que está comparando. */
+  recorte: { dias_recentes: number; minimo_respondentes: number };
 }
 
 /** Dia de referência do check-in é o dia corrente em América/São Paulo. */
@@ -161,18 +183,62 @@ export async function responderCheckin(
 export async function obterAgregado(): Promise<AgregadoClima> {
   const fim = dataReferenciaHoje();
   const inicio = diasAntes(fim, DIAS_JANELA_AGREGADO - 1);
-  const [geral, porDia, porPergunta] = await Promise.all([
+  const [geral, porDia, porPergunta, porUnidade] = await Promise.all([
     agregadoGeral(inicio, fim),
     agregadoPorDia(inicio, fim),
     agregadoPorPergunta(inicio, fim),
+    agregadoPorUnidade(
+      inicio,
+      fim,
+      DIAS_RECORTE_RECENTE,
+      MINIMO_RESPONDENTES_UNIDADE
+    ),
   ]);
-  // Agregado da empresa inteira: média, contagens e nada mais — NUNCA autor.
+  // Agregado: média, contagens e nada mais — NUNCA autor. O corte por unidade
+  // respeita o piso de respondentes (ver MINIMO_RESPONDENTES_UNIDADE).
   return {
     periodo: { inicio, fim },
     geral,
     por_dia: porDia,
     por_pergunta: porPergunta,
+    por_unidade: porUnidade.map((unidade) => {
+      const variacao =
+        unidade.media_recente !== null && unidade.media_anterior !== null
+          ? unidade.media_recente - unidade.media_anterior
+          : null;
+      return {
+        ...unidade,
+        variacao,
+        em_queda: variacao !== null && variacao <= -QUEDA_RELEVANTE,
+      };
+    }),
+    recorte: {
+      dias_recentes: DIAS_RECORTE_RECENTE,
+      minimo_respondentes: MINIMO_RESPONDENTES_UNIDADE,
+    },
   };
+}
+
+/**
+ * Fonte do indicador `adesao_checkin` (rh.indicador): média diária de
+ * "colaboradores que responderam ÷ ativos" nos dias COM movimento da janela
+ * de 30 dias. Devolve percentual com uma casa, ou null quando não há dia
+ * apurável — só agregado, nunca quem respondeu.
+ */
+export async function valorIndicadorAdesaoCheckin(): Promise<number | null> {
+  const fim = dataReferenciaHoje();
+  const inicio = diasAntes(fim, DIAS_JANELA_AGREGADO - 1);
+  const { respondentes_por_dia, ativos } = await adesaoCheckinPorDia(
+    inicio,
+    fim
+  );
+  if (ativos === 0 || respondentes_por_dia.length === 0) return null;
+  const somaDosPercentuais = respondentes_por_dia.reduce(
+    (soma, respondentes) => soma + respondentes / ativos,
+    0
+  );
+  const media = somaDosPercentuais / respondentes_por_dia.length;
+  return Math.round(media * 1000) / 10;
 }
 
 export async function obterRespostasIndividuais(

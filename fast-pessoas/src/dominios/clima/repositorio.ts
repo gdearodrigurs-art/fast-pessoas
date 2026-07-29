@@ -37,6 +37,15 @@ export interface AgregadoGeral {
   respondentes: number;
 }
 
+export interface AgregadoUnidade {
+  unidade: string;
+  media: number;
+  media_recente: number | null;
+  media_anterior: number | null;
+  respostas: number;
+  respondentes: number;
+}
+
 export interface RespostaIndividual {
   id: number;
   data_referencia: string;
@@ -174,6 +183,81 @@ export async function agregadoGeral(
     [inicio, fim]
   );
   return linhas[0] ?? { media: null, respostas: 0, respondentes: 0 };
+}
+
+/**
+ * Agregado POR UNIDADE (lotação vigente), com a média da janela inteira e o
+ * recorte dos últimos `diasRecentes` dias contra o período anterior — é assim
+ * que uma queda localizada aparece, em vez de sumir na média da rede.
+ *
+ * Continua sendo agregado: média e contagens, nunca autor. O HAVING de
+ * `minimoRespondentes` existe para que uma unidade com pouquíssima gente não
+ * vire identificação por dedução ("a média da loja é a nota do fulano").
+ */
+export async function agregadoPorUnidade(
+  inicio: string,
+  fim: string,
+  diasRecentes: number,
+  minimoRespondentes: number
+): Promise<AgregadoUnidade[]> {
+  return consultar<AgregadoUnidade & Record<string, unknown>>(
+    `SELECT lot.unidade,
+            AVG(r.nota)::float8 AS media,
+            AVG(r.nota) FILTER (
+              WHERE r.data_referencia > $2::date - $3::int
+            )::float8 AS media_recente,
+            AVG(r.nota) FILTER (
+              WHERE r.data_referencia <= $2::date - $3::int
+            )::float8 AS media_anterior,
+            COUNT(*)::int AS respostas,
+            COUNT(DISTINCT r.colaborador_id)::int AS respondentes
+       FROM rh_clima.checkin_resposta r
+       JOIN rh.colaborador c ON c.id = r.colaborador_id
+       JOIN LATERAL (
+         SELECT ev.unidade
+           FROM rh.lotacao l
+           JOIN rh.estabelecimento_versao ev
+             ON ev.estabelecimento_id = l.estabelecimento_id
+            AND ev.status = 'ativa'
+          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+       ) lot ON TRUE
+      WHERE r.data_referencia BETWEEN $1 AND $2
+      GROUP BY lot.unidade
+     HAVING COUNT(DISTINCT r.colaborador_id) >= $4::int
+      ORDER BY lot.unidade`,
+    [inicio, fim, diasRecentes, minimoRespondentes]
+  );
+}
+
+/**
+ * Insumo do indicador "Adesão ao check-in diário": para cada dia COM
+ * movimento na janela, quantas pessoas distintas responderam, e quantos
+ * colaboradores ativos existem hoje.
+ *
+ * Dias sem nenhuma resposta ficam de fora de propósito — são fim de semana e
+ * feriado, quando não se espera check-in. Incluí-los mediria calendário, não
+ * adesão.
+ */
+export async function adesaoCheckinPorDia(
+  inicio: string,
+  fim: string
+): Promise<{ respondentes_por_dia: number[]; ativos: number }> {
+  const [dias, ativos] = await Promise.all([
+    consultar<{ respondentes: number }>(
+      `SELECT COUNT(DISTINCT colaborador_id)::int AS respondentes
+         FROM rh_clima.checkin_resposta
+        WHERE data_referencia BETWEEN $1 AND $2
+        GROUP BY data_referencia`,
+      [inicio, fim]
+    ),
+    consultar<{ total: number }>(
+      `SELECT COUNT(*)::int AS total FROM rh.colaborador WHERE status = 'ativo'`
+    ),
+  ]);
+  return {
+    respondentes_por_dia: dias.map((linha) => linha.respondentes),
+    ativos: ativos[0]?.total ?? 0,
+  };
 }
 
 export async function listarRespostasIndividuais(

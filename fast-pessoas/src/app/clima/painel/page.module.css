@@ -196,3 +196,70 @@
   font-size: 0.85rem;
   color: #6b6763;
 }
+
+/* ---------------------------------------------------- média por unidade */
+
+.tabelaEnvolucro {
+  overflow-x: auto;
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tabela th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #e3e0dc;
+  color: #6b6763;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabela td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0eeeb;
+  vertical-align: middle;
+}
+
+.numero {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tabela th.numero {
+  text-align: right;
+}
+
+/* Unidade cuja média recente caiu além do limite — o olho tem que bater aqui. */
+.linhaQueda {
+  background: #fdf3f2;
+}
+
+.selo {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #c0392b;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.variacaoQueda {
+  color: #c0392b;
+  font-weight: 700;
+}
+
+.notaRodape {
+  margin: 12px 0 0;
+  font-size: 0.78rem;
+  color: #6b6763;
+}

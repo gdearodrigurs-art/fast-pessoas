@@ -1,4 +1,5 @@
 import { valorIndicadorAdmissoesNoPrazo } from "../admissao/servico";
+import { valorIndicadorAdesaoCheckin } from "../clima/servico";
 import { valorIndicadorEntrevistas } from "../desligamento/servico";
 import { valorIndicadorFeriasVencidas } from "../ferias/servico";
 import { valorIndicadorFolhaNoPrazo } from "../folha/servico";
@@ -63,6 +64,16 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
         valor === null
           ? "nenhuma competência mensal com prazo vencido"
           : "competências mensais fechadas até o dia 5 do mês seguinte (12 meses)",
+    };
+  },
+  adesao_checkin: async () => {
+    const valor = await valorIndicadorAdesaoCheckin();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhum dia com check-in nos últimos 30 dias"
+          : "média diária de respondentes ÷ ativos (dias com check-in, 30 dias)",
     };
   },
   asos_validos: async () => {

@@ -515,6 +515,23 @@ export async function ehGestorDoUsuario(
   return linhas[0].eh_gestor;
 }
 
+/**
+ * Quem atende a fila do DP: usuários ativos com a chave `demanda.atender`.
+ * Usado para avisar que uma demanda entrou na fila — sem isso o DP só
+ * descobre o pedido se lembrar de abrir a tela.
+ */
+export async function atendentesDaFila(
+  cliente: PoolClient
+): Promise<number[]> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `SELECT u.id
+       FROM sistema.usuario u
+      WHERE u.ativo
+        AND sistema.tem_permissao(u.id, 'demanda.atender')`
+  );
+  return rows.map((linha) => Number(linha.id));
+}
+
 export async function temPermissao(
   usuarioId: number,
   chave: string

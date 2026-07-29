@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# credenciais da demo (geradas por npm run db:demo) — fictícias, mas não se versiona senha
+db/semear/CREDENCIAIS-DEMO.md
+
 # vercel
 .vercel
 

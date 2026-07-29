@@ -15,6 +15,7 @@ import {
   StatusDemanda,
 } from "./esquemas";
 import {
+  atendentesDaFila,
   atualizarStatus,
   buscarParaTransicao,
   buscarResumo,
@@ -186,6 +187,9 @@ export async function criarDemanda(
             link: `/demandas/${demanda.id}`,
           }))
       );
+    } else {
+      // Tipo que dispensa aprovação: já nasce na fila do DP.
+      await notificarFilaDoDp(cliente, sessao, demanda, tipo.nome);
     }
     return demanda;
   });
@@ -294,6 +298,37 @@ async function notificarSolicitante(
   });
 }
 
+/**
+ * Aviso neutro a quem atende a fila do DP quando uma demanda passa a estar
+ * "aberta" — seja porque nasceu assim (tipo sem aprovação), seja porque o
+ * gestor acabou de aprovar. Sem isto o pedido entra na fila em silêncio e o
+ * DP só descobre se lembrar de abrir a tela.
+ *
+ * Como em todo aviso: título/corpo neutros, o conteúdo mora na página da
+ * demanda, atrás da checagem de permissão.
+ */
+async function notificarFilaDoDp(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  demanda: { id: number; numero: number },
+  tipoNome: string
+): Promise<void> {
+  const atendentes = await atendentesDaFila(cliente);
+  await notificarLote(
+    cliente,
+    atendentes
+      // Quem acabou de agir já sabe: não se notifica a própria ação.
+      .filter((usuarioId) => usuarioId !== sessao.usuario_id)
+      .map((usuarioId) => ({
+        usuarioId,
+        tipo: "demanda.na_fila",
+        titulo: "Nova demanda na fila do DP",
+        corpo: `${formatarNumeroDemanda(demanda.numero)} (${tipoNome}) entrou na fila e aguarda atendimento.`,
+        link: `/demandas/${demanda.id}`,
+      }))
+  );
+}
+
 async function resumoAposTransicao(id: number): Promise<DemandaResumo> {
   const resumo = await buscarResumo(id);
   if (!resumo) {
@@ -343,6 +378,8 @@ export async function aprovarDemanda(
       "Demanda aprovada pelo gestor",
       `A demanda ${formatarNumeroDemanda(demanda.numero)} foi aprovada e entrou na fila do DP.`
     );
+    // A demanda acabou de entrar na fila: avisa quem vai atender.
+    await notificarFilaDoDp(cliente, sessao, demanda, demanda.tipo_nome);
   });
   return resumoAposTransicao(id);
 }

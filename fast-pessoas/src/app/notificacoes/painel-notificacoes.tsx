@@ -125,7 +125,10 @@ export function PainelNotificacoes() {
         </div>
         <p className={estilos.subtitulo}>
           {naoLidas > 0
-            ? `Você tem ${naoLidas} notificação${naoLidas === 1 ? "" : "s"} não lida${naoLidas === 1 ? "" : "s"}.`
+            ? // "notificação" não pluraliza com "+s": é "notificações".
+              `Você tem ${naoLidas} ${
+                naoLidas === 1 ? "notificação não lida" : "notificações não lidas"
+              }.`
             : "Você está em dia com as suas notificações."}
         </p>
 

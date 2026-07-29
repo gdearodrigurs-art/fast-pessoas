@@ -238,6 +238,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #arquitetura #validacao #divida-tecnica
 
+### [2026-07-29] Onda C concluída — motor de folha F1 com segregação de funções na aprovação
+
+**Decisão:** Onda C verificada (29/29 PASS, motor de folha validado por recálculo independente duas vezes) e commitada. Na revisão, implementei a divergência que o verificador expôs entre a migration 0013 e o serviço: (a) **quem calcula não aprova** — calculada_por registrado no cálculo e aprovação recusa o mesmo usuário (409); (b) **aprovação revalida TOTP no ato** (código de 6 dígitos no request; sem 2FA ativo = 403); rastro em aprovada_por/aprovada_em (migration 0017). Notificações, SST e folha no ar; 15 módulos funcionais.
+
+**Motivo:** Aprovar folha é o ato de maior consequência financeira do sistema — controle de 4 olhos e reautenticação não podem ser "regra declarada e não implementada".
+
+**Contexto:** Numeração corrigida: a migration do integrador (0016_indicadores_folha_sst) colidiu com a minha; segregação renumerada para 0017 com o registro do runner sincronizado. Resíduos de teste do banco dev em limpeza cirúrgica por agente (usuários @fastpessoas.local, colaboradores "Teste", competência 12/2099). Pendência conhecida do fluxo: com um único usuário DP real no dev, a aprovação exigirá um segundo usuário com folha.aprovar — comportamento correto, registrado para o teste manual do usuário.
+
+**Tags:** #arquitetura #regra-negocio #validacao
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.
