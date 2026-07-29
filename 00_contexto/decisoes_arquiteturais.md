@@ -258,6 +258,24 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #arquitetura #regra-negocio #gap #validacao
 
+### [2026-07-29] DECISÕES DO USUÁRIO sobre o feedback da analista
+
+**Decisão:** (1) **Clima em dois módulos separados**: o check-in diário permanece como está e a **pesquisa estruturada** (anual/pulse, eNPS, plano de ação) entra como MÓDULO PRÓPRIO — não substitui nem se mistura ao check-in. Os demais pontos sugeridos pela analista também entram. Critério de execução declarado pelo usuário: **"o ótimo é inimigo do bom — hoje não tem essas coisas; quero implantar algo bom que funcione, não o lindo e perfeito"** → versões simples e funcionais primeiro, sem esperar completude. (2) **Fronteira com o Sults resolvida**: tudo de pessoas SAI do Sults após o sistema estar pronto — o Fast Pessoas absorve o escopo integral, incluindo treinamento/LMS no futuro; não há divisão de temas. (3) **RCF = Responsabilidade Chave da Função** (ver abaixo).
+
+**Motivo:** Direção do usuário. O item (1) reconcilia a simplificação de 27/07 com a lacuna que a analista apontou: em vez de complicar o check-in, cria-se um módulo ao lado. O item (2) elimina o risco de dois "canais únicos" concorrentes.
+
+**Tags:** #canonico #regra-negocio #arquitetura
+
+### [2026-07-29] RCF (Responsabilidade Chave da Função) — o descritivo de cargo da Fast
+
+**Decisão:** O RCF é o documento interno de descritivo de cargo, **preenchido pelo gestor toda vez que uma vaga é aberta**. Estrutura do modelo oficial (`referencias/rcf-modelo-descritivo-de-cargos.md`): Cargo · Setor · Líder Direto · Tipo de contrato · **Responsabilidade Chave da Função (Missão do Cargo)** · **Atividades a desempenhar** · **CHA em três colunas** (Conhecimentos = perfil técnico; Habilidades = experiências necessárias; Atitudes = comportamentos) · Observações importantes. **O CHA é uma PARTE do RCF**, não o todo — nosso `cargo_versao` tem hoje descrição + CHA, ou seja, cobre parte do documento.
+
+**Motivo:** Esclarecimento do usuário sobre o termo que a analista usou. Muda o desenho de cargos: o RCF é a peça que liga cargo → requisição de vaga → pilar CHA da avaliação 360 (40% do modelo) → ficha do colaborador (a analista pediu "RCF do cargo/função" na ficha).
+
+**Contexto a implementar:** estender `cargo_versao` com missão, atividades, setor, cargo do líder direto, tipo de contrato previsto e observações; exigir RCF vigente (ou revisão dele) na abertura de requisição de vaga; exibir o RCF na ficha do colaborador e como base dos indicadores do pilar CHA.
+
+**Tags:** #canonico #modelo-de-dados #regra-negocio
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.
