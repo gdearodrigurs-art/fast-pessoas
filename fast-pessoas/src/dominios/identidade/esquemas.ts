@@ -54,6 +54,10 @@ export const esquemaSessao = z.object({
   usuario_id: z.number().int().positive(),
   papel: z.enum(PAPEIS),
   nome: z.string().min(1),
+  // Papel obrigado a usar 2FA que entrou sem totp_secret: a sessão nasce
+  // "pendente" e só alcança o fluxo de configuração. Ausente = false
+  // (sessões antigas continuam válidas).
+  pendente_2fa: z.boolean().optional(),
 });
 
 export type PayloadSessao = z.infer<typeof esquemaSessao>;

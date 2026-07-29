@@ -1,0 +1,224 @@
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1180px;
+  margin: 32px auto;
+  padding: 0 20px;
+}
+
+.linhaTitulo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.linhaTitulo h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 4px 0 24px;
+  color: #6b6763;
+}
+
+.abasPrincipais {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e3e0dc;
+  flex-wrap: wrap;
+}
+
+.aba {
+  border: none;
+  background: transparent;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  color: #6b6763;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+}
+
+.aba:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.abaAtiva {
+  color: #1c1b1a;
+  border-bottom-color: #d21217;
+}
+
+.area {
+  margin-bottom: 28px;
+}
+
+.vazio {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 14px;
+  padding: 8px 4px;
+}
+
+.erro {
+  font-size: 0.9rem;
+  color: #d21217;
+  margin: 10px 0;
+}
+
+.indicadores {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.cardIndicador {
+  flex: 1;
+  min-width: 170px;
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.numeroIndicador {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.rotuloIndicador {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b6763;
+}
+
+.indicadorAlerta .numeroIndicador {
+  color: #c62828;
+}
+
+.notaLeitura {
+  background: #f0eeeb;
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #6b6763;
+  margin-bottom: 20px;
+}
+
+/* Kanban */
+
+.cabecalhoKanban {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.tituloKanban {
+  margin: 0;
+  font-size: 18px;
+}
+
+.quadro {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.coluna {
+  flex: 1;
+  min-width: 230px;
+  background: #f0eeeb;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.tituloColuna {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #6b6763;
+  margin: 0 0 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cartaoCandidato {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.cartaoEncerrado {
+  opacity: 0.75;
+}
+
+.nomeCandidato {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.contato {
+  font-size: 12px;
+  color: #6b6763;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.blocoPareceres {
+  margin-top: 10px;
+  border-top: 1px dashed #e3e0dc;
+  padding-top: 8px;
+}
+
+.parecer {
+  background: #f7f6f4;
+  border: 1px solid #e3e0dc;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
+
+.parecerTopo {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+
+.formParecer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.vazioColuna {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 12.5px;
+  padding: 2px;
+}

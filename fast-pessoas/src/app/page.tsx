@@ -13,6 +13,8 @@ interface Permissoes extends Record<string, unknown> {
   admissao_ver: boolean;
   desligamento_ver: boolean;
   beneficios_acessar: boolean;
+  avaliacao_acessar: boolean;
+  recrutamento_acessar: boolean;
   clima_responder: boolean;
   clima_agregado_ver: boolean;
   clima_individual_ver: boolean;
@@ -41,6 +43,12 @@ export default async function PaginaInicial() {
         OR sistema.tem_permissao($1, 'adesao.gerir')
         OR sistema.tem_permissao($1, 'beneficio.administrar')
         OR sistema.tem_permissao($1, 'beneficio.ver'))             AS beneficios_acessar,
+       (sistema.tem_permissao($1, 'avaliacao.responder')
+        OR sistema.tem_permissao($1, 'avaliacao.configurar')
+        OR sistema.tem_permissao($1, 'avaliacao.decidir')
+        OR sistema.tem_permissao($1, 'avaliacao.resultado.ver'))   AS avaliacao_acessar,
+       (sistema.tem_permissao($1, 'rs.ver')
+        OR sistema.tem_permissao($1, 'rs.requisicao.criar'))       AS recrutamento_acessar,
        sistema.tem_permissao($1, 'clima.responder')                AS clima_responder,
        sistema.tem_permissao($1, 'clima.agregado.ver')             AS clima_agregado_ver,
        sistema.tem_permissao($1, 'clima.resposta.individual.ver')  AS clima_individual_ver,
@@ -78,6 +86,12 @@ export default async function PaginaInicial() {
       mostrar: pode?.afastamento_ver ?? false,
     },
     {
+      href: "/recrutamento",
+      titulo: "Recrutamento",
+      descricao: "Requisições de vaga, kanban de candidatos e ofertas.",
+      mostrar: pode?.recrutamento_acessar ?? false,
+    },
+    {
       href: "/admissoes",
       titulo: "Admissões",
       descricao: "Processos de admissão com checklist até o primeiro dia.",
@@ -94,6 +108,12 @@ export default async function PaginaInicial() {
       titulo: "Benefícios",
       descricao: "Catálogo de benefícios, adesões e dependentes.",
       mostrar: pode?.beneficios_acessar ?? false,
+    },
+    {
+      href: "/avaliacoes",
+      titulo: "Avaliações",
+      descricao: "Ciclos de experiência (45/90) e desempenho, líder→liderado.",
+      mostrar: pode?.avaliacao_acessar ?? false,
     },
     {
       href: "/clima",

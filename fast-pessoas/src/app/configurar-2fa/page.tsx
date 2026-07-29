@@ -142,8 +142,8 @@ export default function PaginaConfigurar2fa() {
         {etapa !== "carregando" && obrigatorio && etapa !== "ativo" && (
           <p className={estilos.avisoObrigatorio}>
             O seu papel exige autenticação em duas etapas (obrigatória para
-            RH, DP, Diretoria e Administração). Sem ela, o próximo acesso
-            continuará pedindo esta configuração.
+            RH, DP, Diretoria e Administração). O acesso ao sistema será
+            liberado assim que você concluir esta configuração.
           </p>
         )}
 
@@ -213,17 +213,24 @@ export default function PaginaConfigurar2fa() {
                   Ir para o início
                 </Link>
                 <hr className={estilos.divisor} />
-                <button
-                  className={estilos.botaoSecundario}
-                  type="button"
-                  onClick={() => {
-                    setErro(null);
-                    setSucesso(null);
-                    setMostrarDesativar(true);
-                  }}
-                >
-                  Desativar autenticação em duas etapas
-                </button>
+                {obrigatorio ? (
+                  <p className={estilos.aviso}>
+                    O seu papel exige autenticação em duas etapas — ela não
+                    pode ser desativada.
+                  </p>
+                ) : (
+                  <button
+                    className={estilos.botaoSecundario}
+                    type="button"
+                    onClick={() => {
+                      setErro(null);
+                      setSucesso(null);
+                      setMostrarDesativar(true);
+                    }}
+                  >
+                    Desativar autenticação em duas etapas
+                  </button>
+                )}
               </>
             )}
 
@@ -233,12 +240,6 @@ export default function PaginaConfigurar2fa() {
                   Para desativar, confirme a sua senha e um código atual do
                   aplicativo autenticador.
                 </p>
-                {obrigatorio && (
-                  <p className={estilos.avisoObrigatorio}>
-                    Atenção: o seu papel exige 2FA. Se desativar, será
-                    necessário configurar de novo no próximo acesso.
-                  </p>
-                )}
 
                 <label className={estilos.rotulo} htmlFor="senha">
                   Senha atual

@@ -1,6 +1,7 @@
 import { valorIndicadorAdmissoesNoPrazo } from "../admissao/servico";
 import { valorIndicadorEntrevistas } from "../desligamento/servico";
 import { valorIndicadorFeriasVencidas } from "../ferias/servico";
+import { valorIndicadorVagasNoPrazo } from "../recrutamento/servico";
 import { ESCOPO_GLOBAL, formatarValorMeta } from "./esquemas";
 import { listarIndicadoresAtivos, listarMetasVigentes } from "./repositorio";
 
@@ -40,6 +41,16 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
         valor === null
           ? "nenhum processo concluído em 12 meses"
           : "processos concluídos até a data de início prevista (12 meses)",
+    };
+  },
+  vagas_no_prazo: async () => {
+    const valor = await valorIndicadorVagasNoPrazo();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhuma vaga fechada em 12 meses"
+          : "vagas fechadas até o prazo-alvo (12 meses)",
     };
   },
 };

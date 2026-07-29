@@ -56,6 +56,7 @@ export async function lerSessao(): Promise<PayloadSessao | null> {
       usuario_id: payload.usuario_id,
       papel: payload.papel,
       nome: payload.nome,
+      pendente_2fa: payload.pendente_2fa,
     });
     return analise.success ? analise.data : null;
   } catch {
@@ -77,6 +78,14 @@ export async function exigirPermissao(chave: string): Promise<PayloadSessao> {
   const sessao = await lerSessao();
   if (!sessao) {
     throw new ErroHttp(401, "Não autenticado");
+  }
+  // Defesa em profundidade: sessão pendente de 2FA não acessa rota de
+  // negócio nenhuma, mesmo se o proxy deixar passar.
+  if (sessao.pendente_2fa) {
+    throw new ErroHttp(
+      403,
+      "Configure a autenticação em duas etapas para continuar"
+    );
   }
   const linhas = await consultar<{ autorizado: boolean }>(
     "SELECT sistema.tem_permissao($1, $2) AS autorizado",

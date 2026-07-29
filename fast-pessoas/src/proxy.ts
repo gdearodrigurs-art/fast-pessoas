@@ -1,20 +1,34 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { jwtVerify } from "jose";
+import { jwtVerify, type JWTPayload } from "jose";
 
 const ROTAS_LIVRES = new Set(["/entrar", "/api/identidade/entrar"]);
 const NOME_COOKIE_SESSAO = "fp_sessao";
 
-async function sessaoValida(token: string): Promise<boolean> {
+// Sessão pendente de 2FA (claim pendente_2fa no JWT) só alcança o fluxo de
+// configuração e o mínimo de identidade. Todo o resto: página vira redirect
+// para /configurar-2fa e API vira 403.
+const ROTAS_PENDENTE_2FA = new Set([
+  "/configurar-2fa",
+  "/trocar-senha",
+  "/api/identidade/sessao",
+  "/api/identidade/sair",
+  "/api/identidade/trocar-senha",
+]);
+const PREFIXO_API_2FA = "/api/identidade/2fa/";
+
+async function lerPayloadSessao(token: string): Promise<JWTPayload | null> {
   const segredo = process.env.SESSAO_SEGREDO;
-  if (!segredo) return false;
+  if (!segredo) return null;
   try {
-    await jwtVerify(token, new TextEncoder().encode(segredo), {
-      algorithms: ["HS256"],
-    });
-    return true;
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(segredo),
+      { algorithms: ["HS256"] }
+    );
+    return payload;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -25,8 +39,26 @@ export async function proxy(request: NextRequest) {
   }
 
   const token = request.cookies.get(NOME_COOKIE_SESSAO)?.value;
-  if (token && (await sessaoValida(token))) {
-    return NextResponse.next();
+  const payload = token ? await lerPayloadSessao(token) : null;
+
+  if (payload) {
+    // Claim ausente = false: sessões antigas seguem valendo normalmente.
+    if (payload.pendente_2fa !== true) {
+      return NextResponse.next();
+    }
+    if (
+      ROTAS_PENDENTE_2FA.has(pathname) ||
+      pathname.startsWith(PREFIXO_API_2FA)
+    ) {
+      return NextResponse.next();
+    }
+    if (pathname.startsWith("/api/")) {
+      return Response.json(
+        { erro: "Configure a autenticação em duas etapas para continuar" },
+        { status: 403 }
+      );
+    }
+    return NextResponse.redirect(new URL("/configurar-2fa", request.url));
   }
 
   if (pathname.startsWith("/api/")) {

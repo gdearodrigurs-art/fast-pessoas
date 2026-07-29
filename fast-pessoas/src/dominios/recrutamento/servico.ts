@@ -1,0 +1,1166 @@
+import { hash } from "bcryptjs";
+import { Diff, registrarAlteracao } from "../../lib/auditoria";
+import { comTransacao, consultar } from "../../lib/banco";
+import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
+import { ErroHttp, lerSessao } from "../../lib/sessao";
+import {
+  calcularPrazosExperiencia,
+  ROTULOS_ESTADO_PROCESSO,
+} from "../admissao/esquemas";
+import {
+  buscarChecklistAtivo,
+  criarProcesso,
+  inserirItens,
+} from "../admissao/repositorio";
+import { ROTULOS_VINCULO } from "../colaboradores/esquemas";
+import {
+  criar as criarColaborador,
+  inserirEvento,
+  registrarLeituraSensivel,
+} from "../colaboradores/repositorio";
+import { PayloadSessao } from "../identidade/esquemas";
+import { criar as criarUsuario } from "../usuarios/repositorio";
+import { gerarSenhaTemporaria } from "../usuarios/servico";
+import {
+  CriacaoCandidato,
+  CriacaoCandidatura,
+  CriacaoOferta,
+  CriacaoParecer,
+  CriacaoRequisicao,
+  CriacaoVaga,
+  DecisaoRequisicao,
+  IniciarAdmissao,
+  MESES_CONSENTIMENTO_PADRAO,
+  Movimentacao,
+  RespostaOferta,
+  ROTULOS_MOTIVO_MOVIMENTACAO,
+  ROTULOS_MOTIVO_REQUISICAO,
+  ROTULOS_RECOMENDACAO,
+  ROTULOS_STATUS_CANDIDATURA,
+  ROTULOS_STATUS_OFERTA,
+  ROTULOS_STATUS_REQUISICAO,
+  ROTULOS_STATUS_VAGA,
+} from "./esquemas";
+import {
+  apurarVagasNoPrazo,
+  atualizarCandidatura,
+  atualizarStatusVaga,
+  buscarCandidaturaBasica,
+  buscarCandidaturaParaMutacao,
+  buscarCandidatoBasico,
+  buscarCargoVersaoVigente,
+  buscarEstabelecimentoVersaoAtiva,
+  buscarEtapasAtivas,
+  buscarFaixaVigente,
+  buscarOfertaParaMutacao,
+  buscarRequisicaoParaMutacao,
+  buscarVaga,
+  buscarVagaParaMutacao,
+  CandidatoResumo,
+  CandidaturaKanban,
+  CargoDisponivel,
+  EstabelecimentoDisponivel,
+  EtapaAtiva,
+  gravarDecisaoRequisicao,
+  inserirCandidato,
+  inserirCandidatura,
+  inserirMovimentacao,
+  inserirOferta,
+  inserirParecer,
+  inserirRequisicao,
+  inserirVaga,
+  listarCandidatos,
+  listarCandidaturasDaVaga,
+  listarCargosDisponiveis,
+  listarEstabelecimentosAtivos,
+  listarEtapasAtivas,
+  listarPareceres,
+  listarRequisicoes,
+  listarVagas,
+  ParecerSelecao,
+  responderOferta as gravarRespostaOferta,
+  RequisicaoResumo,
+  VagaResumo,
+} from "./repositorio";
+
+const TABELA_REQUISICAO = "rh.requisicao_vaga";
+const TABELA_VAGA = "rh.vaga";
+const TABELA_CANDIDATO = "rh.candidato";
+const TABELA_CANDIDATURA = "rh.candidatura";
+const TABELA_PARECER = "rh.parecer_selecao";
+const TABELA_OFERTA = "rh.oferta";
+
+// ------------------------------------------------------------------ utilidades
+
+function formatarData(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split("-");
+  return `${dia}/${mes}/${ano}`;
+}
+
+function formatarSalario(valor: number): string {
+  return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function truncar(texto: string, limite: number): string {
+  return texto.length > limite ? `${texto.slice(0, limite - 1)}…` : texto;
+}
+
+/** Data-calendário de hoje em São Paulo (AAAA-MM-DD). */
+function hojeSaoPaulo(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+  }).format(new Date());
+}
+
+function somarMeses(dataIso: string, meses: number): string {
+  const [ano, mes, dia] = dataIso.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1 + meses, dia))
+    .toISOString()
+    .slice(0, 10);
+}
+
+// ------------------------------------------------------------------ sessão e permissões do módulo
+
+export interface PermissoesRs {
+  ver: boolean;
+  gerir: boolean;
+  requisicao_criar: boolean;
+  requisicao_decidir: boolean;
+  parecer_registrar: boolean;
+  parecer_ver: boolean;
+}
+
+async function permissoesDe(usuarioId: number): Promise<PermissoesRs> {
+  const linhas = await consultar<{
+    ver: boolean;
+    gerir: boolean;
+    requisicao_criar: boolean;
+    requisicao_decidir: boolean;
+    parecer_registrar: boolean;
+    parecer_ver: boolean;
+  }>(
+    `SELECT sistema.tem_permissao($1, 'rs.ver')                AS ver,
+            sistema.tem_permissao($1, 'rs.gerir')              AS gerir,
+            sistema.tem_permissao($1, 'rs.requisicao.criar')   AS requisicao_criar,
+            sistema.tem_permissao($1, 'rs.requisicao.decidir') AS requisicao_decidir,
+            sistema.tem_permissao($1, 'rs.parecer.registrar')  AS parecer_registrar,
+            sistema.tem_permissao($1, 'rs.parecer.ver')        AS parecer_ver`,
+    [usuarioId]
+  );
+  return linhas[0];
+}
+
+/**
+ * Rotas cujo acesso combina MAIS de uma chave (painel, kanban, pareceres):
+ * valida a sessão como exigirPermissao e devolve o conjunto de permissões —
+ * a regra de qual chave basta fica no serviço.
+ */
+export async function exigirSessaoRs(): Promise<{
+  sessao: PayloadSessao;
+  pode: PermissoesRs;
+}> {
+  const sessao = await lerSessao();
+  if (!sessao) {
+    throw new ErroHttp(401, "Não autenticado");
+  }
+  if (sessao.pendente_2fa) {
+    throw new ErroHttp(
+      403,
+      "Configure a autenticação em duas etapas para continuar"
+    );
+  }
+  return { sessao, pode: await permissoesDe(sessao.usuario_id) };
+}
+
+/** Escopo do gestor sem rs.ver: só a vaga que nasceu da SUA requisição. */
+function acessaVaga(
+  pode: PermissoesRs,
+  usuarioId: number,
+  solicitanteUsuarioId: number
+): boolean {
+  return pode.ver || pode.gerir || solicitanteUsuarioId === usuarioId;
+}
+
+// ------------------------------------------------------------------ painel
+
+export interface PainelRecrutamento {
+  pode: PermissoesRs;
+  requisicoes: RequisicaoResumo[];
+  vagas: VagaResumo[];
+  etapas: EtapaAtiva[];
+  /** Catálogo para o formulário de requisição — só para quem cria. */
+  cargos: CargoDisponivel[] | null;
+  estabelecimentos: EstabelecimentoDisponivel[] | null;
+  /** Titulares externos — payload só de quem gere a seleção. */
+  candidatos: CandidatoResumo[] | null;
+  indicador_vagas_no_prazo: number | null;
+}
+
+export async function montarPainel(
+  sessao: PayloadSessao,
+  pode: PermissoesRs
+): Promise<PainelRecrutamento> {
+  if (!pode.ver && !pode.gerir && !pode.requisicao_criar) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  const veTudo = pode.ver || pode.gerir;
+  const [requisicoes, vagas, etapas, cargos, estabelecimentos, candidatos, indicador] =
+    await Promise.all([
+      listarRequisicoes(veTudo ? undefined : sessao.usuario_id),
+      listarVagas(veTudo ? undefined : sessao.usuario_id),
+      listarEtapasAtivas(),
+      pode.requisicao_criar || pode.gerir ? listarCargosDisponiveis() : null,
+      pode.requisicao_criar || pode.gerir ? listarEstabelecimentosAtivos() : null,
+      pode.gerir ? listarCandidatos() : null,
+      veTudo ? apurarVagasNoPrazo() : null,
+    ]);
+  return {
+    pode,
+    requisicoes,
+    vagas,
+    etapas,
+    cargos,
+    estabelecimentos,
+    candidatos,
+    indicador_vagas_no_prazo: indicador,
+  };
+}
+
+// ------------------------------------------------------------------ requisição de vaga
+
+export async function criarRequisicao(
+  sessao: PayloadSessao,
+  dados: CriacaoRequisicao
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const cargoVersao = await buscarCargoVersaoVigente(cliente, dados.cargo_id);
+    if (!cargoVersao) {
+      throw new ErroHttpCampo(
+        400,
+        "Cargo inexistente ou sem versão vigente.",
+        "cargo_id"
+      );
+    }
+    let unidade: string | null = null;
+    let estabelecimentoVersaoId: number | null = null;
+    if (dados.estabelecimento_id != null) {
+      const versao = await buscarEstabelecimentoVersaoAtiva(
+        cliente,
+        dados.estabelecimento_id
+      );
+      if (!versao) {
+        throw new ErroHttpCampo(
+          400,
+          "Unidade inexistente ou sem versão ativa.",
+          "estabelecimento_id"
+        );
+      }
+      estabelecimentoVersaoId = versao.id;
+      unidade = versao.unidade;
+    }
+    const id = await inserirRequisicao(cliente, {
+      cargo_versao_id: cargoVersao.id,
+      estabelecimento_versao_id: estabelecimentoVersaoId,
+      motivo: dados.motivo,
+      justificativa: dados.justificativa,
+      solicitante_usuario_id: sessao.usuario_id,
+    });
+    const diff: Diff = {
+      Cargo: { de: null, para: cargoVersao.nome },
+      Motivo: { de: null, para: ROTULOS_MOTIVO_REQUISICAO[dados.motivo] },
+      Justificativa: { de: null, para: truncar(dados.justificativa, 500) },
+      Status: { de: null, para: ROTULOS_STATUS_REQUISICAO.solicitada },
+    };
+    if (unidade) {
+      diff.Unidade = { de: null, para: unidade };
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_REQUISICAO,
+      registroId: String(id),
+      diff,
+    });
+  });
+}
+
+export async function decidirRequisicao(
+  sessao: PayloadSessao,
+  id: number,
+  dados: DecisaoRequisicao
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const requisicao = await buscarRequisicaoParaMutacao(cliente, id);
+    if (!requisicao) {
+      throw new ErroHttp(404, "Requisição não encontrada.");
+    }
+    if (requisicao.status !== "solicitada") {
+      throw new ErroHttp(
+        409,
+        `Requisição já ${ROTULOS_STATUS_REQUISICAO[requisicao.status].toLowerCase()} — decisão é única.`
+      );
+    }
+    const status = dados.decisao === "aprovar" ? "aprovada" : "reprovada";
+    await gravarDecisaoRequisicao(cliente, id, {
+      status,
+      decisor_usuario_id: sessao.usuario_id,
+      motivo_decisao: dados.motivo,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_REQUISICAO,
+      registroId: String(id),
+      diff: {
+        Cargo: { de: null, para: requisicao.cargo_nome },
+        Status: {
+          de: ROTULOS_STATUS_REQUISICAO.solicitada,
+          para: ROTULOS_STATUS_REQUISICAO[status],
+        },
+        "Motivo da decisão": { de: null, para: truncar(dados.motivo, 500) },
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ vaga
+
+export async function criarVaga(
+  sessao: PayloadSessao,
+  dados: CriacaoVaga
+): Promise<number> {
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const requisicao = await buscarRequisicaoParaMutacao(
+        cliente,
+        dados.requisicao_id
+      );
+      if (!requisicao) {
+        throw new ErroHttpCampo(
+          404,
+          "Requisição não encontrada.",
+          "requisicao_id"
+        );
+      }
+      if (requisicao.status !== "aprovada") {
+        throw new ErroHttp(409, "Só requisição aprovada abre vaga.");
+      }
+      // Snapshot congelado: mudança futura da tabela não mexe na vaga aberta.
+      const faixa = await buscarFaixaVigente(cliente, requisicao.cargo_id);
+      if (!faixa) {
+        throw new ErroHttp(
+          409,
+          `O cargo ${requisicao.cargo_nome} não tem faixa salarial vigente — cadastre a faixa antes de abrir a vaga.`
+        );
+      }
+      const id = await inserirVaga(cliente, {
+        requisicao_id: dados.requisicao_id,
+        titulo: dados.titulo,
+        faixa_min: faixa.faixa_min,
+        faixa_max: faixa.faixa_max,
+        prazo_alvo: dados.prazo_alvo,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_VAGA,
+        registroId: String(id),
+        diff: {
+          "Requisição": {
+            de: null,
+            para: `#${requisicao.id} — ${requisicao.cargo_nome}`,
+          },
+          "Título": { de: null, para: dados.titulo },
+          "Faixa congelada": {
+            de: null,
+            para: `${formatarSalario(faixa.faixa_min)} a ${formatarSalario(faixa.faixa_max)}`,
+          },
+          "Prazo-alvo": { de: null, para: formatarData(dados.prazo_alvo) },
+          Status: { de: null, para: ROTULOS_STATUS_VAGA.aberta },
+        },
+      });
+      return id;
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "vaga_requisicao_id_key") {
+      throw new ErroHttpCampo(
+        409,
+        "Esta requisição já tem vaga criada.",
+        "requisicao_id"
+      );
+    }
+    throw erro;
+  }
+}
+
+// ------------------------------------------------------------------ kanban da vaga
+
+export interface KanbanVaga {
+  vaga: VagaResumo;
+  etapas: EtapaAtiva[];
+  candidaturas: CandidaturaKanban[];
+}
+
+export async function obterKanban(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  vagaId: number
+): Promise<KanbanVaga> {
+  const vaga = await buscarVaga(vagaId);
+  if (!vaga || !acessaVaga(pode, sessao.usuario_id, vaga.solicitante_usuario_id)) {
+    // Fora do escopo = ausência, não máscara.
+    throw new ErroHttp(404, "Vaga não encontrada.");
+  }
+  const [etapas, candidaturas] = await Promise.all([
+    listarEtapasAtivas(),
+    listarCandidaturasDaVaga(vagaId),
+  ]);
+  const veSensivel = pode.ver || pode.gerir;
+  const saida = candidaturas.map((candidatura) => ({
+    ...candidatura,
+    // Contato do titular externo AUSENTE de quem não tem rs.ver/rs.gerir.
+    candidato_email: veSensivel ? candidatura.candidato_email : null,
+    candidato_telefone: veSensivel ? candidatura.candidato_telefone : null,
+    // Valor da oferta é salário: gestor vê a faixa, nunca o valor final.
+    oferta_valor: veSensivel ? candidatura.oferta_valor : null,
+    oferta_dentro_banda: veSensivel ? candidatura.oferta_dentro_banda : null,
+  }));
+  if (veSensivel && saida.some((c) => c.oferta_valor !== null)) {
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: pode.gerir ? "rs.gerir" : "rs.ver",
+      recurso: "recrutamento.oferta_valor",
+      registroId: String(vagaId),
+    });
+  }
+  return { vaga, etapas, candidaturas: saida };
+}
+
+// ------------------------------------------------------------------ candidato (titular externo — LGPD)
+
+export async function criarCandidato(
+  sessao: PayloadSessao,
+  dados: CriacaoCandidato
+): Promise<number> {
+  // Consentimento LGPD é obrigatório no cadastro manual; sem prazo informado
+  // vale a retenção estendida padrão (hoje + 6 meses, banco de talentos).
+  const consentidoAte =
+    dados.consentido_ate ??
+    somarMeses(hojeSaoPaulo(), MESES_CONSENTIMENTO_PADRAO);
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const id = await inserirCandidato(cliente, {
+        nome: dados.nome,
+        email: dados.email,
+        telefone: dados.telefone ?? null,
+        cpf: dados.cpf ?? null,
+        origem: dados.origem,
+        consentimento_lgpd: dados.consentimento_lgpd,
+        consentido_ate: consentidoAte,
+      });
+      const diff: Diff = {
+        Nome: { de: null, para: dados.nome },
+        "E-mail": { de: null, para: dados.email },
+        "Consentimento LGPD": { de: null, para: "Sim" },
+        "Consentido até": { de: null, para: formatarData(consentidoAte) },
+      };
+      if (dados.telefone) {
+        diff.Telefone = { de: null, para: dados.telefone };
+      }
+      if (dados.cpf) {
+        diff.CPF = { de: null, para: dados.cpf };
+      }
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_CANDIDATO,
+        registroId: String(id),
+        diff,
+      });
+      return id;
+    });
+  } catch (erro) {
+    const restricao = violacaoUnica(erro);
+    if (restricao === "candidato_email_unico") {
+      throw new ErroHttpCampo(
+        409,
+        "Já existe candidato com este e-mail — a candidatura nova anexa ao mesmo cadastro.",
+        "email"
+      );
+    }
+    if (restricao === "candidato_cpf_unico") {
+      throw new ErroHttpCampo(
+        409,
+        "Já existe candidato com este CPF — a candidatura nova anexa ao mesmo cadastro.",
+        "cpf"
+      );
+    }
+    throw erro;
+  }
+}
+
+// ------------------------------------------------------------------ candidatura e pipeline
+
+export async function criarCandidatura(
+  sessao: PayloadSessao,
+  dados: CriacaoCandidatura
+): Promise<void> {
+  try {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      const vaga = await buscarVagaParaMutacao(cliente, dados.vaga_id);
+      if (!vaga) {
+        throw new ErroHttpCampo(404, "Vaga não encontrada.", "vaga_id");
+      }
+      if (vaga.status !== "aberta") {
+        throw new ErroHttp(
+          409,
+          `Vaga ${ROTULOS_STATUS_VAGA[vaga.status].toLowerCase()} não recebe candidatura.`
+        );
+      }
+      const candidato = await buscarCandidatoBasico(cliente, dados.candidato_id);
+      if (!candidato) {
+        throw new ErroHttpCampo(
+          404,
+          "Candidato não encontrado.",
+          "candidato_id"
+        );
+      }
+      const etapas = await buscarEtapasAtivas(cliente);
+      if (etapas.length === 0) {
+        throw new ErroHttp(
+          409,
+          "Não há etapas de seleção ativas — ative o template antes."
+        );
+      }
+      const etapaInicial = etapas[0];
+      const id = await inserirCandidatura(cliente, {
+        vaga_id: dados.vaga_id,
+        candidato_id: dados.candidato_id,
+        etapa_atual_id: etapaInicial.id,
+      });
+      await inserirMovimentacao(cliente, {
+        candidatura_id: id,
+        de_etapa_id: null,
+        para_etapa_id: etapaInicial.id,
+        novo_status: null,
+        motivo_catalogo: null,
+        observacao: null,
+        por_usuario_id: sessao.usuario_id,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_CANDIDATURA,
+        registroId: String(id),
+        diff: {
+          Vaga: { de: null, para: vaga.titulo },
+          Candidato: { de: null, para: candidato.nome },
+          "Etapa inicial": { de: null, para: etapaInicial.nome },
+        },
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "candidatura_vaga_id_candidato_id_key") {
+      throw new ErroHttpCampo(
+        409,
+        "Este candidato já tem candidatura nesta vaga.",
+        "candidato_id"
+      );
+    }
+    throw erro;
+  }
+}
+
+export async function movimentarCandidatura(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: Movimentacao
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const candidatura = await buscarCandidaturaParaMutacao(
+      cliente,
+      candidaturaId
+    );
+    if (!candidatura) {
+      throw new ErroHttp(404, "Candidatura não encontrada.");
+    }
+    if (candidatura.status !== "ativa") {
+      throw new ErroHttp(
+        409,
+        `Candidatura ${ROTULOS_STATUS_CANDIDATURA[candidatura.status].toLowerCase()} não movimenta — o histórico é definitivo.`
+      );
+    }
+    if (candidatura.vaga_status !== "aberta") {
+      throw new ErroHttp(
+        409,
+        `Vaga ${ROTULOS_STATUS_VAGA[candidatura.vaga_status].toLowerCase()} não movimenta candidaturas.`
+      );
+    }
+
+    if (dados.acao === "avancar") {
+      const etapas = await buscarEtapasAtivas(cliente);
+      const proxima = etapas.find(
+        (etapa) => etapa.ordem > candidatura.etapa_ordem
+      );
+      if (!proxima) {
+        throw new ErroHttp(
+          409,
+          "Candidato já está na última etapa — registre a oferta."
+        );
+      }
+      await atualizarCandidatura(cliente, candidaturaId, {
+        etapa_atual_id: proxima.id,
+      });
+      await inserirMovimentacao(cliente, {
+        candidatura_id: candidaturaId,
+        de_etapa_id: candidatura.etapa_atual_id,
+        para_etapa_id: proxima.id,
+        novo_status: null,
+        motivo_catalogo: null,
+        observacao: dados.observacao ?? null,
+        por_usuario_id: sessao.usuario_id,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "transicao",
+        tabela: TABELA_CANDIDATURA,
+        registroId: String(candidaturaId),
+        diff: {
+          Candidato: { de: null, para: candidatura.candidato_nome },
+          Vaga: { de: null, para: candidatura.vaga_titulo },
+          Etapa: { de: candidatura.etapa_nome, para: proxima.nome },
+        },
+      });
+      return;
+    }
+
+    // Reprovação: motivo SEMPRE do catálogo controlado (Lei 9.029) — o zod
+    // já exige, o banco confere de novo.
+    const motivo = dados.motivo_catalogo;
+    if (!motivo) {
+      throw new ErroHttpCampo(
+        400,
+        "Reprovação exige motivo do catálogo.",
+        "motivo_catalogo"
+      );
+    }
+    await atualizarCandidatura(cliente, candidaturaId, { status: "reprovada" });
+    await inserirMovimentacao(cliente, {
+      candidatura_id: candidaturaId,
+      de_etapa_id: candidatura.etapa_atual_id,
+      para_etapa_id: null,
+      novo_status: "reprovada",
+      motivo_catalogo: motivo,
+      observacao: dados.observacao ?? null,
+      por_usuario_id: sessao.usuario_id,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_CANDIDATURA,
+      registroId: String(candidaturaId),
+      diff: {
+        Candidato: { de: null, para: candidatura.candidato_nome },
+        Vaga: { de: null, para: candidatura.vaga_titulo },
+        Status: {
+          de: ROTULOS_STATUS_CANDIDATURA.ativa,
+          para: ROTULOS_STATUS_CANDIDATURA.reprovada,
+        },
+        Motivo: { de: null, para: ROTULOS_MOTIVO_MOVIMENTACAO[motivo] },
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ parecer (restrito)
+
+export async function listarPareceresCandidatura(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  candidaturaId: number
+): Promise<{ pareceres: ParecerSelecao[]; ve_todos: boolean }> {
+  if (!pode.parecer_ver && !pode.parecer_registrar) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  const candidatura = await buscarCandidaturaBasica(candidaturaId);
+  if (
+    !candidatura ||
+    !acessaVaga(pode, sessao.usuario_id, candidatura.solicitante_usuario_id)
+  ) {
+    throw new ErroHttp(404, "Candidatura não encontrada.");
+  }
+  // Gestor registra mas não vê os dos outros: sem rs.parecer.ver, o payload
+  // traz apenas os pareceres do próprio avaliador.
+  const veTodos = pode.parecer_ver;
+  const pareceres = await listarPareceres(
+    candidaturaId,
+    veTodos
+      ? { todos: true }
+      : { todos: false, avaliadorUsuarioId: sessao.usuario_id }
+  );
+  if (veTodos && pareceres.length > 0) {
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "rs.parecer.ver",
+      recurso: "recrutamento.parecer_selecao",
+      registroId: String(candidaturaId),
+    });
+  }
+  return { pareceres, ve_todos: veTodos };
+}
+
+export async function registrarParecer(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: CriacaoParecer
+): Promise<void> {
+  const pode = await permissoesDe(sessao.usuario_id);
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const candidatura = await buscarCandidaturaParaMutacao(
+      cliente,
+      candidaturaId
+    );
+    if (
+      !candidatura ||
+      !acessaVaga(pode, sessao.usuario_id, candidatura.solicitante_usuario_id)
+    ) {
+      throw new ErroHttp(404, "Candidatura não encontrada.");
+    }
+    if (candidatura.status !== "ativa") {
+      throw new ErroHttp(409, "Candidatura encerrada não recebe parecer.");
+    }
+    const id = await inserirParecer(cliente, {
+      candidatura_id: candidaturaId,
+      etapa_id: candidatura.etapa_atual_id,
+      avaliador_usuario_id: sessao.usuario_id,
+      recomendacao: dados.recomendacao,
+      observacoes: dados.observacoes,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_PARECER,
+      registroId: String(id),
+      diff: {
+        Candidato: { de: null, para: candidatura.candidato_nome },
+        Etapa: { de: null, para: candidatura.etapa_nome },
+        "Recomendação": {
+          de: null,
+          para: ROTULOS_RECOMENDACAO[dados.recomendacao],
+        },
+        "Observações": { de: null, para: truncar(dados.observacoes, 500) },
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ oferta
+
+export async function criarOferta(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: CriacaoOferta
+): Promise<void> {
+  try {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      const candidatura = await buscarCandidaturaParaMutacao(
+        cliente,
+        candidaturaId
+      );
+      if (!candidatura) {
+        throw new ErroHttp(404, "Candidatura não encontrada.");
+      }
+      if (candidatura.status !== "ativa") {
+        throw new ErroHttp(409, "Candidatura encerrada não recebe oferta.");
+      }
+      if (candidatura.vaga_status !== "aberta") {
+        throw new ErroHttp(
+          409,
+          `Vaga ${ROTULOS_STATUS_VAGA[candidatura.vaga_status].toLowerCase()} não emite oferta.`
+        );
+      }
+      if (candidatura.etapa_tipo !== "oferta") {
+        throw new ErroHttp(
+          409,
+          "Avance o candidato até a etapa de oferta antes de registrar a proposta."
+        );
+      }
+      // Trava da banda congelada: fora dela, só com aprovação nominal
+      // registrada ANTES — o banco torna o silêncio impossível.
+      const dentroBanda =
+        dados.valor >= candidatura.faixa_min &&
+        dados.valor <= candidatura.faixa_max;
+      if (!dentroBanda && !dados.aprovacao_fora_banda) {
+        throw new ErroHttpCampo(
+          400,
+          `Valor fora da banda da vaga (${formatarSalario(candidatura.faixa_min)} a ${formatarSalario(candidatura.faixa_max)}) exige aprovação registrada.`,
+          "aprovacao_fora_banda"
+        );
+      }
+      const id = await inserirOferta(cliente, {
+        candidatura_id: candidaturaId,
+        valor: dados.valor,
+        dentro_banda: dentroBanda,
+        aprovacao_fora_banda: dentroBanda
+          ? null
+          : (dados.aprovacao_fora_banda ?? null),
+      });
+      const diff: Diff = {
+        Candidato: { de: null, para: candidatura.candidato_nome },
+        Vaga: { de: null, para: candidatura.vaga_titulo },
+        Valor: { de: null, para: formatarSalario(dados.valor) },
+        "Dentro da banda": { de: null, para: dentroBanda ? "Sim" : "Não" },
+        Status: { de: null, para: ROTULOS_STATUS_OFERTA.enviada },
+      };
+      if (!dentroBanda && dados.aprovacao_fora_banda) {
+        diff["Aprovação fora da banda"] = {
+          de: null,
+          para: truncar(dados.aprovacao_fora_banda, 500),
+        };
+      }
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_OFERTA,
+        registroId: String(id),
+        diff,
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "oferta_candidatura_id_key") {
+      throw new ErroHttp(409, "Esta candidatura já tem oferta registrada.");
+    }
+    throw erro;
+  }
+}
+
+export async function responderOferta(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: RespostaOferta
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const candidatura = await buscarCandidaturaParaMutacao(
+      cliente,
+      candidaturaId
+    );
+    if (!candidatura) {
+      throw new ErroHttp(404, "Candidatura não encontrada.");
+    }
+    const oferta = await buscarOfertaParaMutacao(cliente, candidaturaId);
+    if (!oferta) {
+      throw new ErroHttp(404, "Esta candidatura não tem oferta.");
+    }
+    if (oferta.status !== "enviada") {
+      throw new ErroHttp(
+        409,
+        `Oferta já ${ROTULOS_STATUS_OFERTA[oferta.status].toLowerCase()} — resposta é única.`
+      );
+    }
+    await gravarRespostaOferta(cliente, oferta.id, dados.resposta);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_OFERTA,
+      registroId: String(oferta.id),
+      diff: {
+        Candidato: { de: null, para: candidatura.candidato_nome },
+        Vaga: { de: null, para: candidatura.vaga_titulo },
+        Status: {
+          de: ROTULOS_STATUS_OFERTA.enviada,
+          para: ROTULOS_STATUS_OFERTA[dados.resposta],
+        },
+      },
+    });
+
+    if (dados.resposta === "aceita") {
+      // A seleção termina aqui: candidatura aprovada e vaga fechada na MESMA
+      // transação; a admissão começa no botão "iniciar admissão".
+      await atualizarCandidatura(cliente, candidaturaId, {
+        status: "aprovada",
+      });
+      await inserirMovimentacao(cliente, {
+        candidatura_id: candidaturaId,
+        de_etapa_id: candidatura.etapa_atual_id,
+        para_etapa_id: null,
+        novo_status: "aprovada",
+        motivo_catalogo: null,
+        observacao: null,
+        por_usuario_id: sessao.usuario_id,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "transicao",
+        tabela: TABELA_CANDIDATURA,
+        registroId: String(candidaturaId),
+        diff: {
+          Candidato: { de: null, para: candidatura.candidato_nome },
+          Status: {
+            de: ROTULOS_STATUS_CANDIDATURA.ativa,
+            para: ROTULOS_STATUS_CANDIDATURA.aprovada,
+          },
+        },
+      });
+      const vaga = await buscarVagaParaMutacao(cliente, candidatura.vaga_id);
+      if (vaga && vaga.status === "aberta") {
+        await atualizarStatusVaga(cliente, vaga.id, "fechada");
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "transicao",
+          tabela: TABELA_VAGA,
+          registroId: String(vaga.id),
+          diff: {
+            "Título": { de: null, para: vaga.titulo },
+            Status: {
+              de: ROTULOS_STATUS_VAGA.aberta,
+              para: ROTULOS_STATUS_VAGA.fechada,
+            },
+            Resultado: { de: null, para: "Preenchida (oferta aceita)" },
+          },
+        });
+      }
+      return;
+    }
+
+    // Recusa: o candidato desistiu — motivo do catálogo, vaga segue aberta.
+    const motivo = dados.motivo_catalogo;
+    if (!motivo) {
+      throw new ErroHttpCampo(
+        400,
+        "Recusa exige motivo do catálogo.",
+        "motivo_catalogo"
+      );
+    }
+    await atualizarCandidatura(cliente, candidaturaId, { status: "desistiu" });
+    await inserirMovimentacao(cliente, {
+      candidatura_id: candidaturaId,
+      de_etapa_id: candidatura.etapa_atual_id,
+      para_etapa_id: null,
+      novo_status: "desistiu",
+      motivo_catalogo: motivo,
+      observacao: null,
+      por_usuario_id: sessao.usuario_id,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_CANDIDATURA,
+      registroId: String(candidaturaId),
+      diff: {
+        Candidato: { de: null, para: candidatura.candidato_nome },
+        Status: {
+          de: ROTULOS_STATUS_CANDIDATURA.ativa,
+          para: ROTULOS_STATUS_CANDIDATURA.desistiu,
+        },
+        Motivo: { de: null, para: ROTULOS_MOTIVO_MOVIMENTACAO[motivo] },
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ fronteira com a admissão
+
+export interface AdmissaoIniciada {
+  colaborador_id: number;
+  processo_id: number;
+  senha_temporaria: string;
+}
+
+/**
+ * Oferta aceita → colaborador + usuário + processo de admissão na MESMA
+ * transação, reusando as escritas exportadas dos domínios usuarios,
+ * colaboradores e admissao (os serviços de lá abrem transação própria, por
+ * isso a orquestração reúne os repositórios deles aqui, sem duplicar SQL).
+ */
+export async function iniciarAdmissao(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: IniciarAdmissao
+): Promise<AdmissaoIniciada> {
+  const senhaTemporaria = gerarSenhaTemporaria();
+  const senhaHash = await hash(senhaTemporaria, 12);
+  const dataAdmissao = dados.data_inicio_prevista;
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const candidatura = await buscarCandidaturaParaMutacao(
+        cliente,
+        candidaturaId
+      );
+      if (!candidatura) {
+        throw new ErroHttp(404, "Candidatura não encontrada.");
+      }
+      const oferta = await buscarOfertaParaMutacao(cliente, candidaturaId);
+      if (
+        candidatura.status !== "aprovada" ||
+        !oferta ||
+        oferta.status !== "aceita"
+      ) {
+        throw new ErroHttp(
+          409,
+          "Só candidatura aprovada com oferta aceita inicia admissão."
+        );
+      }
+
+      // 1) Usuário + colaborador (mesmo arranjo de colaboradores.criarColaborador).
+      const usuario = await criarUsuario(cliente, {
+        email: candidatura.candidato_email,
+        nome: candidatura.candidato_nome,
+        papel: "funcionario",
+        senhaHash,
+      });
+      const colaborador = await criarColaborador(cliente, {
+        usuario_id: usuario.id,
+        matricula: dados.matricula,
+        matricula_esocial: dados.matricula,
+        cpf: dados.cpf,
+        nome_completo: candidatura.candidato_nome,
+        tipo_vinculo: dados.tipo_vinculo,
+        data_admissao: dataAdmissao,
+        retrato: null,
+        contexto: null,
+      });
+      await inserirEvento(cliente, {
+        colaborador_id: colaborador.id,
+        tipo: "admissao",
+        ocorrido_em: `${dataAdmissao}T00:00:00Z`,
+        origem_tabela: "rh.colaborador",
+        origem_id: colaborador.id,
+        resumo: `Admissão de ${candidatura.candidato_nome} (matrícula ${dados.matricula}) como ${ROTULOS_VINCULO[dados.tipo_vinculo]} em ${formatarData(dataAdmissao)} — origem: seleção (vaga ${candidatura.vaga_titulo})`,
+        payload: {
+          tipo_vinculo: dados.tipo_vinculo,
+          data_admissao: dataAdmissao,
+          candidatura_id: candidaturaId,
+        },
+        registrado_por: sessao.usuario_id,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "sistema.usuario",
+        registroId: String(usuario.id),
+        diff: {
+          "E-mail": { de: null, para: usuario.email },
+          Nome: { de: null, para: usuario.nome },
+          Papel: { de: null, para: "Funcionário" },
+          Ativo: { de: null, para: "Sim" },
+        },
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "rh.colaborador",
+        registroId: String(colaborador.id),
+        diff: {
+          "Matrícula": { de: null, para: dados.matricula },
+          CPF: { de: null, para: dados.cpf },
+          "Nome completo": { de: null, para: candidatura.candidato_nome },
+          "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
+          "Data de admissão": { de: null, para: formatarData(dataAdmissao) },
+          Origem: {
+            de: null,
+            para: `Seleção — candidatura #${candidaturaId} (${candidatura.vaga_titulo})`,
+          },
+        },
+      });
+
+      // 2) Processo de admissão com o checklist vigente congelado
+      //    (mesmo arranjo de admissao.abrirProcesso).
+      const checklist = await buscarChecklistAtivo(cliente);
+      if (!checklist) {
+        throw new ErroHttp(
+          409,
+          "Não há versão ativa do checklist de admissão. Ative uma versão antes de iniciar admissões."
+        );
+      }
+      const prazos = dados.contrato_experiencia
+        ? calcularPrazosExperiencia(dataAdmissao)
+        : { prazo_experiencia_1: null, prazo_experiencia_2: null };
+      const processoId = await criarProcesso(cliente, {
+        colaborador_id: colaborador.id,
+        checklist_versao_id: checklist.id,
+        data_inicio_prevista: dados.data_inicio_prevista,
+        contrato_experiencia: dados.contrato_experiencia,
+        ...prazos,
+      });
+      await inserirItens(cliente, processoId, checklist.itens);
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "rh.processo_admissao",
+        registroId: String(processoId),
+        diff: {
+          Colaborador: {
+            de: null,
+            para: `${candidatura.candidato_nome} (matrícula ${dados.matricula})`,
+          },
+          "Início previsto": {
+            de: null,
+            para: formatarData(dados.data_inicio_prevista),
+          },
+          "Contrato de experiência": {
+            de: null,
+            para: dados.contrato_experiencia ? "Sim (45 + 45 dias)" : "Não",
+          },
+          Checklist: {
+            de: null,
+            para: `Versão ${checklist.versao} (${checklist.itens.length} itens)`,
+          },
+          Estado: { de: null, para: ROTULOS_ESTADO_PROCESSO.em_preparacao },
+          Origem: { de: null, para: `Seleção — candidatura #${candidaturaId}` },
+        },
+      });
+
+      return {
+        colaborador_id: colaborador.id,
+        processo_id: processoId,
+        senha_temporaria: senhaTemporaria,
+      };
+    });
+  } catch (erro) {
+    const restricao = violacaoUnica(erro);
+    if (restricao === "usuario_email_unico") {
+      throw new ErroHttp(
+        409,
+        "Já existe usuário com o e-mail deste candidato — a admissão provavelmente já foi iniciada."
+      );
+    }
+    if (restricao === "colaborador_matricula_key") {
+      throw new ErroHttpCampo(
+        409,
+        "Já existe colaborador com esta matrícula.",
+        "matricula"
+      );
+    }
+    if (restricao === "colaborador_cpf_key") {
+      throw new ErroHttpCampo(
+        409,
+        "Já existe colaborador com este CPF.",
+        "cpf"
+      );
+    }
+    throw erro;
+  }
+}
+
+// ------------------------------------------------------------------ indicador
+
+/** % de vagas fechadas até o prazo-alvo (12 meses) — fonte da Central de Metas. */
+export async function valorIndicadorVagasNoPrazo(): Promise<number | null> {
+  return apurarVagasNoPrazo();
+}

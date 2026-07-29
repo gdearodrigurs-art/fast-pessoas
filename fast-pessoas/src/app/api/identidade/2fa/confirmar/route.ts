@@ -2,7 +2,7 @@ import { esquemaConfirmacao2fa } from "@/dominios/identidade/esquemas";
 import { confirmarAtivacao2fa } from "@/dominios/identidade/servico";
 import { verificarSecretPendente } from "@/dominios/identidade/token-2fa";
 import { responderErro } from "@/lib/http";
-import { ErroHttp, lerSessao } from "@/lib/sessao";
+import { criarSessao, ErroHttp, lerSessao } from "@/lib/sessao";
 import { lerCookiePendente, limparCookiePendente } from "../cookie-pendente";
 
 export async function POST(request: Request) {
@@ -34,6 +34,16 @@ export async function POST(request: Request) {
 
     await confirmarAtivacao2fa(sessao, secretPendente, analise.data.codigo);
     await limparCookiePendente();
+
+    // Reemite a sessão SEM o claim pendente_2fa: o acesso é liberado na
+    // hora, sem exigir novo login.
+    if (sessao.pendente_2fa) {
+      await criarSessao({
+        usuario_id: sessao.usuario_id,
+        papel: sessao.papel,
+        nome: sessao.nome,
+      });
+    }
     return Response.json({ ok: true });
   } catch (erro) {
     return responderErro(erro);

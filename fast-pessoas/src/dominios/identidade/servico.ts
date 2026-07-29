@@ -102,6 +102,9 @@ export async function autenticar(
       usuario_id: usuario.id,
       papel: usuario.papel,
       nome: usuario.nome,
+      // Claim no próprio JWT: o proxy restringe a sessão pendente ao fluxo
+      // de configuração do 2FA sem precisar consultar o banco no edge.
+      ...(precisaConfigurar2fa ? { pendente_2fa: true } : {}),
     },
     precisa_configurar_2fa: precisaConfigurar2fa,
   };
@@ -251,12 +254,19 @@ export async function confirmarAtivacao2fa(
 
 /**
  * Desativa o 2FA exigindo prova dupla: senha atual + código TOTP válido.
+ * Papéis com 2FA obrigatório (rh/dp/diretoria/admin) não podem desativar.
  */
 export async function desativar2fa(
   sessao: PayloadSessao,
   dados: Desativacao2fa
 ): Promise<void> {
   const usuario = await exigirUsuarioAtivo(sessao);
+  if (papelExige2fa(usuario.papel)) {
+    throw new ErroHttp(
+      403,
+      "O seu papel exige autenticação em duas etapas — ela não pode ser desativada."
+    );
+  }
   if (!usuario.totp_secret) {
     throw new ErroHttp(409, "A autenticação em duas etapas não está ativa.");
   }
