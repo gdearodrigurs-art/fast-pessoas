@@ -23,7 +23,9 @@ interface Permissoes extends Record<string, unknown> {
   indicador_ver: boolean;
   documento_ver: boolean;
   cargo_administrar: boolean;
+  relatorio_ver: boolean;
   usuario_administrar: boolean;
+  perfil_administrar: boolean;
 }
 
 export default async function PaginaInicial() {
@@ -59,7 +61,9 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'indicador.ver')                  AS indicador_ver,
        sistema.tem_permissao($1, 'documento.ver')                  AS documento_ver,
        sistema.tem_permissao($1, 'rh.cargo.administrar')           AS cargo_administrar,
-       sistema.tem_permissao($1, 'usuario.administrar')            AS usuario_administrar`,
+       sistema.tem_permissao($1, 'relatorio.ver')                   AS relatorio_ver,
+       sistema.tem_permissao($1, 'usuario.administrar')            AS usuario_administrar,
+       sistema.tem_permissao($1, 'perfil.administrar')             AS perfil_administrar`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -168,10 +172,23 @@ export default async function PaginaInicial() {
       mostrar: pode?.cargo_administrar ?? false,
     },
     {
+      href: "/relatorios",
+      titulo: "Relatórios",
+      descricao:
+        "Aniversariantes, diversidade, composição familiar e headcount.",
+      mostrar: pode?.relatorio_ver ?? false,
+    },
+    {
       href: "/usuarios",
       titulo: "Usuários",
       descricao: "Contas de acesso e papéis do sistema.",
       mostrar: pode?.usuario_administrar ?? false,
+    },
+    {
+      href: "/perfis",
+      titulo: "Perfis de acesso",
+      descricao: "Quais permissões cada papel tem — composição auditada.",
+      mostrar: pode?.perfil_administrar ?? false,
     },
   ].filter((modulo) => modulo.mostrar);
 

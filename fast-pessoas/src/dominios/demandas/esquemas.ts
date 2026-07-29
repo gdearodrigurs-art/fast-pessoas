@@ -121,3 +121,112 @@ export type FiltroDemandas = z.infer<typeof esquemaFiltroDemandas>;
 export function formatarNumeroDemanda(numero: number): string {
   return `DEM-${String(numero).padStart(4, "0")}`;
 }
+
+// ==================================================================
+// Movimentação: promoção e transferência de unidade (migration 0021)
+// ==================================================================
+// O tipo de demanda tem `fluxo`: 'padrao' (solicitação genérica) ou
+// 'movimentacao' (formulário próprio + cadeia líder → diretoria + efeito
+// automático na aprovação final). O formulário genérico NÃO abre movimentação.
+
+export const FLUXOS_DEMANDA = ["padrao", "movimentacao"] as const;
+
+export type FluxoDemanda = (typeof FLUXOS_DEMANDA)[number];
+
+export const TIPOS_MOVIMENTACAO = ["promocao", "transferencia_unidade"] as const;
+
+export type TipoMovimentacao = (typeof TIPOS_MOVIMENTACAO)[number];
+
+export const ROTULOS_TIPO_MOVIMENTACAO: Record<TipoMovimentacao, string> = {
+  promocao: "Promoção",
+  transferencia_unidade: "Transferência de unidade",
+};
+
+export const NIVEIS_APROVACAO = ["lider", "diretoria"] as const;
+
+export type NivelAprovacao = (typeof NIVEIS_APROVACAO)[number];
+
+export const ROTULOS_NIVEL_APROVACAO: Record<NivelAprovacao, string> = {
+  lider: "Líder do colaborador",
+  diretoria: "Diretoria",
+};
+
+export const STATUS_ETAPA = ["pendente", "aprovada", "reprovada"] as const;
+
+export type StatusEtapa = (typeof STATUS_ETAPA)[number];
+
+export const ROTULOS_STATUS_ETAPA: Record<StatusEtapa, string> = {
+  pendente: "Pendente",
+  aprovada: "Aprovada",
+  reprovada: "Reprovada",
+};
+
+const esquemaData = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
+  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
+    message: "Data inválida",
+  });
+
+export const esquemaCriacaoMovimentacao = z
+  .object({
+    tipo: z.enum(TIPOS_MOVIMENTACAO),
+    colaborador_id: z.number().int().positive(),
+    cargo_destino_id: z.number().int().positive().optional(),
+    estabelecimento_destino_id: z.number().int().positive().optional(),
+    centro_custo_destino: z.string().trim().min(1).max(60).optional(),
+    // Remuneração é opcional: promoção sem mudança de salário existe.
+    salario_proposto: z.number().nonnegative().max(9_999_999.99).optional(),
+    justificativa_excecao: z.string().trim().min(1).max(2000).optional(),
+    data_pretendida: esquemaData,
+    justificativa: z
+      .string()
+      .trim()
+      .min(1, "A justificativa é obrigatória")
+      .max(4000, "Justificativa longa demais"),
+  })
+  .refine(
+    (dados) => dados.tipo !== "promocao" || dados.cargo_destino_id !== undefined,
+    { message: "Escolha o cargo destino", path: ["cargo_destino_id"] }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_unidade" ||
+      dados.estabelecimento_destino_id !== undefined,
+    {
+      message: "Escolha a unidade destino",
+      path: ["estabelecimento_destino_id"],
+    }
+  );
+
+export type CriacaoMovimentacao = z.infer<typeof esquemaCriacaoMovimentacao>;
+
+export const esquemaDecisaoEtapa = z
+  .object({
+    decisao: z.enum(["aprovar", "reprovar"]),
+    motivo: z.string().trim().max(4000, "Motivo longo demais").optional(),
+  })
+  .refine(
+    (dados) =>
+      dados.decisao !== "reprovar" ||
+      (dados.motivo !== undefined && dados.motivo.length > 0),
+    { message: "O motivo da reprovação é obrigatório", path: ["motivo"] }
+  );
+
+export type DecisaoEtapa = z.infer<typeof esquemaDecisaoEtapa>;
+
+/**
+ * Rótulo do estágio da cadeia para o cartão/fila — a demanda continua com
+ * status 'aguardando_aprovacao' nos dois níveis, então o texto vem das etapas.
+ */
+export function rotuloEstagioCadeia(
+  etapas: { ordem: number; nivel: NivelAprovacao; status: StatusEtapa }[]
+): string | null {
+  const pendente = [...etapas]
+    .sort((a, b) => a.ordem - b.ordem)
+    .find((etapa) => etapa.status === "pendente");
+  if (!pendente) return null;
+  return pendente.nivel === "diretoria"
+    ? "Aguardando aprovação da diretoria"
+    : "Aguardando aprovação do líder";
+}

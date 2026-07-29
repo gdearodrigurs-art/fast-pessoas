@@ -96,3 +96,38 @@ export async function exigirPermissao(chave: string): Promise<PayloadSessao> {
   }
   return sessao;
 }
+
+/**
+ * Variante para leitura que várias chaves autorizam com PROFUNDIDADE
+ * diferente — ex.: cargo pode ser lido por `rh.cargo.ver` (descritivo/RCF) ou
+ * por `rh.cargo.administrar` (que também vê faixa salarial). Autoriza se
+ * tiver ao menos uma e devolve quais tem, para a rota decidir o que entra no
+ * payload. Continua valendo a regra de ouro: o campo sensível é AUSENTE do
+ * payload de quem não pode ver, não mascarado.
+ */
+export async function exigirAlgumaPermissao(
+  chaves: readonly string[]
+): Promise<{ sessao: PayloadSessao; concedidas: Set<string> }> {
+  const sessao = await lerSessao();
+  if (!sessao) {
+    throw new ErroHttp(401, "Não autenticado");
+  }
+  if (sessao.pendente_2fa) {
+    throw new ErroHttp(
+      403,
+      "Configure a autenticação em duas etapas para continuar"
+    );
+  }
+  const linhas = await consultar<{ chave: string; autorizado: boolean }>(
+    `SELECT chave, sistema.tem_permissao($1, chave) AS autorizado
+       FROM unnest($2::text[]) AS chave`,
+    [sessao.usuario_id, [...chaves]]
+  );
+  const concedidas = new Set(
+    linhas.filter((linha) => linha.autorizado).map((linha) => linha.chave)
+  );
+  if (concedidas.size === 0) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  return { sessao, concedidas };
+}

@@ -3,6 +3,8 @@ import { consultar } from "../../lib/banco";
 import {
   Cha,
   FiltroColaboradores,
+  Genero,
+  GENEROS,
   StatusAcao,
   StatusColaborador,
   TipoOcorrencia,
@@ -103,6 +105,7 @@ export interface FichaColaborador extends ColaboradorResumo {
   usuario_id: number;
   matricula_esocial: string;
   cpf: string;
+  data_nascimento: string | null;
   data_desligamento: string | null;
   retrato: string | null;
   contexto: string | null;
@@ -112,6 +115,12 @@ export interface FichaColaborador extends ColaboradorResumo {
   gestor_id: number | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
+  /**
+   * RCF vigente do cargo da posição atual — pedido explícito da analista de RH.
+   * Documento de gestão, não dado sensível: vai para quem já vê a ficha.
+   * `genero` NÃO entra aqui de propósito (só agregado — ver esquemas.ts).
+   */
+  rcf: RcfCargo | null;
 }
 
 export interface ColaboradorParaAtualizar {
@@ -121,6 +130,9 @@ export interface ColaboradorParaAtualizar {
   nome_completo: string;
   tipo_vinculo: TipoVinculo;
   status: StatusColaborador;
+  data_admissao: string;
+  data_nascimento: string | null;
+  genero: Genero;
   data_desligamento: string | null;
   retrato: string | null;
   contexto: string | null;
@@ -141,6 +153,8 @@ export interface CamposColaborador {
   tipo_vinculo?: TipoVinculo;
   status?: StatusColaborador;
   data_desligamento?: string | null;
+  data_nascimento?: string;
+  genero?: Genero;
 }
 
 interface LinhaResumo extends Record<string, unknown> {
@@ -160,6 +174,7 @@ interface LinhaFicha extends LinhaResumo {
   usuario_id: string;
   matricula_esocial: string;
   cpf: string;
+  data_nascimento: string | null;
   data_desligamento: string | null;
   retrato: string | null;
   contexto: string | null;
@@ -169,6 +184,106 @@ interface LinhaFicha extends LinhaResumo {
   gestor_id: string | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
+  rcf: RcfCargo | null;
+}
+
+// ------------------------------------------------------------------ RCF (descritivo de cargo)
+
+/** RCF vigente de um cargo, na ordem do documento oficial. */
+export interface RcfCargo {
+  cargo_id: number;
+  versao_id: number;
+  nome: string;
+  setor: string | null;
+  cargo_lider_id: number | null;
+  cargo_lider_nome: string | null;
+  tipo_contrato_previsto: TipoVinculo | null;
+  missao: string | null;
+  atividades: string[];
+  cha: Cha;
+  observacoes: string | null;
+  descricao: string | null;
+  inicio_vigencia: string;
+}
+
+// Colunas do RCF na ordem do modelo — reaproveitadas pelas consultas de cargo.
+const COLUNAS_RCF = `cv.setor, cv.cargo_lider_id, cv.tipo_contrato_previsto,
+            cv.missao, cv.atividades, cv.cha, cv.observacoes`;
+
+/**
+ * RCF da ficha: parte da posição VIGENTE, resolve o cargo pela versão pinada e
+ * lê a versão ATIVA daquele cargo — o documento que vale hoje, não o que valia
+ * quando a posição começou (a versão pinada continua servindo ao histórico).
+ */
+const LATERAL_RCF_DA_POSICAO = `
+  LEFT JOIN LATERAL (
+    SELECT jsonb_build_object(
+             'cargo_id',               cv.cargo_id,
+             'versao_id',              cv.id,
+             'nome',                   cv.nome,
+             'setor',                  cv.setor,
+             'cargo_lider_id',         cv.cargo_lider_id,
+             'cargo_lider_nome',       lider.nome,
+             'tipo_contrato_previsto', cv.tipo_contrato_previsto,
+             'missao',                 cv.missao,
+             'atividades',             cv.atividades,
+             'cha',                    cv.cha,
+             'observacoes',            cv.observacoes,
+             'descricao',              cv.descricao,
+             'inicio_vigencia',        cv.inicio_vigencia::text
+           ) AS rcf
+      FROM rh.posicao_colaborador p
+      JOIN rh.cargo_versao pin ON pin.id = p.cargo_versao_id
+      JOIN rh.cargo_versao cv
+        ON cv.cargo_id = pin.cargo_id AND cv.status = 'ativa'
+      LEFT JOIN LATERAL (
+        SELECT cl.nome
+          FROM rh.cargo_versao cl
+         WHERE cl.cargo_id = cv.cargo_lider_id AND cl.status = 'ativa'
+      ) lider ON TRUE
+     WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
+  ) rcf ON TRUE`;
+
+/** RCF vigente de um cargo — usado pela visualização imprimível. */
+export async function buscarRcfPorCargo(
+  cargoId: number
+): Promise<RcfCargo | null> {
+  const linhas = await consultar<{
+    cargo_id: string;
+    versao_id: string;
+    nome: string;
+    setor: string | null;
+    cargo_lider_id: string | null;
+    cargo_lider_nome: string | null;
+    tipo_contrato_previsto: TipoVinculo | null;
+    missao: string | null;
+    atividades: string[];
+    cha: Cha;
+    observacoes: string | null;
+    descricao: string | null;
+    inicio_vigencia: string;
+  }>(
+    `SELECT cv.cargo_id, cv.id AS versao_id, cv.nome, ${COLUNAS_RCF},
+            cv.descricao, cv.inicio_vigencia::text AS inicio_vigencia,
+            lider.nome AS cargo_lider_nome
+       FROM rh.cargo_versao cv
+       LEFT JOIN LATERAL (
+         SELECT cl.nome
+           FROM rh.cargo_versao cl
+          WHERE cl.cargo_id = cv.cargo_lider_id AND cl.status = 'ativa'
+       ) lider ON TRUE
+      WHERE cv.cargo_id = $1 AND cv.status = 'ativa'`,
+    [cargoId]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    ...linha,
+    cargo_id: Number(linha.cargo_id),
+    versao_id: Number(linha.versao_id),
+    cargo_lider_id:
+      linha.cargo_lider_id === null ? null : Number(linha.cargo_lider_id),
+  };
 }
 
 // Laterais compartilhadas de projeção vigente (cargo, lotação, gestor, feedback).
@@ -237,12 +352,14 @@ export async function buscarFicha(
     `SELECT c.id, c.usuario_id, c.matricula, c.matricula_esocial, c.cpf,
             c.nome_completo, c.tipo_vinculo, c.status,
             c.data_admissao::text AS data_admissao,
+            c.data_nascimento::text AS data_nascimento,
             c.data_desligamento::text AS data_desligamento,
             c.retrato, c.contexto,
             u.email, u.ativo AS usuario_ativo,
             pos.cargo_nome, lot.unidade, lot.centro_custo,
             ges.gestor_id, ges.gestor_nome,
             fb.ultimo_feedback_em, fb.dias_desde_feedback,
+            rcf.rcf,
             ((now() AT TIME ZONE 'America/Sao_Paulo')::date - c.data_admissao)
               AS dias_desde_admissao
        FROM rh.colaborador c
@@ -254,6 +371,7 @@ export async function buscarFicha(
            JOIN rh.colaborador g ON g.id = rg.gestor_colaborador_id
           WHERE rg.liderado_colaborador_id = c.id AND rg.fim_vigencia IS NULL
        ) ges ON TRUE
+       ${LATERAL_RCF_DA_POSICAO}
       WHERE c.id = $1 AND ${condicaoEscopo(escopo, parametros)}`,
     parametros
   );
@@ -297,6 +415,13 @@ export async function criar(
     nome_completo: string;
     tipo_vinculo: TipoVinculo;
     data_admissao: string;
+    // Opcionais no repositório de propósito: a admissão vinda de Recrutamento
+    // (outro domínio) ainda não coleta estes dois campos do candidato. A coluna
+    // é nullable (ver migration 0020) e o relatório conta explicitamente as
+    // fichas sem data de nascimento — a lacuna aparece em vez de virar zero.
+    // EVOLUÇÃO: pedir data de nascimento e gênero no aceite da proposta em R&S.
+    data_nascimento?: string | null;
+    genero?: Genero;
     retrato: string | null;
     contexto: string | null;
   }
@@ -304,8 +429,8 @@ export async function criar(
   const { rows } = await cliente.query<LinhaResumo>(
     `INSERT INTO rh.colaborador
        (usuario_id, matricula, matricula_esocial, cpf, nome_completo,
-        tipo_vinculo, data_admissao, retrato, contexto)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        tipo_vinculo, data_admissao, data_nascimento, genero, retrato, contexto)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING id, matricula, nome_completo, tipo_vinculo, status,
                data_admissao::text AS data_admissao`,
     [
@@ -316,6 +441,8 @@ export async function criar(
       dados.nome_completo,
       dados.tipo_vinculo,
       dados.data_admissao,
+      dados.data_nascimento ?? null,
+      dados.genero ?? "nao_informado",
       dados.retrato,
       dados.contexto,
     ]
@@ -335,6 +462,9 @@ export async function buscarParaAtualizar(
     nome_completo: string;
     tipo_vinculo: TipoVinculo;
     status: StatusColaborador;
+    data_admissao: string;
+    data_nascimento: string | null;
+    genero: Genero;
     data_desligamento: string | null;
     retrato: string | null;
     contexto: string | null;
@@ -342,6 +472,8 @@ export async function buscarParaAtualizar(
   }>(
     `SELECT c.id, c.usuario_id, c.matricula, c.nome_completo, c.tipo_vinculo,
             c.status, c.data_desligamento::text AS data_desligamento,
+            c.data_admissao::text AS data_admissao,
+            c.data_nascimento::text AS data_nascimento, c.genero,
             c.retrato, c.contexto, u.ativo AS usuario_ativo
        FROM rh.colaborador c
        JOIN sistema.usuario u ON u.id = c.usuario_id
@@ -365,6 +497,8 @@ const COLUNAS_ATUALIZAVEIS: Record<keyof CamposColaborador, string> = {
   tipo_vinculo: "tipo_vinculo",
   status: "status",
   data_desligamento: "data_desligamento",
+  data_nascimento: "data_nascimento",
+  genero: "genero",
 };
 
 export async function atualizar(
@@ -1058,6 +1192,15 @@ export interface CargoResumo {
   faixa_min: number | null;
   faixa_max: number | null;
   faixa_inicio_vigencia: string | null;
+  // RCF da versão ativa (a tela de cargos edita e imprime o documento inteiro).
+  setor: string | null;
+  cargo_lider_id: number | null;
+  cargo_lider_nome: string | null;
+  tipo_contrato_previsto: TipoVinculo | null;
+  missao: string | null;
+  atividades: string[] | null;
+  observacoes: string | null;
+  ocupantes: number;
 }
 
 export async function listarCargos(): Promise<CargoResumo[]> {
@@ -1071,16 +1214,42 @@ export async function listarCargos(): Promise<CargoResumo[]> {
     faixa_min: string | null;
     faixa_max: string | null;
     faixa_inicio_vigencia: string | null;
+    setor: string | null;
+    cargo_lider_id: string | null;
+    cargo_lider_nome: string | null;
+    tipo_contrato_previsto: TipoVinculo | null;
+    missao: string | null;
+    atividades: string[] | null;
+    observacoes: string | null;
+    ocupantes: string;
   }>(
     `SELECT cg.id, cv.id AS versao_id, cv.nome, cv.descricao, cv.cha,
             cv.inicio_vigencia::text AS inicio_vigencia,
+            cv.setor, cv.cargo_lider_id, cv.tipo_contrato_previsto,
+            cv.missao, cv.atividades, cv.observacoes,
+            lider.nome AS cargo_lider_nome,
             ts.faixa_min::text AS faixa_min, ts.faixa_max::text AS faixa_max,
-            ts.inicio_vigencia::text AS faixa_inicio_vigencia
+            ts.inicio_vigencia::text AS faixa_inicio_vigencia,
+            COALESCE(ocup.ocupantes, 0) AS ocupantes
        FROM rh.cargo cg
        LEFT JOIN rh.cargo_versao cv
          ON cv.cargo_id = cg.id AND cv.status = 'ativa'
        LEFT JOIN rh.tabela_salarial_versao ts
          ON ts.cargo_id = cg.id AND ts.status = 'ativa'
+       LEFT JOIN LATERAL (
+         SELECT cl.nome
+           FROM rh.cargo_versao cl
+          WHERE cl.cargo_id = cv.cargo_lider_id AND cl.status = 'ativa'
+       ) lider ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT count(*) AS ocupantes
+           FROM rh.posicao_colaborador p
+           JOIN rh.cargo_versao pv ON pv.id = p.cargo_versao_id
+           JOIN rh.colaborador oc ON oc.id = p.colaborador_id
+          WHERE pv.cargo_id = cg.id
+            AND p.fim_vigencia IS NULL
+            AND oc.status <> 'desligado'
+       ) ocup ON TRUE
       ORDER BY cv.nome NULLS LAST, cg.id`
   );
   return linhas.map((linha) => ({
@@ -1089,6 +1258,9 @@ export async function listarCargos(): Promise<CargoResumo[]> {
     versao_id: linha.versao_id === null ? null : Number(linha.versao_id),
     faixa_min: linha.faixa_min === null ? null : Number(linha.faixa_min),
     faixa_max: linha.faixa_max === null ? null : Number(linha.faixa_max),
+    cargo_lider_id:
+      linha.cargo_lider_id === null ? null : Number(linha.cargo_lider_id),
+    ocupantes: Number(linha.ocupantes),
   }));
 }
 
@@ -1099,6 +1271,12 @@ export interface CargoVersaoAtiva {
   descricao: string | null;
   cha: Cha;
   inicio_vigencia: string;
+  setor: string | null;
+  cargo_lider_id: number | null;
+  tipo_contrato_previsto: TipoVinculo | null;
+  missao: string | null;
+  atividades: string[];
+  observacoes: string | null;
 }
 
 export async function buscarCargoVersaoAtiva(
@@ -1113,11 +1291,17 @@ export async function buscarCargoVersaoAtiva(
     descricao: string | null;
     cha: Cha;
     inicio_vigencia: string;
+    setor: string | null;
+    cargo_lider_id: string | null;
+    tipo_contrato_previsto: TipoVinculo | null;
+    missao: string | null;
+    atividades: string[];
+    observacoes: string | null;
   }>(
-    `SELECT id, cargo_id, nome, descricao, cha,
-            inicio_vigencia::text AS inicio_vigencia
-       FROM rh.cargo_versao
-      WHERE cargo_id = $1 AND status = 'ativa'
+    `SELECT cv.id, cv.cargo_id, cv.nome, cv.descricao, cv.cha,
+            cv.inicio_vigencia::text AS inicio_vigencia, ${COLUNAS_RCF}
+       FROM rh.cargo_versao cv
+      WHERE cv.cargo_id = $1 AND cv.status = 'ativa'
       ${travar ? "FOR UPDATE" : ""}`,
     [cargoId]
   );
@@ -1126,6 +1310,8 @@ export async function buscarCargoVersaoAtiva(
     ...rows[0],
     id: Number(rows[0].id),
     cargo_id: Number(rows[0].cargo_id),
+    cargo_lider_id:
+      rows[0].cargo_lider_id === null ? null : Number(rows[0].cargo_lider_id),
   };
 }
 
@@ -1168,11 +1354,19 @@ export async function inserirVersaoCargo(
     descricao: string | null;
     cha: Cha;
     inicio_vigencia: string;
+    setor: string | null;
+    cargo_lider_id: number | null;
+    tipo_contrato_previsto: TipoVinculo | null;
+    missao: string | null;
+    atividades: string[];
+    observacoes: string | null;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
-    `INSERT INTO rh.cargo_versao (cargo_id, nome, descricao, cha, status, inicio_vigencia)
-     VALUES ($1, $2, $3, $4, 'ativa', $5)
+    `INSERT INTO rh.cargo_versao
+       (cargo_id, nome, descricao, cha, status, inicio_vigencia,
+        setor, cargo_lider_id, tipo_contrato_previsto, missao, atividades, observacoes)
+     VALUES ($1, $2, $3, $4, 'ativa', $5, $6, $7, $8, $9, $10, $11)
      RETURNING id`,
     [
       dados.cargo_id,
@@ -1180,6 +1374,12 @@ export async function inserirVersaoCargo(
       dados.descricao,
       JSON.stringify(dados.cha),
       dados.inicio_vigencia,
+      dados.setor,
+      dados.cargo_lider_id,
+      dados.tipo_contrato_previsto,
+      dados.missao,
+      JSON.stringify(dados.atividades),
+      dados.observacoes,
     ]
   );
   return Number(rows[0].id);
@@ -1376,4 +1576,309 @@ export async function inserirVersaoEstabelecimento(
     ]
   );
   return Number(rows[0].id);
+}
+
+// ------------------------------------------------------------------ relatórios (chave relatorio.ver)
+// Regras destas consultas:
+//  • "quadro" = colaborador com status <> 'desligado' (ativo ou afastado);
+//  • nenhuma usa o escopo de gestor: relatório é leitura transversal e quem
+//    autoriza é relatorio.ver (nunca rh.colaborador.ver);
+//  • agregado é agregado — nada de linha por pessoa, exceto a lista de
+//    aniversariantes, que é nominal por natureza (e por isso NÃO devolve o ano
+//    de nascimento: idade não é necessária para desejar feliz aniversário).
+
+const CONDICAO_QUADRO = "c.status <> 'desligado'";
+
+export interface Aniversariante {
+  id: number;
+  nome_completo: string;
+  dia: number;
+  unidade: string | null;
+  cargo_nome: string | null;
+}
+
+export async function listarAniversariantes(
+  mes: number,
+  estabelecimentoId?: number
+): Promise<Aniversariante[]> {
+  const parametros: unknown[] = [mes];
+  let filtroUnidade = "";
+  if (estabelecimentoId !== undefined) {
+    parametros.push(estabelecimentoId);
+    filtroUnidade = `AND lot.estabelecimento_id = $${parametros.length}`;
+  }
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    dia: string;
+    unidade: string | null;
+    cargo_nome: string | null;
+  }>(
+    `SELECT c.id, c.nome_completo,
+            date_part('day', c.data_nascimento)::int::text AS dia,
+            lot.unidade, pos.cargo_nome
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+         SELECT cv.nome AS cargo_nome
+           FROM rh.posicao_colaborador p
+           JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
+          WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
+       ) pos ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT l.estabelecimento_id, ev.unidade
+           FROM rh.lotacao l
+           LEFT JOIN rh.estabelecimento_versao ev
+             ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
+          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+       ) lot ON TRUE
+      WHERE ${CONDICAO_QUADRO}
+        AND c.data_nascimento IS NOT NULL
+        AND date_part('month', c.data_nascimento) = $1
+        ${filtroUnidade}
+      ORDER BY date_part('day', c.data_nascimento), c.nome_completo`,
+    parametros
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    dia: Number(linha.dia),
+  }));
+}
+
+/**
+ * Unidades com gente no quadro — alimenta o filtro do relatório sem obrigar o
+ * usuário a ter rh.estabelecimento.administrar (que é chave de cadastro, do DP).
+ */
+export async function listarUnidadesDoQuadro(): Promise<
+  { estabelecimento_id: number; unidade: string }[]
+> {
+  const linhas = await consultar<{
+    estabelecimento_id: string;
+    unidade: string;
+  }>(
+    `SELECT DISTINCT l.estabelecimento_id, ev.unidade
+       FROM rh.lotacao l
+       JOIN rh.colaborador c ON c.id = l.colaborador_id
+       JOIN rh.estabelecimento_versao ev
+         ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
+      WHERE l.fim_vigencia IS NULL AND ${CONDICAO_QUADRO}
+      ORDER BY ev.unidade`
+  );
+  return linhas.map((linha) => ({
+    estabelecimento_id: Number(linha.estabelecimento_id),
+    unidade: linha.unidade,
+  }));
+}
+
+/** Honestidade do relatório: quantas fichas do quadro ainda não têm a data. */
+export async function contarCoberturaNascimento(): Promise<{
+  com_data: number;
+  sem_data: number;
+}> {
+  const linhas = await consultar<{ com_data: string; sem_data: string }>(
+    `SELECT count(*) FILTER (WHERE c.data_nascimento IS NOT NULL)::text AS com_data,
+            count(*) FILTER (WHERE c.data_nascimento IS NULL)::text     AS sem_data
+       FROM rh.colaborador c
+      WHERE ${CONDICAO_QUADRO}`
+  );
+  return {
+    com_data: Number(linhas[0].com_data),
+    sem_data: Number(linhas[0].sem_data),
+  };
+}
+
+export async function contarPorGenero(): Promise<
+  { genero: Genero; quantidade: number }[]
+> {
+  const linhas = await consultar<{ genero: Genero; quantidade: string }>(
+    `SELECT c.genero, count(*)::text AS quantidade
+       FROM rh.colaborador c
+      WHERE ${CONDICAO_QUADRO}
+      GROUP BY c.genero`
+  );
+  const porGenero = new Map(
+    linhas.map((linha) => [linha.genero, Number(linha.quantidade)])
+  );
+  return GENEROS.map((genero) => ({
+    genero,
+    quantidade: porGenero.get(genero) ?? 0,
+  }));
+}
+
+/**
+ * Contagem por idade EXATA em anos completos (já agregado). O agrupamento em
+ * faixas acontece no serviço, com a definição única de FAIXAS_IDADE — a faixa
+ * fica sendo regra de produto num lugar só, e não SQL montado por concatenação.
+ */
+export async function contarPorIdade(): Promise<
+  { idade: number; quantidade: number }[]
+> {
+  const linhas = await consultar<{ idade: string; quantidade: string }>(
+    `SELECT date_part('year', age((now() AT TIME ZONE 'America/Sao_Paulo')::date,
+                                 c.data_nascimento))::int::text AS idade,
+            count(*)::text AS quantidade
+       FROM rh.colaborador c
+      WHERE ${CONDICAO_QUADRO} AND c.data_nascimento IS NOT NULL
+      GROUP BY 1`
+  );
+  return linhas.map((linha) => ({
+    idade: Number(linha.idade),
+    quantidade: Number(linha.quantidade),
+  }));
+}
+
+export interface ComposicaoFamiliarBruta {
+  com_filho_feminino: number;
+  com_filho_masculino: number;
+  com_filho_outro_ou_nao_informado: number;
+  com_conjuge: number;
+  total_filhos: number;
+  total_criancas: number;
+  total_dependentes: number;
+}
+
+/**
+ * Composição familiar a partir de rh.dependente — que é cadastro de BENEFÍCIO,
+ * não censo familiar: quem não aderiu a plano pode ter filho e não aparecer
+ * aqui. A tela diz isso ao usuário em vez de fingir cobertura total.
+ * Dado de terceiro (LGPD): só contagem sai daqui, nunca nome de dependente.
+ */
+export async function agregarComposicaoFamiliar(
+  idadeLimiteCrianca: number
+): Promise<ComposicaoFamiliarBruta> {
+  const linhas = await consultar<Record<string, string>>(
+    `WITH quadro AS (
+       SELECT c.id, c.genero
+         FROM rh.colaborador c
+        WHERE ${CONDICAO_QUADRO}
+     ), filhos AS (
+       SELECT d.colaborador_id, d.nascimento
+         FROM rh.dependente d
+         JOIN quadro q ON q.id = d.colaborador_id
+        WHERE d.parentesco = 'filho'
+     )
+     SELECT
+       (SELECT count(DISTINCT f.colaborador_id)
+          FROM filhos f JOIN quadro q ON q.id = f.colaborador_id
+         WHERE q.genero = 'feminino')::text  AS com_filho_feminino,
+       (SELECT count(DISTINCT f.colaborador_id)
+          FROM filhos f JOIN quadro q ON q.id = f.colaborador_id
+         WHERE q.genero = 'masculino')::text AS com_filho_masculino,
+       (SELECT count(DISTINCT f.colaborador_id)
+          FROM filhos f JOIN quadro q ON q.id = f.colaborador_id
+         WHERE q.genero IN ('outro','nao_informado'))::text
+         AS com_filho_outro_ou_nao_informado,
+       (SELECT count(DISTINCT d.colaborador_id)
+          FROM rh.dependente d JOIN quadro q ON q.id = d.colaborador_id
+         WHERE d.parentesco = 'conjuge')::text AS com_conjuge,
+       (SELECT count(*) FROM filhos)::text AS total_filhos,
+       (SELECT count(*) FROM filhos f
+         WHERE date_part('year', age((now() AT TIME ZONE 'America/Sao_Paulo')::date,
+                                     f.nascimento)) <= $1)::text AS total_criancas,
+       (SELECT count(*) FROM rh.dependente d
+          JOIN quadro q ON q.id = d.colaborador_id)::text AS total_dependentes`,
+    [idadeLimiteCrianca]
+  );
+  const linha = linhas[0];
+  return {
+    com_filho_feminino: Number(linha.com_filho_feminino),
+    com_filho_masculino: Number(linha.com_filho_masculino),
+    com_filho_outro_ou_nao_informado: Number(
+      linha.com_filho_outro_ou_nao_informado
+    ),
+    com_conjuge: Number(linha.com_conjuge),
+    total_filhos: Number(linha.total_filhos),
+    total_criancas: Number(linha.total_criancas),
+    total_dependentes: Number(linha.total_dependentes),
+  };
+}
+
+export interface LinhaHeadcount {
+  rotulo: string;
+  quantidade: number;
+}
+
+export async function contarHeadcountPorUnidade(): Promise<LinhaHeadcount[]> {
+  const linhas = await consultar<{ rotulo: string; quantidade: string }>(
+    `SELECT COALESCE(lot.unidade, 'Sem lotação vigente') AS rotulo,
+            count(*)::text AS quantidade
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+         SELECT ev.unidade
+           FROM rh.lotacao l
+           LEFT JOIN rh.estabelecimento_versao ev
+             ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
+          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+       ) lot ON TRUE
+      WHERE ${CONDICAO_QUADRO}
+      GROUP BY 1
+      ORDER BY count(*) DESC, 1`
+  );
+  return linhas.map((linha) => ({
+    rotulo: linha.rotulo,
+    quantidade: Number(linha.quantidade),
+  }));
+}
+
+export async function contarHeadcountPorCargo(): Promise<LinhaHeadcount[]> {
+  const linhas = await consultar<{ rotulo: string; quantidade: string }>(
+    `SELECT COALESCE(pos.cargo_nome, 'Sem posição vigente') AS rotulo,
+            count(*)::text AS quantidade
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+         SELECT cv.nome AS cargo_nome
+           FROM rh.posicao_colaborador p
+           JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
+          WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
+       ) pos ON TRUE
+      WHERE ${CONDICAO_QUADRO}
+      GROUP BY 1
+      ORDER BY count(*) DESC, 1`
+  );
+  return linhas.map((linha) => ({
+    rotulo: linha.rotulo,
+    quantidade: Number(linha.quantidade),
+  }));
+}
+
+export async function contarHeadcountPorVinculo(): Promise<
+  { tipo_vinculo: TipoVinculo; quantidade: number }[]
+> {
+  const linhas = await consultar<{
+    tipo_vinculo: TipoVinculo;
+    quantidade: string;
+  }>(
+    `SELECT c.tipo_vinculo, count(*)::text AS quantidade
+       FROM rh.colaborador c
+      WHERE ${CONDICAO_QUADRO}
+      GROUP BY 1
+      ORDER BY count(*) DESC`
+  );
+  return linhas.map((linha) => ({
+    tipo_vinculo: linha.tipo_vinculo,
+    quantidade: Number(linha.quantidade),
+  }));
+}
+
+export async function contarQuadro(): Promise<{
+  total: number;
+  ativos: number;
+  afastados: number;
+}> {
+  const linhas = await consultar<{
+    total: string;
+    ativos: string;
+    afastados: string;
+  }>(
+    `SELECT count(*)::text AS total,
+            count(*) FILTER (WHERE c.status = 'ativo')::text    AS ativos,
+            count(*) FILTER (WHERE c.status = 'afastado')::text AS afastados
+       FROM rh.colaborador c
+      WHERE ${CONDICAO_QUADRO}`
+  );
+  return {
+    total: Number(linhas[0].total),
+    ativos: Number(linhas[0].ativos),
+    afastados: Number(linhas[0].afastados),
+  };
 }

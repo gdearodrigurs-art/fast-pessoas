@@ -28,6 +28,27 @@ export const ROTULOS_STATUS: Record<StatusColaborador, string> = {
   desligado: "Desligado",
 };
 
+// Gênero é AUTODECLARADO. LGPD (migration 0020): entra em relatório AGREGADO
+// com supressão de recorte pequeno e nunca sai do backend em payload
+// individual — nem na ficha, nem em listagem, nem como filtro de busca.
+// Consequência de desenho: o formulário de edição é "cego" (grava o que a
+// pessoa declarou sem exibir o valor guardado).
+export const GENEROS = [
+  "feminino",
+  "masculino",
+  "outro",
+  "nao_informado",
+] as const;
+
+export type Genero = (typeof GENEROS)[number];
+
+export const ROTULOS_GENERO: Record<Genero, string> = {
+  feminino: "Feminino",
+  masculino: "Masculino",
+  outro: "Outro",
+  nao_informado: "Não informado",
+};
+
 export function cpfValido(cpf: string): boolean {
   if (!/^\d{11}$/.test(cpf) || /^(\d)\1{10}$/.test(cpf)) return false;
   for (const tamanho of [9, 10]) {
@@ -56,19 +77,33 @@ const esquemaCpf = z
   })
   .refine(cpfValido, { message: "CPF inválido" });
 
-export const esquemaCriacaoColaborador = z.object({
-  email: z.email("E-mail inválido").max(254),
-  matricula: z
-    .string()
-    .trim()
-    .regex(/^\d{1,10}$/, "Matrícula deve conter apenas números"),
-  cpf: esquemaCpf,
-  nome_completo: z.string().trim().min(3, "Informe o nome completo").max(200),
-  tipo_vinculo: z.enum(TIPOS_VINCULO),
-  data_admissao: esquemaData,
-  retrato: z.string().trim().max(2000).optional(),
-  contexto: z.string().trim().max(4000).optional(),
-});
+export const esquemaCriacaoColaborador = z
+  .object({
+    email: z.email("E-mail inválido").max(254),
+    matricula: z
+      .string()
+      .trim()
+      .regex(/^\d{1,10}$/, "Matrícula deve conter apenas números"),
+    cpf: esquemaCpf,
+    nome_completo: z.string().trim().min(3, "Informe o nome completo").max(200),
+    tipo_vinculo: z.enum(TIPOS_VINCULO),
+    data_admissao: esquemaData,
+    // Obrigatória para NOVOS (a coluna é nullable por causa do legado do
+    // Nasajon — ver a decisão documentada na migration 0020).
+    data_nascimento: esquemaData,
+    genero: z.enum(GENEROS).optional().default("nao_informado"),
+    retrato: z.string().trim().max(2000).optional(),
+    contexto: z.string().trim().max(4000).optional(),
+  })
+  .superRefine((dados, contexto) => {
+    if (dados.data_nascimento >= dados.data_admissao) {
+      contexto.addIssue({
+        code: "custom",
+        path: ["data_nascimento"],
+        message: "Data de nascimento deve ser anterior à admissão",
+      });
+    }
+  });
 
 export type CriacaoColaborador = z.infer<typeof esquemaCriacaoColaborador>;
 
@@ -85,6 +120,8 @@ export const esquemaAtualizacaoColaborador = z
     tipo_vinculo: z.enum(TIPOS_VINCULO).optional(),
     status: z.enum(STATUS_COLABORADOR).optional(),
     data_desligamento: esquemaData.optional(),
+    data_nascimento: esquemaData.optional(),
+    genero: z.enum(GENEROS).optional(),
   })
   .superRefine((dados, contexto) => {
     if (Object.values(dados).every((valor) => valor === undefined)) {
@@ -248,7 +285,11 @@ export const esquemaDefinicaoLotacao = z.object({
 
 export type DefinicaoLotacao = z.infer<typeof esquemaDefinicaoLotacao>;
 
-// ------------------------------------------------------------------ cargo + versões + faixa salarial
+// ------------------------------------------------------------------ cargo + RCF + faixa salarial
+// RCF = Responsabilidade Chave da Função, o descritivo de cargo oficial da Fast
+// (referencias/rcf-modelo-descritivo-de-cargos.md). Ordem do documento:
+// Cargo · Setor · Líder Direto · Tipo de contrato · Missão · Atividades ·
+// CHA em três colunas · Observações. O CHA é uma PARTE do RCF, não o todo.
 
 export const esquemaCha = z.object({
   conhecimentos: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
@@ -258,10 +299,22 @@ export const esquemaCha = z.object({
 
 export type Cha = z.infer<typeof esquemaCha>;
 
+/** Lista ORDENADA — a ordem das atividades é informação no documento. */
+export const esquemaAtividades = z
+  .array(z.string().trim().min(1).max(300))
+  .max(60, "Máximo de 60 atividades");
+
 const camposVersaoCargo = {
   nome: z.string().trim().min(2, "Informe o nome do cargo").max(120),
-  descricao: z.string().trim().max(4000).optional(),
+  setor: z.string().trim().max(120).optional(),
+  /** Cargo do "Líder Direto" do documento — estrutura, não pessoa. */
+  cargo_lider_id: z.number().int().positive().nullable().optional(),
+  tipo_contrato_previsto: z.enum(TIPOS_VINCULO).optional(),
+  missao: z.string().trim().max(4000).optional(),
+  atividades: esquemaAtividades.optional(),
   cha: esquemaCha.optional(),
+  observacoes: z.string().trim().max(4000).optional(),
+  descricao: z.string().trim().max(4000).optional(),
   inicio_vigencia: esquemaData,
 };
 
@@ -344,4 +397,36 @@ export const esquemaNovaVersaoEstabelecimento = z.object(
 
 export type NovaVersaoEstabelecimento = z.infer<
   typeof esquemaNovaVersaoEstabelecimento
+>;
+
+// ------------------------------------------------------------------ relatórios (chave relatorio.ver)
+
+/**
+ * Piso de anonimato dos recortes que cruzam dado autodeclarado ou de terceiro
+ * (gênero, faixa de idade, composição familiar): recorte com menos que isto é
+ * SUPRIMIDO — devolvemos null em vez do número, porque num quadro de 68 pessoas
+ * "1 pessoa de gênero outro na Loja Centro" identifica alguém.
+ */
+export const MINIMO_POR_RECORTE = 5;
+
+export const FAIXAS_IDADE = [
+  { chave: "ate_24", rotulo: "Até 24 anos", min: 0, max: 24 },
+  { chave: "25_34", rotulo: "25 a 34 anos", min: 25, max: 34 },
+  { chave: "35_44", rotulo: "35 a 44 anos", min: 35, max: 44 },
+  { chave: "45_54", rotulo: "45 a 54 anos", min: 45, max: 54 },
+  { chave: "55_mais", rotulo: "55 anos ou mais", min: 55, max: 200 },
+] as const;
+
+export type FaixaIdade = (typeof FAIXAS_IDADE)[number]["chave"];
+
+/** Idade em que a criança deixa de contar como "criança" no relatório. */
+export const IDADE_LIMITE_CRIANCA = 12;
+
+export const esquemaFiltroAniversariantes = z.object({
+  mes: z.coerce.number().int().min(1).max(12).optional(),
+  estabelecimento_id: z.coerce.number().int().positive().optional(),
+});
+
+export type FiltroAniversariantes = z.infer<
+  typeof esquemaFiltroAniversariantes
 >;

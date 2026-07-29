@@ -10,6 +10,7 @@ import {
   AtualizacaoAcao,
   AtualizacaoColaborador,
   CADENCIA_FEEDBACK_DIAS,
+  Cha,
   CriacaoAcao,
   CriacaoCargo,
   CriacaoColaborador,
@@ -23,19 +24,36 @@ import {
   NovaFaixaSalarial,
   NovaVersaoCargo,
   NovaVersaoEstabelecimento,
+  FAIXAS_IDADE,
+  FiltroAniversariantes,
+  Genero,
+  IDADE_LIMITE_CRIANCA,
+  MINIMO_POR_RECORTE,
+  ROTULOS_GENERO,
   ROTULOS_MOTIVO_POSICAO,
   ROTULOS_OCORRENCIA,
   ROTULOS_STATUS,
   ROTULOS_STATUS_ACAO,
   ROTULOS_VINCULO,
+  TipoVinculo,
 } from "./esquemas";
 import {
   Acao,
+  agregarComposicaoFamiliar,
+  Aniversariante,
   atualizar,
   atualizarAcao,
   buscarAcaoParaAtualizar,
   buscarBasico,
   buscarCargoVersaoAtiva,
+  buscarRcfPorCargo,
+  contarCoberturaNascimento,
+  contarHeadcountPorCargo,
+  contarHeadcountPorUnidade,
+  contarHeadcountPorVinculo,
+  contarPorGenero,
+  contarPorIdade,
+  contarQuadro,
   buscarEstabelecimentoVersaoAtiva,
   buscarFaixaAtivaParaAtualizar,
   buscarFicha,
@@ -77,6 +95,7 @@ import {
   inserirVersaoEstabelecimento,
   listar,
   listarAcoes,
+  listarAniversariantes,
   listarCargos,
   listarEstabelecimentos,
   listarEventos,
@@ -85,10 +104,12 @@ import {
   listarOcorrencias,
   listarPosicoes,
   listarRelacoesGestor,
+  listarUnidadesDoQuadro,
   Lotacao,
   cadenciaFeedback,
   Ocorrencia,
   Posicao,
+  RcfCargo,
   registrarLeituraSensivel,
   RelacaoGestor,
   temPermissao,
@@ -250,6 +271,8 @@ export async function criarColaborador(
           nome_completo: dados.nome_completo,
           tipo_vinculo: dados.tipo_vinculo,
           data_admissao: dados.data_admissao,
+          data_nascimento: dados.data_nascimento,
+          genero: dados.genero,
           retrato: dados.retrato ?? null,
           contexto: dados.contexto ?? null,
         });
@@ -287,6 +310,17 @@ export async function criarColaborador(
           "Data de admissão": {
             de: null,
             para: formatarData(dados.data_admissao),
+          },
+          "Data de nascimento": {
+            de: null,
+            para: formatarData(dados.data_nascimento),
+          },
+          // Gênero entra na TRILHA (quem registrou o quê), nunca em payload de
+          // leitura individual — a trilha é justamente o controle de quem mexeu
+          // num dado autodeclarado.
+          "Gênero (autodeclarado)": {
+            de: null,
+            para: ROTULOS_GENERO[dados.genero],
           },
           Status: { de: null, para: ROTULOS_STATUS.ativo },
         };
@@ -344,6 +378,33 @@ export async function atualizarColaborador(
     if (dados.contexto !== undefined && dados.contexto !== atual.contexto) {
       campos.contexto = dados.contexto;
       diff.Contexto = { de: atual.contexto, para: dados.contexto };
+    }
+    if (
+      dados.data_nascimento !== undefined &&
+      dados.data_nascimento !== atual.data_nascimento
+    ) {
+      if (dados.data_nascimento >= atual.data_admissao) {
+        throw new ErroHttpCampo(
+          400,
+          "Data de nascimento deve ser anterior à admissão.",
+          "data_nascimento"
+        );
+      }
+      campos.data_nascimento = dados.data_nascimento;
+      diff["Data de nascimento"] = {
+        de: atual.data_nascimento ? formatarData(atual.data_nascimento) : null,
+        para: formatarData(dados.data_nascimento),
+      };
+    }
+    // Gênero é autodeclarado: gravamos o que a pessoa declarou sem devolver o
+    // valor atual em nenhum payload de leitura (o formulário é "cego"). A
+    // trilha registra a mudança — é lá que se audita quem tocou no campo.
+    if (dados.genero !== undefined && dados.genero !== atual.genero) {
+      campos.genero = dados.genero;
+      diff["Gênero (autodeclarado)"] = {
+        de: ROTULOS_GENERO[atual.genero],
+        para: ROTULOS_GENERO[dados.genero],
+      };
     }
     if (
       dados.tipo_vinculo !== undefined &&
@@ -1070,7 +1131,11 @@ export async function definirLotacao(
   });
 }
 
-// ------------------------------------------------------------------ cargos (rh.cargo.administrar)
+// ------------------------------------------------------------------ cargos + RCF (rh.cargo.administrar)
+// O RCF (Responsabilidade Chave da Função) é o descritivo de cargo oficial da
+// Fast e vive na VERSÃO do cargo: mudou a função, é versão nova com vigência —
+// a anterior é encerrada, nunca reescrita. Ver
+// referencias/rcf-modelo-descritivo-de-cargos.md.
 
 function chaCompleto(cha?: {
   conhecimentos?: string[];
@@ -1084,8 +1149,95 @@ function chaCompleto(cha?: {
   };
 }
 
+/** Campos do RCF na forma que o repositório grava (sem undefined). */
+function camposRcf(dados: {
+  setor?: string;
+  cargo_lider_id?: number | null;
+  tipo_contrato_previsto?: TipoVinculo;
+  missao?: string;
+  atividades?: string[];
+  observacoes?: string;
+}) {
+  return {
+    setor: dados.setor ?? null,
+    cargo_lider_id: dados.cargo_lider_id ?? null,
+    tipo_contrato_previsto: dados.tipo_contrato_previsto ?? null,
+    missao: dados.missao ?? null,
+    atividades: dados.atividades ?? [],
+    observacoes: dados.observacoes ?? null,
+  };
+}
+
+/** Diff legível do RCF para a trilha (audit.alteracao). */
+function diffRcf(
+  diff: Diff,
+  antes: {
+    setor: string | null;
+    tipo_contrato_previsto: TipoVinculo | null;
+    missao: string | null;
+    atividades: string[];
+    cha: Cha;
+    observacoes: string | null;
+  } | null,
+  depois: {
+    setor: string | null;
+    tipo_contrato_previsto: TipoVinculo | null;
+    missao: string | null;
+    atividades: string[];
+    cha: { conhecimentos: string[]; habilidades: string[]; atitudes: string[] };
+    observacoes: string | null;
+  }
+): void {
+  const lista = (itens?: string[]) =>
+    itens && itens.length > 0 ? truncar(itens.join("; "), 500) : null;
+  const contrato = (valor: TipoVinculo | null) =>
+    valor ? ROTULOS_VINCULO[valor] : null;
+
+  diff.Setor = { de: antes?.setor ?? null, para: depois.setor };
+  diff["Tipo de contrato previsto"] = {
+    de: contrato(antes?.tipo_contrato_previsto ?? null),
+    para: contrato(depois.tipo_contrato_previsto),
+  };
+  diff["Missão (RCF)"] = {
+    de: antes?.missao ? truncar(antes.missao, 500) : null,
+    para: depois.missao ? truncar(depois.missao, 500) : null,
+  };
+  diff.Atividades = {
+    de: lista(antes?.atividades),
+    para: lista(depois.atividades),
+  };
+  diff["CHA · Conhecimentos"] = {
+    de: lista(antes?.cha?.conhecimentos),
+    para: lista(depois.cha.conhecimentos),
+  };
+  diff["CHA · Habilidades"] = {
+    de: lista(antes?.cha?.habilidades),
+    para: lista(depois.cha.habilidades),
+  };
+  diff["CHA · Atitudes"] = {
+    de: lista(antes?.cha?.atitudes),
+    para: lista(depois.cha.atitudes),
+  };
+  diff["Observações"] = {
+    de: antes?.observacoes ? truncar(antes.observacoes, 500) : null,
+    para: depois.observacoes ? truncar(depois.observacoes, 500) : null,
+  };
+}
+
 export async function listarCargosAdministraveis(): Promise<CargoResumo[]> {
   return listarCargos();
+}
+
+/**
+ * RCF vigente de um cargo para a visualização imprimível. Não é dado sensível
+ * (documento de gestão) — a rota/página é que confere a chave de leitura.
+ */
+export async function obterRcfCargo(cargoId: number): Promise<RcfCargo> {
+  const rcf = await buscarRcfPorCargo(cargoId);
+  if (!rcf) {
+    throw new ErroHttp(404, "Cargo sem versão vigente.");
+  }
+  return rcf;
 }
 
 export async function criarCargo(
@@ -1094,12 +1246,24 @@ export async function criarCargo(
 ): Promise<void> {
   await comTransacao(sessao.usuario_id, async (cliente) => {
     const cargoId = await inserirCargo(cliente);
+    const rcf = camposRcf(dados);
+    if (rcf.cargo_lider_id !== null) {
+      if (!(await existeCargo(cliente, rcf.cargo_lider_id))) {
+        throw new ErroHttpCampo(
+          400,
+          "Cargo do líder direto inexistente.",
+          "cargo_lider_id"
+        );
+      }
+    }
+    const cha = chaCompleto(dados.cha);
     const versaoId = await inserirVersaoCargo(cliente, {
       cargo_id: cargoId,
       nome: dados.nome,
       descricao: dados.descricao ?? null,
-      cha: chaCompleto(dados.cha),
+      cha,
       inicio_vigencia: dados.inicio_vigencia,
+      ...rcf,
     });
     const diff: Diff = {
       Nome: { de: null, para: dados.nome },
@@ -1108,6 +1272,7 @@ export async function criarCargo(
     if (dados.descricao) {
       diff["Descrição"] = { de: null, para: truncar(dados.descricao, 500) };
     }
+    diffRcf(diff, null, { ...rcf, cha });
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
@@ -1163,30 +1328,51 @@ export async function criarVersaoCargo(
       }
       await encerrarVersaoCargo(cliente, ativa.id, dados.inicio_vigencia);
     }
+    const rcf = camposRcf(dados);
+    if (rcf.cargo_lider_id !== null) {
+      if (rcf.cargo_lider_id === cargoId) {
+        throw new ErroHttpCampo(
+          400,
+          "O cargo não pode ser líder direto de si mesmo.",
+          "cargo_lider_id"
+        );
+      }
+      if (!(await existeCargo(cliente, rcf.cargo_lider_id))) {
+        throw new ErroHttpCampo(
+          400,
+          "Cargo do líder direto inexistente.",
+          "cargo_lider_id"
+        );
+      }
+    }
+    const cha = chaCompleto(dados.cha);
     const versaoId = await inserirVersaoCargo(cliente, {
       cargo_id: cargoId,
       nome: dados.nome,
       descricao: dados.descricao ?? null,
-      cha: chaCompleto(dados.cha),
+      cha,
       inicio_vigencia: dados.inicio_vigencia,
+      ...rcf,
     });
+    const diff: Diff = {
+      Nome: { de: ativa?.nome ?? null, para: dados.nome },
+      "Descrição": {
+        de: ativa?.descricao ? truncar(ativa.descricao, 500) : null,
+        para: dados.descricao ? truncar(dados.descricao, 500) : null,
+      },
+      "Início da vigência": {
+        de: ativa ? formatarData(ativa.inicio_vigencia) : null,
+        para: formatarData(dados.inicio_vigencia),
+      },
+    };
+    diffRcf(diff, ativa, { ...rcf, cha });
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
       acao: "criacao",
       tabela: "rh.cargo_versao",
       registroId: String(versaoId),
-      diff: {
-        Nome: { de: ativa?.nome ?? null, para: dados.nome },
-        "Descrição": {
-          de: ativa?.descricao ? truncar(ativa.descricao, 500) : null,
-          para: dados.descricao ? truncar(dados.descricao, 500) : null,
-        },
-        "Início da vigência": {
-          de: ativa ? formatarData(ativa.inicio_vigencia) : null,
-          para: formatarData(dados.inicio_vigencia),
-        },
-      },
+      diff,
     });
   });
 }
@@ -1349,4 +1535,229 @@ export async function criarVersaoEstabelecimento(
       },
     });
   });
+}
+
+// ------------------------------------------------------------------ relatórios (relatorio.ver)
+// O que estes relatórios NÃO fazem, de propósito:
+//  • não devolvem linha por pessoa (exceto aniversariantes, que é lista nominal
+//    por natureza — e sem o ano de nascimento);
+//  • não cruzam gênero com unidade/cargo: num quadro de dezenas de pessoas o
+//    cruzamento identifica indivíduo, que é exatamente o que a LGPD proíbe
+//    fazer com dado autodeclarado;
+//  • não inventam número: tudo vem de contagem no banco e a lacuna de cadastro
+//    é reportada (`sem_data_nascimento`) em vez de virar zero silencioso.
+
+export interface RecorteAgregado {
+  chave: string;
+  rotulo: string;
+  /** null = recorte suprimido por ser pequeno demais para publicar. */
+  quantidade: number | null;
+  suprimido: boolean;
+}
+
+/**
+ * Supressão de recorte pequeno. Recorte com 1..MINIMO_POR_RECORTE-1 pessoas não
+ * é publicado. Guarda contra revelação por complemento: se sobrar UM único
+ * recorte suprimido, o menor recorte publicado também é suprimido — senão
+ * bastaria subtrair do total para reidentificar. Limitação conhecida: com uma
+ * base minúscula (um só recorte não vazio) nem isso protege; o relatório então
+ * mostra apenas o total, que já é informação pública de headcount.
+ */
+function suprimirRecortesPequenos(
+  recortes: { chave: string; rotulo: string; quantidade: number }[]
+): RecorteAgregado[] {
+  const suprimidos = new Set(
+    recortes
+      .filter(
+        (recorte) =>
+          recorte.quantidade > 0 && recorte.quantidade < MINIMO_POR_RECORTE
+      )
+      .map((recorte) => recorte.chave)
+  );
+  if (suprimidos.size === 1) {
+    const candidato = recortes
+      .filter(
+        (recorte) => recorte.quantidade > 0 && !suprimidos.has(recorte.chave)
+      )
+      .sort((a, b) => a.quantidade - b.quantidade)[0];
+    if (candidato) {
+      suprimidos.add(candidato.chave);
+    }
+  }
+  return recortes.map((recorte) => ({
+    chave: recorte.chave,
+    rotulo: recorte.rotulo,
+    quantidade: suprimidos.has(recorte.chave) ? null : recorte.quantidade,
+    suprimido: suprimidos.has(recorte.chave),
+  }));
+}
+
+export interface RelatorioAniversariantes {
+  mes: number;
+  estabelecimento_id: number | null;
+  aniversariantes: Aniversariante[];
+  unidades: { estabelecimento_id: number; unidade: string }[];
+  fichas_sem_data_nascimento: number;
+}
+
+export async function relatorioAniversariantes(
+  filtro: FiltroAniversariantes
+): Promise<RelatorioAniversariantes> {
+  // Mês padrão = mês corrente em São Paulo (o banco guarda UTC).
+  const mes =
+    filtro.mes ??
+    Number(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Sao_Paulo",
+        month: "numeric",
+      }).format(new Date())
+    );
+  const [aniversariantes, unidades, cobertura] = await Promise.all([
+    listarAniversariantes(mes, filtro.estabelecimento_id),
+    listarUnidadesDoQuadro(),
+    contarCoberturaNascimento(),
+  ]);
+  return {
+    mes,
+    estabelecimento_id: filtro.estabelecimento_id ?? null,
+    aniversariantes,
+    unidades,
+    fichas_sem_data_nascimento: cobertura.sem_data,
+  };
+}
+
+export interface RelatorioDiversidade {
+  total_quadro: number;
+  com_data_nascimento: number;
+  sem_data_nascimento: number;
+  minimo_por_recorte: number;
+  por_genero: RecorteAgregado[];
+  por_faixa_idade: RecorteAgregado[];
+}
+
+/**
+ * A leitura entra em audit.leitura_sensivel mesmo sendo agregada: é o relatório
+ * construído sobre gênero autodeclarado, e saber QUEM consulta a composição do
+ * quadro é parte do controle que justifica guardar o campo. Aniversariantes e
+ * headcount não geram trilha (não há dado de categoria especial neles).
+ */
+export async function relatorioDiversidade(
+  sessao: PayloadSessao
+): Promise<RelatorioDiversidade> {
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "relatorio.ver",
+    recurso: "relatorio.diversidade",
+    registroId: "agregado",
+  });
+  const [quadro, genero, idades, cobertura] = await Promise.all([
+    contarQuadro(),
+    contarPorGenero(),
+    contarPorIdade(),
+    contarCoberturaNascimento(),
+  ]);
+  const porFaixa = FAIXAS_IDADE.map((faixa) => ({
+    chave: faixa.chave,
+    rotulo: faixa.rotulo,
+    quantidade: idades
+      .filter((linha) => linha.idade >= faixa.min && linha.idade <= faixa.max)
+      .reduce((soma, linha) => soma + linha.quantidade, 0),
+  }));
+  return {
+    total_quadro: quadro.total,
+    com_data_nascimento: cobertura.com_data,
+    sem_data_nascimento: cobertura.sem_data,
+    minimo_por_recorte: MINIMO_POR_RECORTE,
+    por_genero: suprimirRecortesPequenos(
+      genero.map((linha) => ({
+        chave: linha.genero,
+        rotulo: ROTULOS_GENERO[linha.genero as Genero],
+        quantidade: linha.quantidade,
+      }))
+    ),
+    por_faixa_idade: suprimirRecortesPequenos(porFaixa),
+  };
+}
+
+export interface RelatorioComposicaoFamiliar {
+  total_quadro: number;
+  minimo_por_recorte: number;
+  idade_limite_crianca: number;
+  /** Recortes que cruzam gênero × ter filho — sujeitos à supressão. */
+  responsaveis_por_genero: RecorteAgregado[];
+  com_conjuge_cadastrado: number;
+  total_filhos: number;
+  total_criancas: number;
+  total_dependentes: number;
+}
+
+/** Dado de terceiro (dependentes): mesmo agregado, a leitura deixa trilha. */
+export async function relatorioComposicaoFamiliar(
+  sessao: PayloadSessao
+): Promise<RelatorioComposicaoFamiliar> {
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "relatorio.ver",
+    recurso: "relatorio.composicao_familiar",
+    registroId: "agregado",
+  });
+  const [quadro, bruto] = await Promise.all([
+    contarQuadro(),
+    agregarComposicaoFamiliar(IDADE_LIMITE_CRIANCA),
+  ]);
+  return {
+    total_quadro: quadro.total,
+    minimo_por_recorte: MINIMO_POR_RECORTE,
+    idade_limite_crianca: IDADE_LIMITE_CRIANCA,
+    responsaveis_por_genero: suprimirRecortesPequenos([
+      {
+        chave: "maes",
+        rotulo: "Mães (gênero feminino com filho cadastrado)",
+        quantidade: bruto.com_filho_feminino,
+      },
+      {
+        chave: "pais",
+        rotulo: "Pais (gênero masculino com filho cadastrado)",
+        quantidade: bruto.com_filho_masculino,
+      },
+      {
+        chave: "outros",
+        rotulo: "Outro/não informado com filho cadastrado",
+        quantidade: bruto.com_filho_outro_ou_nao_informado,
+      },
+    ]),
+    com_conjuge_cadastrado: bruto.com_conjuge,
+    total_filhos: bruto.total_filhos,
+    total_criancas: bruto.total_criancas,
+    total_dependentes: bruto.total_dependentes,
+  };
+}
+
+export interface RelatorioHeadcount {
+  total_quadro: number;
+  ativos: number;
+  afastados: number;
+  por_unidade: { rotulo: string; quantidade: number }[];
+  por_cargo: { rotulo: string; quantidade: number }[];
+  por_vinculo: { rotulo: string; quantidade: number }[];
+}
+
+export async function relatorioHeadcount(): Promise<RelatorioHeadcount> {
+  const [quadro, unidades, cargos, vinculos] = await Promise.all([
+    contarQuadro(),
+    contarHeadcountPorUnidade(),
+    contarHeadcountPorCargo(),
+    contarHeadcountPorVinculo(),
+  ]);
+  return {
+    total_quadro: quadro.total,
+    ativos: quadro.ativos,
+    afastados: quadro.afastados,
+    por_unidade: unidades,
+    por_cargo: cargos,
+    por_vinculo: vinculos.map((linha) => ({
+      rotulo: ROTULOS_VINCULO[linha.tipo_vinculo],
+      quantidade: linha.quantidade,
+    })),
+  };
 }

@@ -20,7 +20,24 @@ import {
   UsuarioIdentidade,
 } from "./repositorio";
 
-const PAPEIS_COM_2FA = new Set(["rh", "dp", "diretoria", "admin"]);
+// 2FA obrigatório para todo papel que vê dado de PESSOA além do próprio.
+// `recrutador` e `lider_td` entraram na migration 0019 e foram incluídos aqui:
+//  - recrutador  → dado pessoal de candidato (nome, contato, currículo) e
+//                  parecer de seleção, inclusive de reprovado (rs.parecer.ver);
+//  - lider_td    → ficha e headcount do quadro (rh.colaborador.ver) e resultado
+//                  consolidado de avaliação (avaliacao.resultado.ver, chave
+//                  restrita com trilha de leitura).
+// Conta comprometida em qualquer um dos dois = vazamento de dado de pessoas.
+// `funcionario` e `gestor` seguem fora: veem o próprio registro e o dos
+// liderados diretos, com 2FA opcional (decisão anterior do projeto, mantida).
+const PAPEIS_COM_2FA = new Set([
+  "rh",
+  "recrutador",
+  "lider_td",
+  "dp",
+  "diretoria",
+  "admin",
+]);
 
 // Hash sacrificial: iguala o tempo de resposta quando o e-mail não existe,
 // para não denunciar quais contas estão cadastradas.

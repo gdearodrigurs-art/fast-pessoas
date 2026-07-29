@@ -8,20 +8,28 @@ export default async function PaginaCargos() {
   if (!sessao) {
     redirect("/entrar");
   }
+  // Dois níveis (migration 0019): `administrar` cria versão e vê faixa salarial;
+  // `ver` só lê o descritivo/RCF (recrutador e líder de T&D — quem escreve a
+  // vaga precisa do RCF, não da remuneração). Flags só de renderização: a API
+  // reconfere a chave e a faixa não sai do backend para quem só lê.
   const linhas = await consultar<{
     pode_admin_cargo: boolean;
+    pode_ver_cargo: boolean;
     pode_admin_estabelecimento: boolean;
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.cargo.administrar') AS pode_admin_cargo,
+            sistema.tem_permissao($1, 'rh.cargo.ver')         AS pode_ver_cargo,
             sistema.tem_permissao($1, 'rh.estabelecimento.administrar') AS pode_admin_estabelecimento`,
     [sessao.usuario_id]
   );
-  if (!linhas[0]?.pode_admin_cargo) {
+  const pode = linhas[0];
+  if (!pode?.pode_admin_cargo && !pode?.pode_ver_cargo) {
     redirect("/");
   }
   return (
     <PainelCargos
-      podeAdminEstabelecimento={Boolean(linhas[0]?.pode_admin_estabelecimento)}
+      podeAdministrar={Boolean(pode?.pode_admin_cargo)}
+      podeAdminEstabelecimento={Boolean(pode?.pode_admin_estabelecimento)}
     />
   );
 }

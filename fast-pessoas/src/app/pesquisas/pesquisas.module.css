@@ -1,0 +1,479 @@
+/* Visual do módulo de pesquisa de clima — mesmo sistema dos outros módulos
+   (fundo #f7f6f4, cartão branco, primária #d21217). */
+
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1000px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.conteudo h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 0 0 28px;
+  color: #6b6763;
+}
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.cartao h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.cartao h3 {
+  margin: 18px 0 10px;
+  font-size: 14px;
+}
+
+.aviso {
+  border: 1px solid #e5b83a;
+  background: #fdf8ec;
+  color: #6d5410;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.avisoAnonimato {
+  border: 1px solid #bcd8c4;
+  background: #f1f8f3;
+  color: #22603a;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 0.88rem;
+}
+
+.vazio {
+  margin: 0;
+  color: #6b6763;
+  font-size: 0.9rem;
+}
+
+.erro {
+  font-size: 0.85rem;
+  color: #d21217;
+  margin-top: 10px;
+}
+
+.sucesso {
+  font-size: 0.85rem;
+  color: #1e7c3c;
+  margin-top: 10px;
+}
+
+/* --------------------------------------------------------- resumo em cartões */
+
+.grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.cartaoResumo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.resumoValor {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.resumoRotulo {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #6b6763;
+}
+
+.resumoDetalhe {
+  font-size: 0.8rem;
+  color: #6b6763;
+}
+
+/* O eNPS é o número que o RH procura primeiro — ganha destaque. */
+.cartaoEnps {
+  border: 2px solid #d21217;
+  background: #fff;
+}
+
+.enpsValor {
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.enpsPositivo {
+  color: #1e7c3c;
+}
+
+.enpsNegativo {
+  color: #d21217;
+}
+
+/* --------------------------------------------------------- formulários */
+
+.formulario {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.campoGrupo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 200px;
+}
+
+.campoGrupoLargo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 100%;
+}
+
+.rotulo {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.campo {
+  font-size: 0.95rem;
+  padding: 9px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.campo:focus {
+  outline: 2px solid #d21217;
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.campo:disabled {
+  background: #f4f2f0;
+  color: #9b9691;
+}
+
+.caixaSelecao {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  padding: 9px 0;
+}
+
+.ajuda {
+  font-size: 0.78rem;
+  color: #6b6763;
+}
+
+.botao {
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: #d21217;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.botao:hover:enabled {
+  background: #b30f13;
+}
+
+.botao:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.botaoDiscreto {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #d21217;
+  background: #fff;
+  border: 1px solid #d21217;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.botaoDiscreto:hover:enabled {
+  background: #fdf3f3;
+}
+
+.botaoDiscreto:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.acoesLinha {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* --------------------------------------------------------- tabelas */
+
+.tabelaEnvolucro {
+  overflow-x: auto;
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tabela th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #e3e0dc;
+  color: #6b6763;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabela td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0eeeb;
+  vertical-align: middle;
+}
+
+.numero {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tabela th.numero {
+  text-align: right;
+}
+
+.ligacao {
+  color: #d21217;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ligacao:hover {
+  text-decoration: underline;
+}
+
+/* --------------------------------------------------------- etiquetas */
+
+.etiqueta {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: #f4f2f0;
+  color: #6b6763;
+  border: 1px solid #d7d3ce;
+}
+
+.etiquetaAberta {
+  background: #eef7f0;
+  color: #1e7c3c;
+  border-color: #1e7c3c;
+}
+
+.etiquetaRascunho {
+  background: #fdf8ec;
+  color: #a8650a;
+  border-color: #e5b83a;
+}
+
+.etiquetaEncerrada {
+  background: #f4f2f0;
+  color: #6b6763;
+  border-color: #d7d3ce;
+}
+
+/* Recorte suprimido pelo k-anonimato: aparece como ausência declarada. */
+.suprimido {
+  font-size: 0.85rem;
+  color: #6b6763;
+  font-style: italic;
+}
+
+/* --------------------------------------------------------- questionário */
+
+.listaPerguntas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.itemPergunta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid #f0eeeb;
+  padding-bottom: 18px;
+}
+
+.itemPergunta:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.enunciado {
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.obrigatoria {
+  color: #d21217;
+  margin-left: 4px;
+}
+
+.escala {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.opcaoEscala {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 64px;
+  padding: 10px 8px;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #1c1b1a;
+}
+
+.opcaoEscala:hover {
+  border-color: #d21217;
+}
+
+.opcaoEscalaAtiva {
+  border-color: #d21217;
+  background: #fdf3f3;
+  font-weight: 700;
+}
+
+.opcaoNota {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.opcaoRotulo {
+  font-size: 0.72rem;
+  color: #6b6763;
+  text-align: center;
+}
+
+.opcoesLista {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opcaoRadio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92rem;
+}
+
+/* --------------------------------------------------------- resultado */
+
+.barraFundo {
+  height: 10px;
+  background: #f0eeeb;
+  border-radius: 5px;
+  overflow: hidden;
+  min-width: 120px;
+}
+
+.barra {
+  height: 100%;
+  background: #d21217;
+  border-radius: 5px;
+}
+
+.listaComentarios {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comentario {
+  background: #faf9f7;
+  border: 1px solid #f0eeeb;
+  border-left: 3px solid #d21217;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.notaRodape {
+  margin: 12px 0 0;
+  font-size: 0.78rem;
+  color: #6b6763;
+}
+
+.perguntaRascunho {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  border: 1px solid #f0eeeb;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: #faf9f7;
+}

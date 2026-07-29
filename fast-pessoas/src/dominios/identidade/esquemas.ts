@@ -1,9 +1,13 @@
 import { z } from "zod";
 
+// Ordem = do menor ao maior alcance; é a ordem exibida no seletor de /usuarios
+// e na tela /perfis. Espelha o CHECK de sistema.usuario.papel (migration 0019).
 export const PAPEIS = [
   "funcionario",
   "gestor",
   "rh",
+  "recrutador",
+  "lider_td",
   "dp",
   "diretoria",
   "admin",

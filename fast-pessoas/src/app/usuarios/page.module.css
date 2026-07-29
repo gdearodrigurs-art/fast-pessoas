@@ -66,6 +66,52 @@
   gap: 12px;
 }
 
+.campoGrupoLargo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 320px;
+}
+
+.ajudaPapel {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #6b6763;
+}
+
+.ajudaPapel a {
+  color: #d21217;
+  font-weight: 600;
+}
+
+.legendaPapeis {
+  margin-top: 14px;
+  font-size: 0.85rem;
+}
+
+.legendaPapeis summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #d21217;
+}
+
+.legendaPapeis dl {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.legendaPapeis dt {
+  font-weight: 600;
+}
+
+.legendaPapeis dd {
+  margin: 0;
+  color: #6b6763;
+  line-height: 1.4;
+}
+
 .campoGrupo {
   display: flex;
   flex-direction: column;

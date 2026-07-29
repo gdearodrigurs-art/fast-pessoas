@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import { PAPEIS, Papel } from "@/dominios/identidade/esquemas";
-import { ROTULOS_PAPEL } from "@/dominios/usuarios/esquemas";
+import { DESCRICOES_PAPEL, ROTULOS_PAPEL } from "@/dominios/usuarios/esquemas";
 import estilos from "./page.module.css";
 
 interface Usuario {
@@ -155,9 +155,9 @@ export function PainelUsuarios() {
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-            <div className={estilos.campoGrupo}>
+            <div className={estilos.campoGrupoLargo}>
               <label className={estilos.rotulo} htmlFor="papel">
-                Papel
+                Papel de acesso
               </label>
               <select
                 className={estilos.campo}
@@ -171,11 +171,30 @@ export function PainelUsuarios() {
                   </option>
                 ))}
               </select>
+              {/* O que o papel faz, em uma linha — a composição real de chaves
+                  é editável em /perfis e é ela que manda. */}
+              <p className={estilos.ajudaPapel}>{DESCRICOES_PAPEL[papel]}</p>
             </div>
             <button className={estilos.botao} type="submit" disabled={criando}>
               {criando ? "Criando…" : "Criar usuário"}
             </button>
           </form>
+          <details className={estilos.legendaPapeis}>
+            <summary>O que cada papel faz</summary>
+            <dl>
+              {PAPEIS.map((opcao) => (
+                <div key={opcao}>
+                  <dt>{ROTULOS_PAPEL[opcao]}</dt>
+                  <dd>{DESCRICOES_PAPEL[opcao]}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className={estilos.ajudaPapel}>
+              As frases acima descrevem a intenção de cada papel. O acesso real
+              é o conjunto de chaves de permissão do papel — visível e editável
+              em <a href="/perfis">Perfis de acesso</a> (só administrador).
+            </p>
+          </details>
           {erroCriacao && <p className={estilos.erro}>{erroCriacao}</p>}
           {senhaGerada && (
             <div className={estilos.avisoSenha}>

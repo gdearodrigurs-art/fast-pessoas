@@ -4,6 +4,9 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
+  GENEROS,
+  Genero,
+  ROTULOS_GENERO,
   ROTULOS_STATUS,
   ROTULOS_VINCULO,
   STATUS_COLABORADOR,
@@ -69,6 +72,8 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
     cpf: "",
     tipo_vinculo: "clt" as TipoVinculo,
     data_admissao: "",
+    data_nascimento: "",
+    genero: "nao_informado" as Genero,
     retrato: "",
     contexto: "",
   });
@@ -128,6 +133,8 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           cpf: novo.cpf,
           tipo_vinculo: novo.tipo_vinculo,
           data_admissao: novo.data_admissao,
+          data_nascimento: novo.data_nascimento,
+          genero: novo.genero,
           retrato: novo.retrato.trim() || undefined,
           contexto: novo.contexto.trim() || undefined,
         }),
@@ -147,6 +154,8 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           cpf: "",
           tipo_vinculo: "clt",
           data_admissao: "",
+          data_nascimento: "",
+          genero: "nao_informado",
           retrato: "",
           contexto: "",
         });
@@ -299,6 +308,48 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
                       }))
                     }
                   />
+                </div>
+                <div className={estilos.campoGrupo}>
+                  <label className={estilos.rotulo} htmlFor="novoNascimento">
+                    Data de nascimento
+                  </label>
+                  <input
+                    className={estilos.campo}
+                    id="novoNascimento"
+                    type="date"
+                    required
+                    value={novo.data_nascimento}
+                    onChange={(e) =>
+                      setNovo((atual) => ({
+                        ...atual,
+                        data_nascimento: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                {/* Autodeclarado: usado só em relatório agregado (diversidade),
+                    nunca exibido na ficha nem na listagem. */}
+                <div className={estilos.campoGrupo}>
+                  <label className={estilos.rotulo} htmlFor="novoGenero">
+                    Gênero (autodeclarado)
+                  </label>
+                  <select
+                    className={estilos.campo}
+                    id="novoGenero"
+                    value={novo.genero}
+                    onChange={(e) =>
+                      setNovo((atual) => ({
+                        ...atual,
+                        genero: e.target.value as Genero,
+                      }))
+                    }
+                  >
+                    {GENEROS.map((opcao) => (
+                      <option key={opcao} value={opcao}>
+                        {ROTULOS_GENERO[opcao]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className={estilos.campoGrupoLargo}>
                   <label className={estilos.rotulo} htmlFor="novoRetrato">

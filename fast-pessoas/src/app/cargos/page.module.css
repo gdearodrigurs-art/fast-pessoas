@@ -122,6 +122,7 @@
 }
 
 .botaoLinha {
+  display: inline-block;
   background: transparent;
   border: 1px solid #e3e0dc;
   border-radius: 6px;
@@ -129,6 +130,7 @@
   font: inherit;
   font-size: 0.85rem;
   color: #1c1b1a;
+  text-decoration: none;
   cursor: pointer;
 }
 
@@ -202,4 +204,77 @@
 .subFormulario h3 {
   margin: 0 0 10px;
   font-size: 14px;
+}
+
+/* ---------------------------------------------- RCF (descritivo de cargos) */
+
+.cartaoTopo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.cartaoTopo h2 {
+  margin: 0;
+}
+
+/* As três colunas do CHA como no documento oficial. */
+.chaGrade {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  flex: 1 1 100%;
+}
+
+@media (max-width: 720px) {
+  .chaGrade {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chaColuna {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chaDica {
+  font-weight: 400;
+  color: #6b6763;
+  font-size: 0.8rem;
+}
+
+.celulaNota {
+  color: #6b6763;
+  font-size: 0.85rem;
+}
+
+.numerico {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.acoesCelula {
+  white-space: nowrap;
+}
+
+.selo {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #e7f3e9;
+  color: #1a7f37;
+}
+
+.seloVazio {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  background: #f0eeeb;
+  color: #6b6763;
 }

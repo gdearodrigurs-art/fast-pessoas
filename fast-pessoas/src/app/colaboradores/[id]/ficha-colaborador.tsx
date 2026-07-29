@@ -4,8 +4,11 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cabecalho, acaoCabecalho } from "@/app/cabecalho";
 import {
+  GENEROS,
+  Genero,
   MOTIVOS_POSICAO,
   MotivoPosicao,
+  ROTULOS_GENERO,
   ROTULOS_MOTIVO_POSICAO,
   ROTULOS_OCORRENCIA,
   ROTULOS_STATUS,
@@ -22,6 +25,26 @@ import {
 import type { PermissoesFicha } from "./page";
 import estilos from "./page.module.css";
 
+/** RCF vigente do cargo da posição atual — documento de gestão, não sensível. */
+interface Rcf {
+  cargo_id: number;
+  versao_id: number;
+  nome: string;
+  setor: string | null;
+  cargo_lider_nome: string | null;
+  tipo_contrato_previsto: TipoVinculo | null;
+  missao: string | null;
+  atividades: string[];
+  cha: {
+    conhecimentos?: string[];
+    habilidades?: string[];
+    atitudes?: string[];
+  };
+  observacoes: string | null;
+  descricao: string | null;
+  inicio_vigencia: string;
+}
+
 interface Ficha {
   id: number;
   matricula: string;
@@ -31,6 +54,8 @@ interface Ficha {
   tipo_vinculo: TipoVinculo;
   status: StatusColaborador;
   data_admissao: string;
+  data_nascimento: string | null;
+  rcf: Rcf | null;
   data_desligamento: string | null;
   retrato: string | null;
   contexto: string | null;
@@ -265,6 +290,10 @@ export function FichaColaborador({
     tipo_vinculo: "clt" as TipoVinculo,
     status: "ativo" as StatusColaborador,
     data_desligamento: "",
+    data_nascimento: "",
+    // "" = não alterar. O valor guardado NUNCA vem no payload da ficha (LGPD:
+    // gênero autodeclarado só existe em agregado), então o campo é de escrita.
+    genero: "" as Genero | "",
     retrato: "",
     contexto: "",
   });
@@ -298,6 +327,8 @@ export function FichaColaborador({
         tipo_vinculo: dados.colaborador.tipo_vinculo,
         status: dados.colaborador.status,
         data_desligamento: dados.colaborador.data_desligamento ?? "",
+        data_nascimento: dados.colaborador.data_nascimento ?? "",
+        genero: "",
         retrato: dados.colaborador.retrato ?? "",
         contexto: dados.colaborador.contexto ?? "",
       });
@@ -534,6 +565,12 @@ export function FichaColaborador({
       };
       if (edicao.status === "desligado" && edicao.data_desligamento) {
         corpo.data_desligamento = edicao.data_desligamento;
+      }
+      if (edicao.data_nascimento) {
+        corpo.data_nascimento = edicao.data_nascimento;
+      }
+      if (edicao.genero !== "") {
+        corpo.genero = edicao.genero;
       }
       const resposta = await fetch(`/api/colaboradores/${colaboradorId}`, {
         method: "PATCH",
@@ -823,6 +860,14 @@ export function FichaColaborador({
                 <div className={estilos.val}>{formatarData(ficha.data_admissao)}</div>
               </div>
               <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Data de nascimento</div>
+                <div className={estilos.val}>
+                  {ficha.data_nascimento
+                    ? formatarData(ficha.data_nascimento)
+                    : "não cadastrada"}
+                </div>
+              </div>
+              <div className={estilos.campoDado}>
                 <div className={estilos.rot}>Status</div>
                 <div className={estilos.val}>
                   {ROTULOS_STATUS[ficha.status]}
@@ -864,6 +909,95 @@ export function FichaColaborador({
                     dado sensível · leitura gravada na trilha
                   </div>
                 </div>
+              )}
+            </div>
+
+            {/* RCF do cargo — pedido explícito da analista de RH. Vem da versão
+                VIGENTE do cargo da posição atual; documento de gestão (não é
+                dado sensível), visível a quem já vê a ficha. */}
+            <div className={estilos.cartao} style={{ marginTop: 16 }}>
+              <div className={estilos.rcfTopo}>
+                <h2>
+                  RCF do cargo
+                  {ficha.rcf ? ` — ${ficha.rcf.nome}` : ""}
+                </h2>
+                {ficha.rcf && (
+                  <Link
+                    className={estilos.botaoLinha}
+                    href={`/cargos/${ficha.rcf.cargo_id}/rcf`}
+                  >
+                    Abrir versão imprimível
+                  </Link>
+                )}
+              </div>
+              {!ficha.rcf ? (
+                <p className={estilos.vazio}>
+                  Sem RCF: esta pessoa não tem posição vigente ou o cargo não tem
+                  versão ativa.
+                </p>
+              ) : (
+                <>
+                  <p className={estilos.rcfMeta}>
+                    Responsabilidade Chave da Função · vigente desde{" "}
+                    {formatarData(ficha.rcf.inicio_vigencia)}
+                    {ficha.rcf.setor ? ` · setor ${ficha.rcf.setor}` : ""}
+                    {ficha.rcf.cargo_lider_nome
+                      ? ` · líder direto: ${ficha.rcf.cargo_lider_nome}`
+                      : ""}
+                    {ficha.rcf.tipo_contrato_previsto
+                      ? ` · contrato previsto: ${ROTULOS_VINCULO[ficha.rcf.tipo_contrato_previsto]}`
+                      : ""}
+                  </p>
+                  <h3 className={estilos.rcfTitulo}>Missão do cargo</h3>
+                  {ficha.rcf.missao ? (
+                    <p className={estilos.rcfTexto}>{ficha.rcf.missao}</p>
+                  ) : (
+                    <p className={estilos.vazio}>
+                      Missão ainda não preenchida pelo gestor.
+                    </p>
+                  )}
+                  {ficha.rcf.atividades.length > 0 && (
+                    <>
+                      <h3 className={estilos.rcfTitulo}>Atividades</h3>
+                      <ol className={estilos.rcfLista}>
+                        {ficha.rcf.atividades.map((atividade, indice) => (
+                          <li key={`${indice}-${atividade}`}>{atividade}</li>
+                        ))}
+                      </ol>
+                    </>
+                  )}
+                  <h3 className={estilos.rcfTitulo}>CHA</h3>
+                  <div className={estilos.rcfCha}>
+                    {(
+                      [
+                        ["Conhecimentos", ficha.rcf.cha.conhecimentos ?? []],
+                        ["Habilidades", ficha.rcf.cha.habilidades ?? []],
+                        ["Atitudes", ficha.rcf.cha.atitudes ?? []],
+                      ] as [string, string[]][]
+                    ).map(([titulo, itens]) => (
+                      <div key={titulo} className={estilos.rcfChaColuna}>
+                        <div className={estilos.rot}>{titulo}</div>
+                        {itens.length > 0 ? (
+                          <ul className={estilos.rcfLista}>
+                            {itens.map((item, indice) => (
+                              <li key={`${indice}-${item}`}>{item}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className={estilos.vazio}>—</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {ficha.rcf.observacoes && (
+                    <>
+                      <h3 className={estilos.rcfTitulo}>
+                        Observações importantes
+                      </h3>
+                      <p className={estilos.rcfTexto}>{ficha.rcf.observacoes}</p>
+                    </>
+                  )}
+                </>
               )}
             </div>
 
@@ -960,6 +1094,49 @@ export function FichaColaborador({
                         />
                       </div>
                     )}
+                    <div className={estilos.campoGrupo}>
+                      <label className={estilos.rotulo} htmlFor="edNascimento">
+                        Data de nascimento
+                      </label>
+                      <input
+                        className={estilos.campo}
+                        id="edNascimento"
+                        type="date"
+                        value={edicao.data_nascimento}
+                        onChange={(e) =>
+                          setEdicao((atual) => ({
+                            ...atual,
+                            data_nascimento: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    {/* Campo de ESCRITA: o valor guardado não é exibido em
+                        lugar nenhum da ficha (gênero autodeclarado só aparece
+                        em agregado, no relatório de diversidade). */}
+                    <div className={estilos.campoGrupo}>
+                      <label className={estilos.rotulo} htmlFor="edGenero">
+                        Gênero (autodeclarado)
+                      </label>
+                      <select
+                        className={estilos.campo}
+                        id="edGenero"
+                        value={edicao.genero}
+                        onChange={(e) =>
+                          setEdicao((atual) => ({
+                            ...atual,
+                            genero: e.target.value as Genero | "",
+                          }))
+                        }
+                      >
+                        <option value="">Não alterar</option>
+                        {GENEROS.map((opcao) => (
+                          <option key={opcao} value={opcao}>
+                            {ROTULOS_GENERO[opcao]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <div className={estilos.campoGrupoLargo}>
                       <label className={estilos.rotulo} htmlFor="edRetrato">
                         Retrato atual
