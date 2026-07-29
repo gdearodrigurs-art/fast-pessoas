@@ -248,6 +248,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #arquitetura #regra-negocio #validacao
 
+### [2026-07-29] Feedback da analista de RH — achado de segregação de acesso confirmado
+
+**Decisão:** Feedback analisado em docs/08-analise-feedback-analista-rh.md. Confirmado no banco o achado mais sério: o papel `rh` acumula as chaves de recrutamento (rs.*) E o histórico de DP (ficha, desligamentos, afastamentos, admissões, férias, ocorrências) — a analista afirma corretamente que quem recruta não deve ver histórico de DP. Nada implementado ainda; entra como prioridade 1 da próxima onda, se autorizada.
+
+**Motivo:** Modelamos 6 papéis fixos e o papel `rh` virou balaio. O mecanismo (permissão por chave no banco) está certo e suporta a correção sem refatoração — falta granularidade de papéis (`recrutador`, `lider_td`) e uma tela para o admin compor perfis sem migration.
+
+**Contexto:** Outros achados: (a) faltam `data_nascimento` e `genero` em rh.colaborador — travam os relatórios de aniversariantes e diversidade que ela pediu; (b) fluxo real não desenhado: promoção e transferência com aprovação em cadeia líder→diretoria e ciência automática de DP e T&D ("hoje ocorre de forma aleatória em canais diversos"); (c) ela confirma independentemente que o check-in diário NÃO substitui pesquisa estruturada/eNPS — o custo da decisão de 27/07 de simplificar o clima; (d) risco estratégico: ela pediu à TI para abrir o mesmo canal de solicitações dentro do SULTS — dois "canais únicos" em paralelo, precisa de decisão de fronteira; (e) termo "RCF do cargo/função" a esclarecer com ela (pode ser o nosso CHA com outro nome). Boa parte da lista de módulos dela já existe (ATS completo, alertas 45/90) ou é tela sobre dado existente (organograma).
+
+**Tags:** #arquitetura #regra-negocio #gap #validacao
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.
