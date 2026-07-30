@@ -296,6 +296,20 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #canonico #regra-negocio #modelo-de-dados
 
+### [2026-07-30] DECISÕES DO USUÁRIO — respostas às pendências do plano pós-reunião
+
+**Decisão:** (1) **Revisão de valor de benefício: o DP aprova.** (3) **Ficha completa só de gerente para cima** — não é a cadeia inteira nem o líder imediato: é um corte por NÍVEL hierárquico. (4) **Transferência entre CNPJs: o DP demite e recontrata na outra empresa** (S-2299 + S-2200 no eSocial), mas o sistema **não pode perder dados nem histórico da pessoa**. (5) **Ponto: prever importação de dados** enquanto o REP-P não é contratado. (6) **Banco de horas altamente parametrizável**: o DP configura, com padrões e **personalização por funcionário**.
+
+**Motivo:** Respostas do usuário às 6 pendências abertas em docs/10-plano-pos-reuniao-diretoria.md (item 2 segue em aberto — ele vai reler a transcrição da reunião).
+
+**Contexto — duas implicações estruturais que essas respostas criam:**
+
+(a) **Item 3 exige nível hierárquico no cargo.** Hoje o alcance é "gestor vê os liderados diretos" (via rh.relacao_gestor). "Gerente para cima" é outra régua: precisa de um **nível/senioridade no cargo** — que não existe. Consequência de comportamento a confirmar: um supervisor que lidera gente **deixaria de ver a ficha completa da própria equipe**, passando a ver só a ficha pública. É restrição, não ampliação — vale validar com o DP antes de aplicar.
+
+(b) **Item 4 força separar PESSOA de VÍNCULO.** Hoje `rh.colaborador` é as duas coisas ao mesmo tempo: quem a pessoa é (CPF, nascimento, dependentes) e o vínculo dela (matrícula, admissão, cargo, salário). Se o DP demite no CNPJ A e recontrata no B, no modelo atual isso vira **dois colaboradores** — e o histórico se parte, exatamente o que a diretora não quer. O desenho correto é **uma pessoa (CPF) com N vínculos**, cada vínculo com sua matrícula, admissão, rescisão e matrícula eSocial própria; a linha do tempo é da pessoa e atravessa os vínculos. É barato agora e caro depois — entra na Onda I.
+
+**Tags:** #canonico #modelo-de-dados #regra-negocio #gap
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.

@@ -223,16 +223,45 @@ Depende da Onda I (o centro de custo com cadastro e nome).
 
 ---
 
-## 3. Decisões que dependem de você (não são técnicas)
+## 3. Decisões — respondidas em 2026-07-30
 
-| # | Decisão | Por que precisa de resposta |
+| # | Decisão | Resposta |
 |---|---|---|
-| 1 | **Aprovação da revisão de valor de benefício**: DP ou gestor imediato? | Muda o fluxo. Sugestão: gestor aprova a necessidade, DP homologa o valor — mas é decisão de processo |
-| 2 | **O que é "o resto" da ficha** restrito a DP/RH e liderança | Precisa de uma lista fechada: salário e saúde já são restritos; e ocorrência, avaliação, dependente, documento? |
-| 3 | **"Líderes acima"** — a cadeia inteira até a diretoria, ou só um nível acima? | Define o alcance da consulta |
-| 4 | **Transferência entre CNPJs**: como o DP trata isso hoje no eSocial? | O desenho de I3 depende do que a empresa já pratica |
-| 5 | **Origem das marcações de ponto até o REP-P chegar**: importar arquivo de onde? | Define o formato do importador em F1 |
-| 6 | **Regra do banco de horas**: prazo de compensação, limite de saldo, o que expira | É parâmetro versionado, mas alguém precisa dizer os números |
+| 1 | Aprovação da revisão de valor de benefício | ✅ **O DP aprova** |
+| 2 | O que é "o resto" da ficha restrito | ⏳ **Em aberto** — o usuário vai reler a transcrição da reunião |
+| 3 | Alcance dos "líderes acima" | ✅ **Apenas de gerente para cima** — corte por nível, não pela cadeia |
+| 4 | Transferência entre CNPJs no eSocial | ✅ **Demite e recontrata** na outra empresa, sem perder dados nem histórico |
+| 5 | Marcações de ponto até o REP-P | ✅ **Prever importação de dados** enquanto não há registrador |
+| 6 | Regra do banco de horas | ✅ **Altamente parametrizável** pelo DP: padrões + personalização por funcionário |
+
+### 3.1 Duas implicações estruturais dessas respostas
+
+**Da resposta 3 — "gerente para cima" precisa de nível hierárquico no cargo, que não existe.**
+Hoje o alcance é "o gestor vê os liderados diretos" (`rh.relacao_gestor`). O corte por nível é
+outra régua e exige um campo de **nível/senioridade no cargo**.
+⚠️ **Efeito colateral a validar com o DP:** um supervisor que lidera pessoas **deixaria de ver
+a ficha completa da própria equipe** — hoje ele vê. É restrição, não ampliação.
+
+**Da resposta 4 — separar PESSOA de VÍNCULO.**
+Hoje `rh.colaborador` é as duas coisas: quem a pessoa é (CPF, nascimento, dependentes) **e** o
+vínculo (matrícula, admissão, cargo, salário). Se o DP demite no CNPJ A e recontrata no B, no
+modelo atual isso vira **dois colaboradores** — e o histórico se parte, que é exatamente o que
+a diretora não quer.
+
+Desenho correto: **uma pessoa (CPF) com N vínculos**; cada vínculo com matrícula, admissão,
+rescisão e matrícula eSocial próprias; **a linha do tempo é da pessoa** e atravessa os
+vínculos. Barato agora, caro depois — **entra na Onda I**, que já era estrutural.
+
+### 3.2 Parametrização do banco de horas (resposta 6)
+
+Três níveis, do geral ao específico, todos versionados com vigência:
+1. **Padrão da empresa** (registro/CNPJ)
+2. **Padrão da unidade ou do cargo**, quando divergir
+3. **Exceção por colaborador**, que vence os anteriores
+
+Parâmetros: prazo de compensação, limite de saldo positivo e negativo, o que expira e quando,
+tratamento do saldo na rescisão, fator de conversão de hora extra. **Nenhum chumbado no
+código** — mesma diretriz dos centros de custo e das metas.
 
 ---
 
