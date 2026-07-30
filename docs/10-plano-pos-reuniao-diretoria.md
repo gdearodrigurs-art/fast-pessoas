@@ -13,14 +13,26 @@
 
 Quatro pontos precisam ser recolocados antes de virar tarefa:
 
-### 1.1 Centro de custo **já existe** — o problema é onde ele aparece
+### 1.1 Centro de custo existe, mas está escondido — e o modelo precisa virar TRÊS campos
 
-A diretora disse *"não vi isso em lugar nenhum"*. Conferido: `rh.lotacao.centro_custo`
-existe desde a migration 0002, é exibido na **ficha do colaborador**, no formulário de
-**transferência** e no **painel executivo** (custo por centro de custo).
+A diretora disse *"não vi isso em lugar nenhum"*. O dado existe (`rh.lotacao.centro_custo`,
+migration 0002) e aparece na ficha — mas **grudado na unidade**, como sufixo:
+`Matriz Centro · CC CC-1000`. Sem rótulo próprio, mostrando código sem nome, e não filtrável.
+Quem procura "centro de custo" na tela não acha. A crítica dela procede na prática.
 
-**Então o pedido real não é criar o campo — é usá-lo onde falta**, principalmente na
-conferência da folha (item 15 dela) e nos filtros das telas. Trabalho menor do que parecia.
+**Decisão do usuário (2026-07-30): separar em três campos independentes.**
+
+| Campo | O que responde | Hoje |
+|---|---|---|
+| **Registro** | Em qual **empresa do grupo** (CNPJ) a pessoa está registrada | **não existe** |
+| **Lotação** | O **local físico** onde ela trabalha | existe (`estabelecimento` — as 5 unidades) |
+| **Centro de custo** | Onde o **custo** dela cai | existe como texto livre, sem cadastro nem nome |
+
+São ortogonais: alguém pode estar **registrada no CNPJ do CSC**, **lotada na Matriz Centro** e
+com **custo no CC de TI**. Hoje o sistema não consegue expressar isso — trata unidade e centro
+de custo como uma coisa só e não conhece as empresas.
+
+Isso **absorve a Onda I** (os 4 CNPJs) e vira uma mudança estrutural única.
 
 ### 1.2 A tela de avaliação **não está quebrada** — ela é omissa para quem não avalia
 
@@ -135,29 +147,40 @@ Como ela quer: **ninguém se candidata** — a pessoa já entra com direito. O q
 
 ---
 
-### ONDA I — Estrutura de grupo: os 4 CNPJs
+### ONDA I — Estrutura: registro, lotação e centro de custo
 
+> *"Vamos dividir em 3 campos: registro (qual empresa a pessoa está registrada), lotação
+> (local físico onde ela trabalha) e centro de custo (onde o custo dela cai)."*
 > *"A pessoa pode mudar entre os CNPJs e esse histórico não é perdido."*
 
-São quatro empresas: **indústria, varejo, franquia e CSC**. Hoje o sistema tem
-`estabelecimento` (as 5 unidades), mas **não tem o conceito de empresa/CNPJ acima delas**.
+**Subiu de posição** (era a 4ª, virou a 3ª): os três campos são a base de que a conferência
+da folha (J), a ficha (K) e os relatórios dependem. Fazer depois significa refazer.
 
-- I1. Entidade **empresa do grupo** (CNPJ, razão social, tipo), com os estabelecimentos abaixo
-- I2. Transferência entre empresas como tipo de movimentação, mantendo **a mesma pessoa e o
-  mesmo histórico** — muda o vínculo, não o registro
-- I3. Efeito no eSocial: transferência entre CNPJs é desligamento + admissão para o governo,
-  mas **um só histórico** para o RH. Precisa ser desenhado com cuidado (S-2299/S-2200 ou
-  evento de transferência, conforme o caso)
-- I4. Folha e relatórios passam a filtrar por empresa além de unidade e centro de custo
+- **I1. Empresa do grupo** — entidade nova (CNPJ, razão social, tipo): indústria, varejo,
+  franquia e CSC. Os estabelecimentos passam a pendurar nela.
+- **I2. Cadastro de centro de custo** — código **e nome** (`CC-1000 · Administrativo`),
+  vinculado à empresa. Hoje é texto livre; vira cadastro com lista fechada.
+  *Pendente:* existe lista oficial vinda do SAP/DW? Se sim, espelhar em vez de inventar.
+- **I3. Os três campos na ficha**, cada um com rótulo próprio, versionados com vigência
+  (mudar de qualquer um dos três é histórico, não sobrescrita)
+- **I4. Filtro por registro, lotação e centro de custo** — lista de colaboradores,
+  relatórios, organograma e folha
+- **I5. Transferência entre empresas** como movimentação, mantendo **a mesma pessoa e o mesmo
+  histórico** — muda o vínculo, não o registro da pessoa
+- **I6. eSocial**: transferência entre CNPJs é desligamento + admissão para o governo, mas
+  **um só histórico** para o RH. Desenhar conforme a prática atual do DP (decisão 4)
 
 ---
 
-### ONDA J — Folha: conferência e centro de custo
+### ONDA J — Folha: conferência por rubrica, pessoa e centro de custo
+
+Depende da Onda I (o centro de custo com cadastro e nome).
 
 - J1. **Três visões de conferência do fechamento**: por tipo de rubrica, por pessoa e por
   centro de custo *(ela marcou como "muito importante mesmo")*
-- J2. Centro de custo visível e filtrável na folha (o dado já existe — item 1.1)
-- J3. Totais e quebras por centro de custo no fechamento
+- J2. Totais e quebras por centro de custo — e também por **registro** (empresa), já que a
+  folha passa a ser por CNPJ
+- J3. Filtros das três dimensões na competência
 
 ---
 
@@ -220,14 +243,17 @@ São quatro empresas: **indústria, varejo, franquia e CSC**. Hoje o sistema tem
 
 1. **F — Ponto e banco de horas** (prioridade declarada; o maior bloco)
 2. **G — Correções baratas** (avaliação em branco, link de experiência, folha retroativa, adicionar rubrica, NR-1)
-3. **H — Benefícios** (inverte o modelo; quanto antes, menos migração)
-4. **I — Os 4 CNPJs do grupo** (estrutura; afeta folha, relatórios e eSocial)
+3. **I — Registro, lotação e centro de custo** (estrutura; tudo abaixo depende dela)
+4. **H — Benefícios** (inverte o modelo; quanto antes, menos migração)
 5. **J — Conferência de folha em 3 visões**
 6. **K — Visibilidade em camadas na ficha**
 7. **L — Pesquisa social e checklists de admissão**
 8. **M — Público-alvo da pesquisa de clima**
 
-**Sugestão de sequência prática:** F e G podem correr juntas — G são correções pequenas e
-independentes, e entregar elas cedo tira da frente os defeitos que ela viu. H vem logo atrás
-por causa do custo de migração. I antes de J, porque a conferência da folha vai querer
-filtrar por empresa também.
+**Sequência prática:** F e G correm juntas — G são correções pequenas e independentes, e
+entregá-las cedo tira da frente os defeitos que ela viu.
+
+**I subiu para a terceira posição** depois da decisão dos três campos: registro, lotação e
+centro de custo são a base de J (conferência da folha por CC e por empresa), de K (o que
+aparece na ficha) e dos filtros de relatório. Mexer nessa estrutura depois de construir as
+telas em cima dela significa refazer as telas.

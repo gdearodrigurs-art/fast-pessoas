@@ -276,6 +276,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #canonico #modelo-de-dados #regra-negocio
 
+### [2026-07-30] DECISÃO DO USUÁRIO — Registro, lotação e centro de custo são TRÊS campos independentes
+
+**Decisão:** A alocação de uma pessoa deixa de ser um par (unidade + centro de custo grudado) e passa a ter três dimensões ortogonais: **Registro** = em qual empresa do grupo (CNPJ) ela está registrada; **Lotação** = o local físico onde trabalha; **Centro de custo** = onde o custo dela cai. Alguém pode estar registrada no CNPJ do CSC, lotada na Matriz Centro e com custo no CC de TI.
+
+**Motivo:** A diretora não encontrou o centro de custo na ficha — ele existe desde a migration 0002, mas aparece como sufixo da unidade (`Matriz Centro · CC CC-1000`), sem rótulo próprio, mostrando código sem nome e sem ser filtrável. Ao destrinchar, o usuário separou os três conceitos que o modelo atual conflacionava. O grupo tem 4 CNPJs (indústria, varejo, franquia, CSC) e a pessoa pode migrar entre eles sem perder histórico.
+
+**Contexto:** Absorve o que era a Onda I (os 4 CNPJs) e a promove da 4ª para a 3ª posição do plano (docs/10-plano-pos-reuniao-diretoria.md), porque conferência de folha, ficha e relatórios dependem dessa estrutura — construir as telas antes significaria refazê-las. Implica: entidade empresa do grupo; cadastro de centro de custo com código E nome (hoje é texto livre) vinculado à empresa; os três campos versionados com vigência; filtros pelas três dimensões; transferência entre empresas preservando a pessoa e o histórico. **Pendente:** existe lista oficial de centros de custo no SAP/DW para espelhar? E o termo de tela: o usuário escreveu "locação", o padrão de RH é "lotação".
+
+**Tags:** #canonico #modelo-de-dados #arquitetura
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.
