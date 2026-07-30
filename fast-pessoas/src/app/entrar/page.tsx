@@ -33,6 +33,14 @@ export default function PaginaEntrar() {
         );
         return;
       }
+      // Pedir o segundo fator NÃO é falha: a rota devolve 401 com
+      // `precisa_totp` e `erro: null` só para dizer "agora o código".
+      // Mostrar mensagem de erro aqui fazia parecer que a senha estava errada.
+      if (dados.precisa_totp && !dados.erro) {
+        setPedirTotp(true);
+        setErro(null);
+        return;
+      }
       if (dados.precisa_totp) {
         setPedirTotp(true);
       }
@@ -90,6 +98,9 @@ export default function PaginaEntrar() {
               placeholder="000000"
               autoComplete="one-time-code"
               required
+              // O campo nasce no meio do formulário depois do primeiro envio:
+              // sem o foco, é fácil não perceber que ele apareceu.
+              autoFocus
               value={codigoTotp}
               onChange={(e) => setCodigoTotp(e.target.value)}
             />
