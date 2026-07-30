@@ -286,6 +286,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #canonico #modelo-de-dados #arquitetura
 
+### [2026-07-30] DECISÃO DO USUÁRIO — Centros de custo administráveis; o termo de tela é "lotação"
+
+**Decisão:** (1) Existe lista oficial de centros de custo, mas **nada de chumbar no código**: o cadastro é do usuário, que **adiciona, renomeia e remove livremente** — mesmo princípio já aplicado às metas de indicadores. A lista oficial serve de carga inicial; a manutenção é do RH/DP. (2) O rótulo em tela é **"lotação"** (não "locação").
+
+**Motivo:** Resposta do usuário às duas perguntas em aberto da decisão anterior. Coerente com a diretriz do projeto de que parâmetro operacional é dado, não código.
+
+**Contexto:** Derivações que preservam o princípio de histórico imutável: **renomear** um CC não reescreve o passado (nome versionado com vigência — folha fechada de junho continua exibindo o nome de junho); **remover** CC já usado = inativar, não apagar (some das listas de escolha, continua legível no histórico); apagar de fato só enquanto nunca foi usado. Mesmo tratamento dado ao catálogo de indicadores.
+
+**Tags:** #canonico #regra-negocio #modelo-de-dados
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.

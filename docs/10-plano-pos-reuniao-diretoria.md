@@ -158,9 +158,16 @@ da folha (J), a ficha (K) e os relatórios dependem. Fazer depois significa refa
 
 - **I1. Empresa do grupo** — entidade nova (CNPJ, razão social, tipo): indústria, varejo,
   franquia e CSC. Os estabelecimentos passam a pendurar nela.
-- **I2. Cadastro de centro de custo** — código **e nome** (`CC-1000 · Administrativo`),
-  vinculado à empresa. Hoje é texto livre; vira cadastro com lista fechada.
-  *Pendente:* existe lista oficial vinda do SAP/DW? Se sim, espelhar em vez de inventar.
+- **I2. Cadastro de centro de custo administrável pelo usuário** (decisão de 2026-07-30) —
+  código **e nome** (`CC-1000 · Administrativo`), vinculado à empresa. Existe lista oficial,
+  mas **nada é chumbado no código**: o usuário **adiciona, renomeia e remove livremente**,
+  no mesmo padrão da Central de Metas. A carga inicial parte da lista oficial e daí em diante
+  é do RH/DP.
+  - **Renomear** não reescreve histórico: a folha fechada de junho continua exibindo o nome
+    que valia em junho (nome versionado com vigência, igual às demais regras do sistema).
+  - **Remover** um CC que já tem histórico = **inativar**, não apagar — some das listas de
+    escolha e continua legível no passado. Apagar de fato só enquanto nunca foi usado.
+    (Mesmo tratamento que o catálogo de indicadores já recebeu.)
 - **I3. Os três campos na ficha**, cada um com rótulo próprio, versionados com vigência
   (mudar de qualquer um dos três é histórico, não sobrescrita)
 - **I4. Filtro por registro, lotação e centro de custo** — lista de colaboradores,
