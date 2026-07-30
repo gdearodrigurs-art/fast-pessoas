@@ -1,0 +1,319 @@
+/* Visual do Dashboard Executivo — mesma linguagem dos outros módulos
+   (fundo #f7f6f4, cartão branco, primária #d21217), com duas diferenças de
+   propósito: o VALOR é a maior coisa do card, e "a conta" tem lugar fixo no pé
+   do card em vez de virar tooltip escondido. */
+
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1180px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.conteudo h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 0 0 8px;
+  color: #6b6763;
+}
+
+.referencia {
+  margin: 0 0 24px;
+  font-size: 13px;
+  color: #6b6763;
+}
+
+.recarregar {
+  background: transparent;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 6px 12px;
+  margin-left: 10px;
+  font: inherit;
+  font-size: 12px;
+  color: #6b6763;
+  cursor: pointer;
+}
+
+.recarregar:hover:not(:disabled) {
+  border-color: #d21217;
+  color: #d21217;
+}
+
+.recarregar:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.grade {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 18px;
+}
+
+/* Cards que carregam tabela (unidade, faixas) pedem largura dupla. */
+.largo {
+  grid-column: span 2;
+}
+
+@media (max-width: 760px) {
+  .largo {
+    grid-column: span 1;
+  }
+}
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cartao h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #6b6763;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.valor {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+
+.valorSecundario {
+  font-size: 14px;
+  color: #6b6763;
+  font-variant-numeric: tabular-nums;
+}
+
+.periodo {
+  font-size: 12px;
+  color: #6b6763;
+}
+
+.conta {
+  margin-top: auto;
+  border-top: 1px dashed #e3e0dc;
+  padding-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b6763;
+}
+
+.contaTitulo {
+  display: block;
+  font-weight: 700;
+  color: #1c1b1a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+
+/* ------------------------------------------------------------ micro-série */
+
+.serie {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.serieRotulo {
+  font-size: 11px;
+  color: #6b6763;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 46px;
+  overflow: visible;
+}
+
+.linha {
+  fill: none;
+  stroke: #d21217;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.area {
+  fill: #d21217;
+  opacity: 0.08;
+  stroke: none;
+}
+
+.ponto {
+  fill: #d21217;
+}
+
+.pontoVazado {
+  fill: #fff;
+  stroke: #d21217;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.eixo {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #6b6763;
+  font-variant-numeric: tabular-nums;
+}
+
+.tendencia {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b6763;
+}
+
+.seta {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.bom {
+  color: #1a7f37;
+}
+
+.ruim {
+  color: #d21217;
+}
+
+.neutro {
+  color: #6b6763;
+}
+
+/* ------------------------------------------------------------ tabelas */
+
+.tabelaEnvolucro {
+  overflow-x: auto;
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.tabela th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 2px solid #e3e0dc;
+  color: #6b6763;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabela td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0eeeb;
+  font-variant-numeric: tabular-nums;
+}
+
+.numerico {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.barraTrilha {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: #f0eeeb;
+  min-width: 60px;
+}
+
+.barra {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: #d21217;
+  opacity: 0.75;
+  min-width: 2px;
+}
+
+.suprimido {
+  color: #6b6763;
+  font-style: italic;
+}
+
+/* ------------------------------------------------------------ bloqueio e avisos */
+
+.bloqueado {
+  background: #faf8f6;
+  border-style: dashed;
+}
+
+.bloqueadoSelo {
+  display: inline-block;
+  align-self: flex-start;
+  background: #f0eeeb;
+  border: 1px solid #e3e0dc;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b6763;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bloqueadoTexto {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6b6763;
+}
+
+.chave {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #f0eeeb;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+.vazio {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.erro {
+  font-size: 0.9rem;
+  color: #d21217;
+  background: #fff;
+  border: 1px solid #f0d0d0;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.carregando {
+  color: #6b6763;
+  font-size: 0.95rem;
+}

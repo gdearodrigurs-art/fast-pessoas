@@ -8,7 +8,8 @@
 // O que cria:
 //
 //   FOLHA (rh_folha)
-//     • competência do MÊS PASSADO, FECHADA e completa: folha_colaborador +
+//     • as TRÊS últimas competências (ver COMPETENCIAS_FECHADAS), FECHADAS e
+//       completas: folha_colaborador +
 //       item_calculo com memória de cálculo ARITMETICAMENTE CORRETA. O motor
 //       de src/dominios/folha/calculo.ts está REIMPLEMENTADO aqui, linha a
 //       linha (mesma aritmética de centavos, mesmo half-up, mesma memória):
@@ -853,31 +854,38 @@ function sortearVariaveis(rng, elegiveis, perfil) {
   return lancamentos;
 }
 
-async function semearFolha(cliente, { ativos, dp }) {
-  const rng = aleatorio(SEMENTE_FOLHA);
-  const { porCodigo } = await carregarRubricas(cliente);
-  const tabelas = await carregarTabelasLegais(cliente);
-  const descontosBeneficio = await carregarDescontosBeneficio(cliente);
+/**
+ * Quantas competências FECHADAS a demo mantém antes da ABERTA do mês corrente.
+ *
+ * Três, e não uma: o card de CUSTO DE PESSOAL do painel executivo soma apenas
+ * competência fechada, e com um único ponto a série não tem tendência ("série
+ * curta demais para tendência"). Três pontos dão a leitura mensal que a
+ * diretoria espera e enchem o denominador do indicador `folha_no_prazo`. Mais
+ * que isso encareceria a semeadura sem acrescentar leitura: cada competência
+ * calcula ~60 folhas com memória item a item.
+ */
+const COMPETENCIAS_FECHADAS = 3;
 
-  // Competência fechada aprovada com tabela legal NÃO conferida seria
-  // incoerente (o serviço bloqueia a aprovação) — o DP confere aqui.
-  const conferidas = await marcarTabelasConferidas(cliente);
+/**
+ * Uma competência FECHADA e completa: variáveis lançadas, cálculo com memória
+ * aritmeticamente correta item a item e o fechamento POR ÚLTIMO (depois de
+ * 'fechada' nem o INSERT dos filhos passa). Segregação de funções respeitada:
+ * calculada_por ≠ aprovada_por.
+ */
+async function semearCompetenciaFechada(cliente, contexto, mesesAtras) {
+  const {
+    rng, porCodigo, tabelas, descontosBeneficio, rubricasMotor, ativos, dp,
+  } = contexto;
+  const competencia = competenciaDeslocada(mesesAtras);
 
-  const rubricasMotor = [...porCodigo.values()];
-  const anterior = competenciaDeslocada(1);
-  const corrente = competenciaDeslocada(0);
-
-  // ---------------------------------------------------------- mês passado (FECHADA)
   // Só quem estava na empresa o mês INTEIRO: o motor F1 não faz proporcional
   // de admissão/rescisão (isso é F2) — melhor uma folha coerente.
-  const doMesFechado = ativos.filter(
-    (p) => p.admissao <= iso(anterior.primeiro)
-  );
+  const doMes = ativos.filter((p) => p.admissao <= iso(competencia.primeiro));
 
-  const abertaEm = instanteBrasilia(anterior.primeiro, 8, 12);
-  const calculadaEm = instanteBrasilia(maisDias(anterior.ultimo, -6), 16, 40);
-  const aprovadaEm = instanteBrasilia(maisDias(anterior.ultimo, -5), 10, 25);
-  const fechadaEm = instanteBrasilia(maisDias(anterior.ultimo, -4), 9, 5);
+  const abertaEm = instanteBrasilia(competencia.primeiro, 8, 12);
+  const calculadaEm = instanteBrasilia(maisDias(competencia.ultimo, -6), 16, 40);
+  const aprovadaEm = instanteBrasilia(maisDias(competencia.ultimo, -5), 10, 25);
+  const fechadaEm = instanteBrasilia(maisDias(competencia.ultimo, -4), 9, 5);
 
   const { rows: linhasFechada } = await cliente.query(
     `INSERT INTO rh_folha.competencia_folha
@@ -886,20 +894,20 @@ async function semearFolha(cliente, { ativos, dp }) {
      VALUES ($1, $2, 'mensal', 'aprovada', $3, $4, $5, $6, $7, $3)
      RETURNING id`,
     [
-      anterior.ano, anterior.mes, abertaEm,
+      competencia.ano, competencia.mes, abertaEm,
       dp.operador.id, dp.operador.id, dp.aprovador.id, aprovadaEm,
     ]
   );
   const competenciaFechadaId = Number(linhasFechada[0].id);
 
-  const lancamentosFechada = sortearVariaveis(rng, doMesFechado, {
+  const lancamentosFechada = sortearVariaveis(rng, doMes, {
     he50: 16, he100: 5, faltas: 5, manualProvento: 3, manualDesconto: 3,
   });
-  const idsFechada = new Set(doMesFechado.map((p) => p.id));
+  const idsFechada = new Set(doMes.map((p) => p.id));
   for (const desconto of descontosBeneficio) {
     if (!idsFechada.has(desconto.colaboradorId)) continue;
     lancamentosFechada.push({
-      pessoa: doMesFechado.find((p) => p.id === desconto.colaboradorId),
+      pessoa: doMes.find((p) => p.id === desconto.colaboradorId),
       codigo: CODIGO_DESCONTO_BENEFICIO,
       referencia: null,
       valor: desconto.centavos / 100,
@@ -912,7 +920,7 @@ async function semearFolha(cliente, { ativos, dp }) {
   );
 
   const { folhas, itens } = calcularCompetencia({
-    pessoas: doMesFechado,
+    pessoas: doMes,
     lancamentos: lancamentosFechada,
     rubricas: rubricasMotor,
     tabelas,
@@ -960,6 +968,49 @@ async function semearFolha(cliente, { ativos, dp }) {
     [competenciaFechadaId, fechadaEm, dp.aprovador.id]
   );
 
+  const totalLiquido = folhas.reduce((soma, f) => soma + f.liquido, 0);
+  log(
+    `10-folha-sst: folha ${competencia.rotulo} FECHADA — ${folhas.length} colaboradores, ` +
+    `${itens.length} itens de memória, líquido R$ ${(totalLiquido / 100).toFixed(2)} ` +
+    `(calculada por ${dp.operador.nome}, aprovada por ${dp.aprovador.nome}).`
+  );
+
+  return {
+    id: competenciaFechadaId,
+    rotulo: competencia.rotulo,
+    colaboradores: folhas.length,
+    itens: itens.length,
+    variaveis: lancamentosFechada.length,
+    liquido: totalLiquido / 100,
+  };
+}
+
+async function semearFolha(cliente, { ativos, dp }) {
+  const rng = aleatorio(SEMENTE_FOLHA);
+  const { porCodigo } = await carregarRubricas(cliente);
+  const tabelas = await carregarTabelasLegais(cliente);
+  const descontosBeneficio = await carregarDescontosBeneficio(cliente);
+
+  // Competência fechada aprovada com tabela legal NÃO conferida seria
+  // incoerente (o serviço bloqueia a aprovação) — o DP confere aqui.
+  const conferidas = await marcarTabelasConferidas(cliente);
+
+  const rubricasMotor = [...porCodigo.values()];
+  const corrente = competenciaDeslocada(0);
+  const contexto = {
+    rng, porCodigo, tabelas, descontosBeneficio, rubricasMotor, ativos, dp,
+  };
+
+  // ---------------------------------------------------------- meses passados (FECHADAS)
+  // Da mais antiga para a mais recente, em série: a ordem FIXA é o que mantém a
+  // semeadura determinística (o rng é consumido na mesma sequência a cada
+  // execução — ver as regras de db/semear/comum.js).
+  const fechadas = [];
+  for (let mesesAtras = COMPETENCIAS_FECHADAS; mesesAtras >= 1; mesesAtras -= 1) {
+    // eslint-disable-next-line no-await-in-loop -- serial de propósito: determinismo
+    fechadas.push(await semearCompetenciaFechada(cliente, contexto, mesesAtras));
+  }
+
   // ---------------------------------------------------------- mês corrente (ABERTA)
   const abertaCorrenteEm = instanteBrasilia(corrente.primeiro, 8, 30);
   const { rows: linhasAberta } = await cliente.query(
@@ -990,12 +1041,6 @@ async function semearFolha(cliente, { ativos, dp }) {
     dp.aprovador.id, instanteBrasilia(maisDias(hoje(), -2), 15, 10)
   );
 
-  const totalLiquido = folhas.reduce((soma, f) => soma + f.liquido, 0);
-  log(
-    `10-folha-sst: folha ${anterior.rotulo} FECHADA — ${folhas.length} colaboradores, ` +
-    `${itens.length} itens de memória, líquido R$ ${(totalLiquido / 100).toFixed(2)} ` +
-    `(calculada por ${dp.operador.nome}, aprovada por ${dp.aprovador.nome}).`
-  );
   log(
     `10-folha-sst: folha ${corrente.rotulo} ABERTA — ${lancamentosAberta.length} variáveis ` +
     'lançadas e NENHUM cálculo: é a peça de demonstração do botão "Calcular".'
@@ -1003,14 +1048,10 @@ async function semearFolha(cliente, { ativos, dp }) {
 
   return {
     conferidas,
-    fechada: {
-      id: competenciaFechadaId,
-      rotulo: anterior.rotulo,
-      colaboradores: folhas.length,
-      itens: itens.length,
-      variaveis: lancamentosFechada.length,
-      liquido: totalLiquido / 100,
-    },
+    fechadas,
+    // A mais recente das fechadas — é a competência que a demo abre em /folha
+    // e a que o painel executivo usa como custo do mês de referência.
+    fechada: fechadas[fechadas.length - 1],
     aberta: {
       id: competenciaAbertaId,
       rotulo: corrente.rotulo,

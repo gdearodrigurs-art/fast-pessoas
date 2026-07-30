@@ -1,0 +1,45 @@
+import { type NextRequest } from "next/server";
+import { esquemaConsultaOrganograma } from "@/dominios/organograma/esquemas";
+import {
+  exigirSessaoCompleta,
+  montarOrganograma,
+} from "@/dominios/organograma/servico";
+import { responderErro } from "@/lib/http";
+import { lerSessao } from "@/lib/sessao";
+
+/**
+ * Organograma — leitura de ESTRUTURA, com escopo por sessão.
+ *
+ * Sem chave fixa nesta rota, pelo mesmo motivo (e no mesmo padrão) de
+ * GET /api/colaboradores: o alcance NÃO é binário. `rh.colaborador.ver` é o que
+ * abre a empresa inteira (rh/dp/diretoria/lider_td); o gestor, que também tem a
+ * chave, fica restrito à própria subárvore; e o funcionário, que NÃO tem a
+ * chave, vê apenas a corrente dele até a diretoria — exigir a chave aqui
+ * devolveria 403 para todo o quadro operacional, que é justamente quem mais
+ * precisa saber a quem se reportar. O corte é feito em `resolverEscopo`
+ * (domínio de colaboradores, fonte única do "quem vê quem") e o que está fora
+ * do alcance está AUSENTE do payload — não mascarado.
+ *
+ * Nenhum dado sensível trafega aqui: sem salário, sem faixa da vaga, sem saúde.
+ * Por isso também não há registro em audit.leitura_sensivel.
+ */
+export async function GET(request: NextRequest) {
+  try {
+    const sessao = exigirSessaoCompleta(await lerSessao());
+    const parametros = request.nextUrl.searchParams;
+    const analise = esquemaConsultaOrganograma.safeParse({
+      estabelecimento_id: parametros.get("estabelecimento_id") || undefined,
+      cargo_id: parametros.get("cargo_id") || undefined,
+      busca: parametros.get("busca") || undefined,
+    });
+    if (!analise.success) {
+      return Response.json(
+        { erro: analise.error.issues[0]?.message ?? "Filtro inválido" },
+        { status: 400 }
+      );
+    }
+    return Response.json(await montarOrganograma(sessao, analise.data));
+  } catch (erro) {
+    return responderErro(erro);
+  }
+}

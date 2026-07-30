@@ -1,0 +1,305 @@
+/* Visual do projeto: claro (#f7f6f4), cartões brancos, primária #d21217.
+   Mesma linguagem de /ferias e /relatorios — o portal é consolidação, não
+   um tema novo. */
+
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1120px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.conteudo h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 0 0 22px;
+  color: #6b6763;
+}
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.cabecalhoCartao {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cabecalhoCartao h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.link {
+  font-size: 0.85rem;
+  color: #d21217;
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.nota {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #6b6763;
+}
+
+.notaRodape {
+  margin: 12px 0 0;
+  font-size: 0.78rem;
+  color: #6b6763;
+}
+
+.vazio {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 14px;
+  padding: 6px 2px;
+}
+
+.bloqueado {
+  background: #f0eeeb;
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #6b6763;
+}
+
+.erro {
+  font-size: 0.9rem;
+  color: #d21217;
+}
+
+/* -------------------------------------------------- seletor de gestor */
+
+.seletor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.campoGrupo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 320px;
+}
+
+.rotulo {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.campo {
+  font-size: 0.95rem;
+  padding: 9px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.campo:focus {
+  outline: 2px solid #d21217;
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* -------------------------------------------------- números */
+
+.numeros {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.numero {
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #f7f6f4;
+}
+
+.numero strong {
+  display: block;
+  font-size: 26px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.numero span {
+  font-size: 0.8rem;
+  color: #6b6763;
+}
+
+.numeroCritico {
+  background: #d21217;
+  border-color: #d21217;
+  color: #fff;
+}
+
+.numeroCritico span {
+  color: #ffd9da;
+}
+
+.numeroAtencao {
+  border-color: #d98200;
+  background: #fdf7ec;
+}
+
+/* -------------------------------------------------- tabelas */
+
+.tabelaEnvolucro {
+  overflow-x: auto;
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tabela th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #e3e0dc;
+  color: #6b6763;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabela td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0eeeb;
+  vertical-align: top;
+}
+
+.numerico {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.nomeLink {
+  color: #1c1b1a;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.nomeLink:hover {
+  color: #d21217;
+  text-decoration: underline;
+}
+
+/* -------------------------------------------------- etiquetas */
+
+.etiqueta {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: #f0eeeb;
+  color: #6b6763;
+}
+
+.etiquetaCritico {
+  background: #d21217;
+  color: #fff;
+}
+
+.etiquetaAtencao {
+  background: #fdf7ec;
+  color: #a36200;
+  border: 1px solid #d98200;
+}
+
+.etiquetaInformativo {
+  background: #eef3fb;
+  color: #2c4f86;
+  border: 1px solid #b6c8e4;
+}
+
+.etiquetaOk {
+  background: #e8f5ec;
+  color: #1e7c3c;
+}
+
+/* -------------------------------------------------- memória de cálculo */
+
+.memoria {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  background: #f7f6f4;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #4a4744;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------- alertas em colunas */
+
+.colunas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+}
+
+.subtituloBloco {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #6b6763;
+}
+
+.lista {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.lista li {
+  padding: 7px 0;
+  border-bottom: 1px solid #f0eeeb;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.lista li:last-child {
+  border-bottom: none;
+}
+
+.detalhe {
+  color: #6b6763;
+  font-size: 0.82rem;
+}

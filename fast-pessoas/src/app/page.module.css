@@ -20,12 +20,12 @@
 }
 
 .subtitulo {
-  margin: 0 0 28px;
+  margin: 0 0 8px;
   color: #6b6763;
 }
 
 .tituloSecao {
-  margin: 32px 0 12px;
+  margin: 28px 0 12px;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.5px;
@@ -57,7 +57,10 @@
   box-shadow: 0 2px 8px rgba(28, 27, 26, 0.08);
 }
 
-.cartao h2 {
+/* h3 porque o título do card agora vive DENTRO de uma seção com h2 (a home é
+   agrupada): o encadeamento h1 → h2 (seção) → h3 (card) é o que leitor de tela
+   e navegação por títulos esperam. */
+.cartao h3 {
   margin: 0 0 6px;
   font-size: 16px;
   color: #d21217;

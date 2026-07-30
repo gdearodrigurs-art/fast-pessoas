@@ -67,7 +67,9 @@ export function CartaoMovimentacao({
   const { demanda, movimentacao, etapas } = dados;
   const estagio = rotuloEstagioCadeia(etapas);
   const promocao = movimentacao.tipo === "promocao";
-  const de = promocao ? movimentacao.cargo_atual : movimentacao.unidade_atual;
+  const de = promocao
+    ? movimentacao.cargo_origem
+    : movimentacao.unidade_origem;
   const para = promocao
     ? movimentacao.cargo_destino
     : movimentacao.unidade_destino;

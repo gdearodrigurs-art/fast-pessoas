@@ -1,0 +1,301 @@
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1080px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.conteudo h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 0 0 20px;
+  color: #6b6763;
+  max-width: 74ch;
+}
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.cartao h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.orfas h3 {
+  margin: 18px 0 8px;
+  font-size: 14px;
+  color: #6b6763;
+}
+
+.orfas ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.9rem;
+}
+
+.nota {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #6b6763;
+  max-width: 88ch;
+}
+
+.aviso {
+  background: #f0eeeb;
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #6b6763;
+  margin-bottom: 12px;
+}
+
+.avisoAtencao {
+  background: #fdf3f3;
+  border: 1px solid #f0c9ca;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #8c1013;
+  margin-bottom: 12px;
+}
+
+.filtros {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.campoGrupo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 1 220px;
+}
+
+.rotulo {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.campo {
+  font-size: 0.95rem;
+  padding: 9px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.campo:focus {
+  outline: 2px solid #d21217;
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.acoes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.botaoSecundario {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 9px 14px;
+  border: 1px solid #d8d4d0;
+  border-radius: 8px;
+  background: #fff;
+  color: #1c1b1a;
+  cursor: pointer;
+}
+
+.botaoSecundario:hover {
+  border-color: #d21217;
+  color: #d21217;
+}
+
+.numeros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.numero {
+  flex: 1 1 200px;
+  background: #f7f6f4;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.numeroValor {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.numeroRotulo {
+  font-size: 12px;
+  color: #6b6763;
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------------------ árvore
+   Sem biblioteca: cada linha é um <li> com padding-left proporcional ao nível
+   e uma barra colorida à esquerda com a cor da unidade. O colapso é estado do
+   React (a linha simplesmente não é renderizada) — nada de altura animada. */
+
+.arvore {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  border-top: 1px solid #f0eeeb;
+}
+
+.linha {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid #f0eeeb;
+  border-left: 4px solid #8c8781;
+  font-size: 0.92rem;
+}
+
+.linha:hover {
+  background: #faf9f8;
+}
+
+.linhaVaga {
+  background: repeating-linear-gradient(
+    45deg,
+    #fcfbfa,
+    #fcfbfa 8px,
+    #f5f3f1 8px,
+    #f5f3f1 16px
+  );
+  border-left-style: dashed;
+}
+
+.linhaDestacada {
+  background: #fff6d9;
+  box-shadow: inset 0 0 0 1px #e6c65c;
+}
+
+.alternador {
+  font: inherit;
+  line-height: 1;
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #6b6763;
+  cursor: pointer;
+}
+
+.alternador:hover {
+  color: #d21217;
+}
+
+.alternadorVazio {
+  display: inline-block;
+  width: 20px;
+  min-width: 20px;
+}
+
+.nome {
+  font-weight: 600;
+  border-bottom: 1px solid transparent;
+}
+
+.nome:hover {
+  color: #d21217;
+  border-bottom-color: #d21217;
+}
+
+.nomeVaga {
+  font-weight: 600;
+  font-style: italic;
+  color: #6b6763;
+}
+
+.cargo {
+  color: #4a4643;
+  font-size: 0.86rem;
+}
+
+.unidade {
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.contagem {
+  font-size: 0.78rem;
+  color: #6b6763;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.selo {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #f0eeeb;
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: #6b6763;
+}
+
+.seloAlerta {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #fdf3f3;
+  border: 1px solid #f0c9ca;
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: #8c1013;
+}
+
+.vazio {
+  color: #6b6763;
+  font-style: italic;
+  font-size: 14px;
+  padding: 10px 4px 0;
+}
+
+.erro {
+  font-size: 0.85rem;
+  color: #d21217;
+  margin-top: 10px;
+}
+
+@media (max-width: 640px) {
+  .linha {
+    font-size: 0.86rem;
+  }
+}

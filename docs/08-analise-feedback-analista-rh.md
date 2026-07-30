@@ -3,7 +3,14 @@
 > Recebido em 2026-07-29 sobre o resumo executivo de funcionalidades (versão anterior
 > ao estado atual do sistema). Comentários em vermelho no documento devolvido.
 > Este documento separa: (a) o que ela pediu e **já existe**, (b) o que é **lacuna real**,
-> (c) o que é **decisão a tomar**. Nada aqui foi implementado ainda.
+> (c) o que é **decisão a tomar**.
+>
+> **A análise abaixo é o texto original de 29/07 e foi preservada como estava** —
+> vale como registro do que foi diagnosticado antes de mexer em código. O que
+> mudou desde então está **só na seção 9**, que virou o placar de execução:
+> as ondas D e E foram implementadas em 29–30/07 e os itens 1 a 5 da "Onda D"
+> mais o Dashboard Executivo da "Onda E" estão **entregues e demonstráveis**
+> (roteiro: `docs/07-roteiro-demonstracao.md`, bloco 5).
 
 ## Resumo em uma frase
 
@@ -172,24 +179,48 @@ conceito com outro nome ou um documento formal distinto.
 
 ---
 
-## 9. Priorização recomendada
+## 9. Priorização recomendada — e o placar de execução
 
-**Fazer antes da apresentação à diretora** (baixo custo, alto impacto na conversa):
-1. Nada — o sistema já demonstra bem. Levar esta análise como prova de que o feedback foi
-   ouvido e endereçado.
+> Atualizado em 2026-07-30, depois das ondas D e E. Legenda:
+> ✅ entregue e demonstrável · 🟡 parcial · ⬜ não começou.
 
-**Onda D (próxima), se autorizada:**
-1. **Segregação de perfis** (papéis `recrutador` e `lider_td` + tela de composição de perfis) — item 1 e 2
-2. **Campos data de nascimento e gênero** + relatórios de aniversariantes e diversidade — item 3
-3. **Promoção e transferência** como fluxo de demanda com aprovação em cadeia e efeito automático — item 4
-4. **Organograma** (os dados já existem, é tela)
-5. **Portal do Gestor e Portal do Colaborador** (consolidação, não construção)
+### Entregue (ondas D e E, 29–30/07/2026)
 
-**Onda E (depois):**
-6. Dashboard executivo · 7. Onboarding estruturado · 8. PCCS completo (trilhas, critérios,
-enquadramento) · 9. Comunicação interna sobre o GED · 10. 9 Box · 11. Reconhecimento
+| # | Item | Onde ver | Prova |
+|---|---|---|---|
+| 1 | ✅ **Segregação de perfis** — papéis `recrutador` e `lider_td` criados, papel `rh` rebaixado (as 5 chaves de R&S saíram dele), **tela `/perfis`** compondo papel × chave sem migration | migration `0019_perfis.sql`, `/perfis` | Conferido no build de produção, 14 rotas × 7 personas: a home da recrutadora não traz Colaboradores/Folha/Desligamento/Afastamento/SST/Relatórios/Clima individual/Painel executivo; digitando a URL, a **tela redireciona** e a **API responde 403**; `/colaboradores` abre com **uma linha — ela mesma**; ficha de terceiro responde **"Colaborador não encontrado"** (ausência, não "acesso negado"); `colaborador_id` de terceiro em `/api/documentos` é **ignorado** e devolve a pasta do próprio. Roteiro bloco 5a. |
+| 2 | ✅ **Líder de T&D com acesso desenhado** — estrutura, ficha, avaliação, relatórios e painel executivo; **sem** salário, saúde, motivo de desligamento e parecer de seleção | papel `lider_td` (18 chaves) | Roteiro bloco 5a |
+| 3 | ✅ **`data_nascimento` e `genero`** (autodeclarado, com "não informar") + **relatórios de aniversariantes, diversidade, composição familiar e headcount**, com supressão de recorte < 5 | migration `0020`, `/relatorios` | 6 aniversariantes em julho, 0 fichas sem nascimento, 2 recortes de gênero suprimidos. Roteiro bloco 5c. |
+| 4 | ✅ **Promoção e transferência** — tipos de demanda com **cadeia líder → diretoria**, efeito automático em transação (nova posição/lotação vigente + evento na linha do tempo + **notificação a DP e T&D**) e **controle de faixa com exceção justificada** | migration `0021`, `/demandas` → aba Promoções | 1 promoção **aguardando a diretoria** (DEM-0066), 2 aplicadas, 1 transferência; DEM-0064 com selo "Fora da faixa — com exceção". Roteiro bloco 5d. |
+| 5 | ✅ **Organograma** automático da `relacao_gestor` vigente, com **headcount aprovado × realizado** e vagas abertas penduradas no gestor | `/organograma` | Realizado 62 · aprovado 64 · 2 posições abertas; a tela declara que "aprovado" ≠ quadro aprovado formal. |
+| 6 | ✅ **Portal do Gestor e Portal do Colaborador** (consolidação) | `/portal-gestor`, `/portal-colaborador` | 7 e 8 blocos; afastado mostra só o fato; portal do colaborador sem remuneração. Roteiro bloco 4. |
+| 7 | ✅ **Dashboard Executivo** (era Onda E) — headcount, turnover, custo de pessoal, tempo de contratação, absenteísmo, promoções, diversidade, clima/eNPS, performance, **cada card com "A CONTA"** | migration `0026`, `/painel-executivo` | Custo de pessoal **BLOQUEADO** para quem não tem `folha.ver` (sem valor mascarado); ROI de treinamento **SEM FONTE**. Roteiro bloco 6. |
+| 8 | ✅ **RCF do cargo** completo nos 15 cargos, versionado, **imprimível** e repetido dentro da ficha — o termo do item 8 foi esclarecido com ela antes de implementar | migration `0020`, `/cargos/[id]/rcf` | Roteiro bloco 5b |
+| 9 | ✅ **Pesquisa de clima estruturada** (item 5 — decisão reaberta): pesquisa anual + pulse + **eNPS** + comentário anônimo + **plano de ação**, convivendo com o check-in diário | migration `0022`, `/pesquisas` | Anual encerrada: adesão 75,8%, eNPS +25,5, pior pergunta "feedback do líder" 2,64, Filial Leste eNPS −50, 2 planos de ação. Roteiro bloco 5e. |
 
-**Decisões do usuário/diretoria (não técnicas):**
-- Reabrir ou não a pesquisa de clima estruturada (item 5)
-- Fronteira Fast Pessoas × Sults (item 7)
-- Se contencioso trabalhista entra no escopo
+**Custo real:** quase nada foi tabela nova — foram **visões novas sobre dado que já
+existia**, como previa a análise. As exceções (migrations 0019 a 0022 e 0026) são
+pequenas e estão listadas acima.
+
+### Não entregue — próximas ondas
+
+| Item | Situação | Observação |
+|---|---|---|
+| **Onboarding estruturado** (trilha 90 dias, responsável por item, pesquisa) | 🟡 | Checklist de admissão com prazos 45/90 já existe; falta a trilha pós-admissão. |
+| **PCCS completo** (trilhas de carreira, critérios formais de promoção) | 🟡 | A peça que trava dinheiro entrou: faixa salarial com exceção justificada na promoção. Falta trilha e critério. |
+| **Comunicação interna / mural** | 🟡 | GED já faz documento + ciência com hash (= confirmação de leitura). Falta a camada de mural/news/eventos. |
+| **9 Box e sucessão** | ⬜ | Eixo de desempenho já sai da avaliação 360; falta o eixo de potencial e a matriz. O organograma registra a linha de sucessão como sua evolução natural. |
+| **Reconhecimento** (entre colegas, badges, Valores Fast) | ⬜ | Os 9 Valores Fast já estão no modelo da avaliação — base natural. |
+| **Banco de currículos reaproveitável** | 🟡 | Candidatos com consentimento existem; falta busca e reaproveitamento. |
+| **Integração com T&D/Sults** | ⬜ | Bloqueia ROI de treinamento e "treinados por curso/setor". Os blocos ficaram na tela, vazios e explicados. |
+| **Ponto (REP-P) e eSocial/FGTS Digital** | ⬜ | Bloqueados por **compra** e por **certificado e-CNPJ A1** — não por engenharia. |
+| **Processos trabalhistas (contencioso)** | ⬜ | Depende da decisão de escopo abaixo. |
+
+### Decisões do usuário/diretoria (não técnicas)
+
+- ~~Reabrir ou não a pesquisa de clima estruturada (item 5)~~ → **decidido: reaberta e
+  entregue**, convivendo com o check-in diário.
+- **Fronteira Fast Pessoas × Sults (item 7)** — ainda aberta, e agora mais urgente:
+  o Fast Pessoas já entrega canal único de solicitações. Precisa de definição antes
+  de os dois caminhos avançarem. Está no roteiro como pergunta explícita à diretoria.
+- **Contencioso trabalhista entra no escopo?** — ainda aberta.

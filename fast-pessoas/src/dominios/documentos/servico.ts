@@ -25,7 +25,8 @@ import {
 
 const TABELA_DOCUMENTO = "rh.documento";
 const TABELA_CIENCIA = "rh.ciencia";
-const CHAVE_ENVIAR = "documento.enviar";
+// A chave de ENVIO (`documento.enviar`) é conferida na porta da rota
+// (POST /api/documentos) e não aqui: este serviço só lê e registra ciência.
 // Escopo de leitura tem chave PRÓPRIA (migration 0024): quem envia arquivo não
 // herda, por isso, o direito de ler o documento de todo o quadro — era o furo
 // que deixava recrutador e T&D vendo contrato de qualquer pessoa.

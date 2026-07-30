@@ -763,8 +763,9 @@ export interface Movimentacao {
   colaborador_id: number;
   colaborador_nome: string;
   colaborador_usuario_id: number | null;
-  cargo_atual: string | null;
-  unidade_atual: string | null;
+  /** Cargo/unidade DE ONDE a pessoa saiu (véspera da vigência pretendida). */
+  cargo_origem: string | null;
+  unidade_origem: string | null;
   cargo_destino_id: number | null;
   cargo_destino: string | null;
   estabelecimento_destino_id: number | null;
@@ -788,8 +789,8 @@ interface LinhaMovimentacao extends Record<string, unknown> {
   colaborador_id: string;
   colaborador_nome: string;
   colaborador_usuario_id: string | null;
-  cargo_atual: string | null;
-  unidade_atual: string | null;
+  cargo_origem: string | null;
+  unidade_origem: string | null;
   cargo_destino_id: string | null;
   cargo_destino: string | null;
   estabelecimento_destino_id: string | null;
@@ -808,17 +809,33 @@ interface LinhaMovimentacao extends Record<string, unknown> {
 const SELECT_MOVIMENTACAO = `
   SELECT m.id, m.demanda_id, m.tipo, m.colaborador_id,
          c.nome_completo AS colaborador_nome, c.usuario_id AS colaborador_usuario_id,
+         -- ORIGEM do movimento = posição/lotação vigente na VÉSPERA da data
+         -- pretendida, não a vigente hoje. Depois de aplicada, a vigente de
+         -- hoje JÁ É o destino: ler "hoje" faria o cartão exibir
+         -- "Vendedor(a) → Vendedor(a)". A véspera responde certo nos dois
+         -- estados, porque a aplicação encerra a posição anterior em
+         -- data_pretendida - 1 (ver encerrarPosicao/encerrarLotacao):
+         --   pendente  → a véspera ainda é a posição atual;
+         --   aplicada  → a véspera é justamente a posição que foi encerrada.
          (SELECT cv.nome
             FROM rh.posicao_colaborador p
             JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
-           WHERE p.colaborador_id = m.colaborador_id AND p.fim_vigencia IS NULL)
-           AS cargo_atual,
+           WHERE p.colaborador_id = m.colaborador_id
+             AND p.inicio_vigencia <= m.data_pretendida - 1
+             AND (p.fim_vigencia IS NULL OR p.fim_vigencia >= m.data_pretendida - 1)
+           ORDER BY p.inicio_vigencia DESC
+           LIMIT 1)
+           AS cargo_origem,
          (SELECT ev.unidade
             FROM rh.lotacao l
             JOIN rh.estabelecimento_versao ev
               ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-           WHERE l.colaborador_id = m.colaborador_id AND l.fim_vigencia IS NULL)
-           AS unidade_atual,
+           WHERE l.colaborador_id = m.colaborador_id
+             AND l.inicio_vigencia <= m.data_pretendida - 1
+             AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= m.data_pretendida - 1)
+           ORDER BY l.inicio_vigencia DESC
+           LIMIT 1)
+           AS unidade_origem,
          m.cargo_destino_id,
          (SELECT cv.nome FROM rh.cargo_versao cv
            WHERE cv.cargo_id = m.cargo_destino_id AND cv.status = 'ativa')
@@ -844,8 +861,8 @@ function paraMovimentacao(linha: LinhaMovimentacao): Movimentacao {
     colaborador_id: Number(linha.colaborador_id),
     colaborador_nome: linha.colaborador_nome,
     colaborador_usuario_id: numeroOuNulo(linha.colaborador_usuario_id),
-    cargo_atual: linha.cargo_atual,
-    unidade_atual: linha.unidade_atual,
+    cargo_origem: linha.cargo_origem,
+    unidade_origem: linha.unidade_origem,
     cargo_destino_id: numeroOuNulo(linha.cargo_destino_id),
     cargo_destino: linha.cargo_destino,
     estabelecimento_destino_id: numeroOuNulo(linha.estabelecimento_destino_id),

@@ -1,0 +1,307 @@
+/* Visual dos demais módulos (primária #d21217, claro) — ver ferias/page.module.css. */
+
+.pagina {
+  min-height: 100vh;
+  background: #f7f6f4;
+  color: #1c1b1a;
+}
+
+.conteudo {
+  max-width: 1120px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.conteudo h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.subtitulo {
+  margin: 0 0 28px;
+  color: #6b6763;
+}
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.cartao h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.cabecalhoCartao {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.cabecalhoCartao h2 {
+  margin: 0;
+}
+
+/* -------------------------------------------------- coluna dupla dos blocos */
+
+.colunas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.colunas > .cartao {
+  margin-bottom: 0;
+}
+
+/* -------------------------------------------------- meus dados */
+
+.identidade {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.identidade strong {
+  font-size: 22px;
+}
+
+.dados {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin: 0;
+}
+
+.dado {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dado dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b6763;
+}
+
+.dado dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+/* -------------------------------------------------- números em destaque */
+
+.cartoesResumo {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cartaoResumo {
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fff;
+}
+
+.cartaoResumo strong {
+  display: block;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.cartaoResumo span {
+  font-size: 0.8rem;
+  color: #6b6763;
+}
+
+.cartaoResumoAcao {
+  border-color: #d21217;
+  background: #fdf3f3;
+}
+
+/* -------------------------------------------------- listas e tabelas */
+
+.tabelaEnvolucro {
+  overflow-x: auto;
+}
+
+.tabela {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.tabela th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid #e3e0dc;
+  color: #6b6763;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tabela td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0eeeb;
+  vertical-align: top;
+}
+
+.numero {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.itemLista {
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.itemListaAcao {
+  border-color: #d21217;
+  background: #fdf3f3;
+}
+
+.itemLista p {
+  margin: 0 0 4px;
+  font-size: 0.92rem;
+}
+
+.metaItem {
+  font-size: 0.8rem;
+  color: #6b6763;
+}
+
+.vazio {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #6b6763;
+}
+
+.notaRodape {
+  margin: 12px 0 0;
+  font-size: 0.78rem;
+  color: #6b6763;
+}
+
+/* -------------------------------------------------- avisos */
+
+.aviso {
+  border: 1px solid #d98200;
+  background: #fdf7ec;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  color: #7a4a00;
+}
+
+.avisoForte {
+  border-color: #d21217;
+  background: #fdf3f3;
+  color: #a00d11;
+}
+
+.avisoNeutro {
+  border: 1px solid #e3e0dc;
+  background: #faf9f8;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6b6763;
+}
+
+.erro {
+  font-size: 0.9rem;
+  color: #d21217;
+}
+
+/* -------------------------------------------------- etiquetas */
+
+.etiqueta {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: #f0eeeb;
+  color: #6b6763;
+}
+
+.etiquetaOk {
+  background: #e8f5ec;
+  color: #1e7c3c;
+}
+
+.etiquetaAtencao {
+  background: #fdf7ec;
+  color: #a36200;
+}
+
+.etiquetaAlerta {
+  background: #d21217;
+  color: #fff;
+}
+
+/* -------------------------------------------------- ligações e botões */
+
+.ligacao {
+  color: #d21217;
+  font-weight: 600;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.ligacao:hover {
+  text-decoration: underline;
+}
+
+.botaoLigacao {
+  display: inline-block;
+  padding: 9px 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  background: #d21217;
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+.botaoLigacao:hover {
+  background: #b30f13;
+}
+
+.acoesCartao {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+}

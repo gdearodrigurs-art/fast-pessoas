@@ -80,8 +80,9 @@ export interface Movimentacao {
   colaborador_id: number;
   colaborador_nome: string;
   colaborador_usuario_id: number | null;
-  cargo_atual: string | null;
-  unidade_atual: string | null;
+  /** De onde a pessoa saiu: posição/lotação da véspera da vigência pretendida. */
+  cargo_origem: string | null;
+  unidade_origem: string | null;
   cargo_destino_id: number | null;
   cargo_destino: string | null;
   estabelecimento_destino_id: number | null;
