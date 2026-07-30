@@ -1,295 +1,205 @@
-# Plano de execução — feedback da reunião com a Diretora de Pessoas
+# Plano de execução — reunião com a Diretora de Pessoas
 
-> Reunião de 2026-07-30. 18 pontos levantados + a prioridade declarada.
-> **Nada foi implementado ainda.** Este documento é a ordem de execução proposta.
->
-> Antes de escrever, conferi no código e no banco cada afirmação que dependia do
-> estado atual do sistema. As correções de premissa estão na seção 1 — três delas
-> mudam o tamanho do trabalho.
+> **Versão consolidada de 2026-07-30.** Reúne três fontes: os 18 pontos anotados logo após a
+> reunião, os achados do cruzamento com a transcrição (`docs/11-achados-da-transcricao.md`) e
+> as decisões do usuário sobre ambos.
+> **Nada foi implementado ainda.** Cada afirmação que dependia do estado do sistema foi
+> conferida no código e no banco antes de virar tarefa.
 
 ---
 
-## 1. O que a verificação mudou em relação ao relato
+## 1. Correções de premissa (verificadas no código)
 
-Quatro pontos precisam ser recolocados antes de virar tarefa:
-
-### 1.1 Centro de custo existe, mas está escondido — e o modelo precisa virar TRÊS campos
-
-A diretora disse *"não vi isso em lugar nenhum"*. O dado existe (`rh.lotacao.centro_custo`,
-migration 0002) e aparece na ficha — mas **grudado na unidade**, como sufixo:
-`Matriz Centro · CC CC-1000`. Sem rótulo próprio, mostrando código sem nome, e não filtrável.
-Quem procura "centro de custo" na tela não acha. A crítica dela procede na prática.
-
-**Decisão do usuário (2026-07-30): separar em três campos independentes.**
-
-| Campo | O que responde | Hoje |
+| # | O que se acreditava | O que a verificação mostrou |
 |---|---|---|
-| **Registro** | Em qual **empresa do grupo** (CNPJ) a pessoa está registrada | **não existe** |
-| **Lotação** | O **local físico** onde ela trabalha | existe (`estabelecimento` — as 5 unidades) |
-| **Centro de custo** | Onde o **custo** dela cai | existe como texto livre, sem cadastro nem nome |
-
-São ortogonais: alguém pode estar **registrada no CNPJ do CSC**, **lotada na Matriz Centro** e
-com **custo no CC de TI**. Hoje o sistema não consegue expressar isso — trata unidade e centro
-de custo como uma coisa só e não conhece as empresas.
-
-Isso **absorve a Onda I** (os 4 CNPJs) e vira uma mudança estrutural única.
-
-### 1.2 A tela de avaliação **não está quebrada** — ela é omissa para quem não avalia
-
-Ela relatou *"clico em Responder avaliação e fica uma folha em branco"*.
-
-Reproduzi: aberta pelo **avaliador** (o gestor), a tela renderiza o formulário completo —
-3 pilares, 15 indicadores, escala 1–5 e "não observado". O problema aparece para **quem não
-é o avaliador**: a API responde 200 com `responder: false, sou_avaliador: false`, e como o
-ciclo ainda não está consolidado **não há resultado para mostrar** — a tela então não desenha
-nem formulário, nem resultado, nem explicação. Resultado visual: página em branco.
-
-**A causa é de UX, não de dado.** Custo baixo, e some da frente de qualquer um que abrir um
-ciclo alheio.
-
-### 1.3 O alerta de contrato de experiência leva para a ficha, não para a avaliação
-
-Ela disse *"não consigo ir para fazer a avaliação"*. Confirmado no código: o alerta de
-experiência no portal do gestor aponta para `/colaboradores/{id}`. O caminho para responder
-existe, mas em **outro bloco** da mesma tela ("Avaliações em que você é o avaliador").
-São dois problemas diferentes, e este é um link errado — correção de uma linha.
-
-### 1.4 Ponto e banco de horas: **não existe nada**, e isso é bom saber
-
-Nenhuma tabela de marcação, jornada, escala ou banco de horas no banco. É construção do zero.
-**Mas — e isto é o que importa para a resposta a ela — só a marcação depende de contratar
-o REP-P homologado (Portaria 671).** Espelho, banco de horas, saldo, média de hora extra e
-as visões do colaborador e do gestor são nossas e podem ser feitas agora, consumindo
-marcações de onde vierem (importação de arquivo, digitação assistida, ou o REP-P quando
-chegar). **A prioridade número um dela não está bloqueada.**
-
-### 1.5 Dois campos que não existem e o item 11 exige
-
-A regra de visibilidade que ela pediu inclui **telefone e e-mail** na ficha visível a todos.
-`rh.colaborador` não tem esses campos hoje. Entram junto.
+| 1.1 | "Centro de custo não existe em lugar nenhum" | **Existe** (`rh.lotacao.centro_custo`), mas escondido como sufixo da unidade (`Matriz Centro · CC CC-1000`): sem rótulo próprio, sem nome, sem filtro. A crítica procede na prática |
+| 1.2 | "A tela de avaliação está quebrada" | **Funciona para o avaliador** (renderiza os 3 pilares e 15 indicadores). Fica vazia para **quem não é o avaliador**: sem formulário (não pode responder) e sem resultado (ciclo não consolidado), a tela não desenha nem explica |
+| 1.3 | "Não consigo ir do contrato de experiência para a avaliação" | Problema **diferente** do anterior: o alerta aponta para `/colaboradores/{id}`, não para a avaliação. Link errado |
+| 1.4 | "Falta o ponto" | **Não existe nenhuma tabela** de marcação, jornada, escala ou banco de horas. Mas **só a marcação depende do REP-P** (Portaria 671) — apuração e visões são nossas e podem ser feitas já |
+| 1.5 | Regra de visibilidade pede telefone e e-mail | **Não existem** em `rh.colaborador` |
+| 1.6 | "Folha retroativa já está bloqueada" (demonstrado na reunião e aprovado por ela) | **Não está.** O esquema aceita ano de 2020 a 2100 sem trava. A regra foi aprovada acreditando que já existia |
 
 ---
 
-## 2. Ordem de execução
+## 2. Decisões tomadas
 
-O critério de ordenação: **primeiro a prioridade declarada**, depois o que é **barato e
-corrige defeito visível**, depois o que **muda modelo de dado** (quanto mais cedo, menos
-retrabalho), e por último o que é **módulo novo isolado**.
+**Estrutura e cadastro**
+- **Três campos independentes**: **Registro** (empresa do grupo/CNPJ) · **Lotação** (local físico) · **Centro de custo** (onde o custo cai). São ortogonais.
+- **Pessoa ≠ vínculo**: o DP demite no CNPJ A e recontrata no B; o sistema mantém **uma pessoa com N vínculos** e a linha do tempo atravessa os vínculos.
+- **Centros de custo administráveis** pelo usuário (adiciona, renomeia, inativa). Renomear não reescreve histórico; remover CC já usado é inativar.
+- Termo em tela: **lotação**.
+
+**Regras de negócio**
+- Revisão de valor de benefício: **o DP aprova**.
+- Ficha completa: **de gerente para cima** — *pendente de reconciliação, ver §4.1*.
+- Ponto: **prever importação** enquanto o REP-P não é contratado; correção de intercorrências detalhada **depois da base** existir.
+- Banco de horas: **altamente parametrizável** — padrão da empresa → padrão da unidade/cargo → exceção por colaborador, tudo versionado.
+- **Contabilidade externa (OLAC)**: **primeiro momento por arquivo** de exportação e importação; **API na segunda fase**. Resolve o impasse levantado na reunião (Supply, DCS e Casa do Montador processam folha fora, no sistema Castor).
+- **Ciência do Código de Conduta**: ato **pontual**, não recorrente — entra na preparação para uso real.
 
 ---
 
-### ONDA F — Ponto e banco de horas · a prioridade da diretoria
+## 3. Ordem de execução
 
-> *"De tudo, a coisa que ela mais enfatizou é o controle de folha de ponto e banco de horas,
-> mais visível para o funcionário e para o gestor."*
+### ONDA F — Ponto e banco de horas ⭐ prioridade declarada
 
-Maior bloco do plano. Ordem interna:
+> *"De tudo, o que ela mais enfatizou é o controle de ponto e banco de horas, mais visível para
+> o funcionário e para o gestor."*
 
-**F1. Fundação de jornada e marcação**
+**F1. Fundação**
 - Jornadas e escalas versionadas com vigência (5x2, 6x1, 12x36, intervalos, tolerâncias)
-- Feriados por município/unidade — **hoje não existem e já fazem falta** em férias e prazos
-- Tabela de marcação com origem declarada (REP-P, importação, ajuste manual), preparada para
-  receber o AFD/AEJ quando o registrador for contratado
-- Importador de marcações por arquivo, para o sistema funcionar antes da contratação
+- **Feriados** por município/unidade — não existem e já fazem falta em férias e prazos
+- Marcação com origem declarada (REP-P, importação, ajuste), preparada para AFD/AEJ
+- **Importador**: planilha padrão (código, código, valor) e arquivo do futuro REP-P
 
-**F2. Motor de apuração**
+**F2. Apuração**
 - Espelho de ponto da competência contra a jornada vigente
-- Horas extras por faixa (50%/100%), adicional noturno, faltas, atrasos, DSR
-- **Banco de horas**: saldo, crédito, débito, expiração conforme regra parametrizável
-- Tratamento de marcação com workflow de ajuste e aprovação do gestor (auditado)
+- Horas extras por faixa, adicional noturno, faltas, atrasos, DSR
+- **Banco de horas** com a parametrização em três níveis (§2)
 
-**F3. Visibilidade — o que ela pediu textualmente**
-- **Portal do colaborador**: saldo do banco de horas, **média de hora extra por dia**,
-  **total do último mês**, espelho do mês, histórico
-- **Portal do gestor**: banco de horas **do time**, quem está estourando hora extra,
-  pendências de ajuste para aprovar
-- **Ficha do colaborador**: bloco de ponto com o resumo e o histórico
-- Indicadores na Central de Metas (horas extras sobre horas trabalhadas, saldo médio)
+**F3. Intercorrências** *(detalhamento após a base — decisão do usuário)*
+- Fila de marcações inconsistentes (entrada sem saída, intervalo faltando)
+- **Correção pelo DP**, auditada
+- **Relatório diário automático aos gestores** — segundo a diretora, é o que **elimina a
+  contratação de um estagiário dedicado a isso**
 
-**F4. Ligação com a folha**
-- Horas apuradas viram variáveis da competência automaticamente (hoje são digitadas)
+**F4. Visibilidade — o pedido textual dela**
+- **Portal do colaborador**: saldo do banco de horas, **média de hora extra por dia**, **total do último mês**, espelho, histórico
+- **Portal do gestor**: banco de horas **do time**, quem está estourando hora extra, ajustes a aprovar
+- **Ficha do colaborador**: bloco de ponto com resumo e histórico
+- Indicadores na Central de Metas
 
----
-
-### ONDA G — Correções e ajustes baratos
-
-Tudo aqui é pequeno e tira defeito da frente. Vale fazer em bloco, logo após (ou em paralelo
-com) a F, porque são independentes entre si.
-
-| # | Item | Origem |
-|---|---|---|
-| G1 | Tela de avaliação: mostrar estado explicado para quem não é o avaliador (em vez de página vazia) | 1.2 |
-| G2 | Alerta de contrato de experiência → link direto para responder a avaliação | 1.3 |
-| G3 | Folha: **bloquear abertura de competência retroativa** (hoje o esquema aceita de 2020 a 2100) | ponto 17 |
-| G4 | Folha: botão **adicionar rubrica** (hoje só dá para criar nova versão de rubrica existente) | ponto 14 |
-| G5 | SST: **NR-1** com validade, renovação, alerta e indicador — espelho do que o ASO já faz | ponto 18 |
-| G6 | Portal do gestor: bloco de treinamentos segue vazio e explicado (nada a fazer até o módulo existir) | ponto 10 |
+**F5. Ligação com a folha** — horas apuradas viram variáveis da competência automaticamente
 
 ---
 
-### ONDA H — Benefícios: mudança de modelo
+### ONDA G — Correções e ajustes baratos *(pode correr junto da F)*
 
-**Este item inverte o desenho atual e por isso vem cedo** — quanto mais adesões existirem no
-formato antigo, mais caro fica migrar.
-
-Hoje: catálogo com **regra de elegibilidade**, a pessoa **se candidata**, o DP defere.
-Como ela quer: **ninguém se candidata** — a pessoa já entra com direito. O que varia é o
-**valor por pessoa** (VT de R$ 600 para um, R$ 720 para outro, conforme o custo de deslocamento).
-
-- H1. Remover a lógica de candidatura/elegibilidade; benefício passa a ser atribuído por padrão
-- H2. **Valor individual** por adesão, informado pela pessoa ao solicitar
-- H3. **Solicitação de revisão de valor** (mudou de casa, passagem aumentou) com histórico —
-  o valor anterior não some, vira versão encerrada
-- H4. **Aprovação da revisão**: definir se vai para o DP ou para o gestor imediato — **decisão
-  sua** (ver seção 3)
-- H5. **Dependentes cadastrados pelo próprio colaborador**, sem passar por DP/RH
-- H6. Migrar as adesões existentes para o modelo novo (a demo tem 322)
+| # | Item |
+|---|---|
+| G1 | **Avaliação — dois defeitos**: (a) estado explicado para quem não é o avaliador, em vez de tela vazia; (b) as perguntas do pilar de valores estão puxando erradas |
+| G2 | Alerta de contrato de experiência → link direto para responder a avaliação |
+| G3 | **Bloquear competência retroativa** — urgência elevada: foi apresentada como pronta e aprovada (§1.6) |
+| G4 | **Rubricas**: botão adicionar + as seis nomeadas por ela — comissão, reflexo de comissão, DSR, reflexo de DSR sobre comissão, salário família, abono pecuniário — e **eliminar os proventos manuais genéricos** |
+| G5 | **NR-1 como avaliação psicossocial**, acoplada ao ASO: indicador **ao lado** do de ASO (não no lugar), e todo ASO novo já entra na modalidade. Empresa já contratada por ela |
+| G6 | **Organograma em árvore vertical** — formato que você mesmo apontou como insuficiente |
 
 ---
 
-### ONDA I — Estrutura: registro, lotação e centro de custo
+### ONDA I — Estrutura: registro, lotação, centro de custo e vínculos
 
-> *"Vamos dividir em 3 campos: registro (qual empresa a pessoa está registrada), lotação
-> (local físico onde ela trabalha) e centro de custo (onde o custo dela cai)."*
-> *"A pessoa pode mudar entre os CNPJs e esse histórico não é perdido."*
+Sobe para a terceira posição: J, K e os relatórios se apoiam nela. Mexer depois = refazer telas.
 
-**Subiu de posição** (era a 4ª, virou a 3ª): os três campos são a base de que a conferência
-da folha (J), a ficha (K) e os relatórios dependem. Fazer depois significa refazer.
-
-- **I1. Empresa do grupo** — entidade nova (CNPJ, razão social, tipo): indústria, varejo,
-  franquia e CSC. Os estabelecimentos passam a pendurar nela.
-- **I2. Cadastro de centro de custo administrável pelo usuário** (decisão de 2026-07-30) —
-  código **e nome** (`CC-1000 · Administrativo`), vinculado à empresa. Existe lista oficial,
-  mas **nada é chumbado no código**: o usuário **adiciona, renomeia e remove livremente**,
-  no mesmo padrão da Central de Metas. A carga inicial parte da lista oficial e daí em diante
-  é do RH/DP.
-  - **Renomear** não reescreve histórico: a folha fechada de junho continua exibindo o nome
-    que valia em junho (nome versionado com vigência, igual às demais regras do sistema).
-  - **Remover** um CC que já tem histórico = **inativar**, não apagar — some das listas de
-    escolha e continua legível no passado. Apagar de fato só enquanto nunca foi usado.
-    (Mesmo tratamento que o catálogo de indicadores já recebeu.)
-- **I3. Os três campos na ficha**, cada um com rótulo próprio, versionados com vigência
-  (mudar de qualquer um dos três é histórico, não sobrescrita)
-- **I4. Filtro por registro, lotação e centro de custo** — lista de colaboradores,
-  relatórios, organograma e folha
-- **I5. Transferência entre empresas** como movimentação, mantendo **a mesma pessoa e o mesmo
-  histórico** — muda o vínculo, não o registro da pessoa
-- **I6. eSocial**: transferência entre CNPJs é desligamento + admissão para o governo, mas
-  **um só histórico** para o RH. Desenhar conforme a prática atual do DP (decisão 4)
+- **I1. Empresa do grupo** (CNPJ, razão social, tipo) — 4 CNPJs: indústria, varejo, franquia e CSC. Nomes citados na reunião: **Supply, DCS, Casa do Montador**
+- **I2. Cadastro de centro de custo** administrável (código + nome, vinculado à empresa), com nome versionado e inativação em vez de exclusão
+- **I3. Os três campos na ficha**, com rótulo próprio e vigência
+- **I4. Filtros** por registro, lotação e centro de custo em lista, relatórios, organograma e folha
+- **I5. Pessoa ≠ vínculo** — uma pessoa (CPF) com N vínculos; cada vínculo com matrícula, admissão, rescisão e matrícula eSocial próprias; **linha do tempo da pessoa** atravessando vínculos
+- **I6. Transferência entre empresas** como movimentação, preservando a pessoa e o histórico
 
 ---
 
-### ONDA J — Folha: conferência por rubrica, pessoa e centro de custo
+### ONDA H — Benefícios: inverter o modelo
 
-Depende da Onda I (o centro de custo com cadastro e nome).
+Quanto mais adesões no formato antigo, mais cara a migração.
 
-- J1. **Três visões de conferência do fechamento**: por tipo de rubrica, por pessoa e por
-  centro de custo *(ela marcou como "muito importante mesmo")*
-- J2. Totais e quebras por centro de custo — e também por **registro** (empresa), já que a
-  folha passa a ser por CNPJ
-- J3. Filtros das três dimensões na competência
+- **H1.** Acabar com candidatura e elegibilidade: a pessoa **já entra com direito**; o botão "solicitar adesão" **desaparece**
+- **H2. Valor individual** por pessoa (VT de R$ 600 para um, R$ 720 para outro)
+- **H3. Solicitar revisão de valor** (mudou de casa, passagem subiu), com histórico — valor anterior vira versão encerrada
+- **H4.** Revisão aprovada pelo **DP**
+- **H5. Dependentes cadastrados pelo próprio colaborador**, sem DP/RH
+- **H6.** Migrar as 322 adesões existentes
 
 ---
 
-### ONDA K — Visibilidade em camadas na ficha
+### ONDA J — Folha: conferência e contabilidade externa
 
-> *"Fica visível para qualquer pessoa: nome, cargo, telefone, e-mail, líder imediato e unidade.
-> O resto só para DP/RH e para os líderes acima."*
+- **J1. Três visões de conferência** — **por provento** (o termo dela), por pessoa e por centro de custo. Marcado como *"muito importante mesmo"*
+- **J2.** Totais e quebras por centro de custo **e por registro/empresa**
+- **J3.** Filtros das três dimensões na competência
+- **J4. Espelhamento com a OLAC** *(decisão de 2026-07-30)*:
+  - **Fase 1 — arquivos**: exportação das movimentações internas e importação do que vem da contabilidade
+  - **Fase 2 — API**
+  - Requisito dela: *"toda movimentação feita lá espelha aqui, e toda movimentação feita aqui está aqui"*
 
-- K1. Acrescentar **telefone e e-mail** em `rh.colaborador` (não existem — item 1.5)
-- K2. **Ficha pública mínima** para qualquer colaborador autenticado
-- K3. Ficha completa para DP/RH **e para a cadeia de liderança acima da pessoa** — hoje o
-  escopo é só do gestor imediato, precisa subir a cadeia inteira
-- K4. Rever o que exatamente é "o resto" com o DP (ver seção 3)
+---
+
+### ONDA K — Visibilidade em camadas e campos cadastrais
+
+- **K1.** Acrescentar **telefone e e-mail corporativo** a `rh.colaborador`
+- **K2. Ficha pública mínima** — nome, cargo, telefone, e-mail, líder atual, unidade. **Nada além.** Vale **também para a lista**, não só para a ficha (cobrança dela na reunião)
+- **K3. Nível hierárquico no cargo** + regra de quem vê o quê — *pendente §4.1*
+- **K4. Diversidade no padrão IBGE** — campos autodeclarados além de gênero
 
 ---
 
 ### ONDA L — Recrutamento e admissão
 
-- L1. Etapa **Pesquisa social** no kanban, antes da Oferta, com anexo e resultado
-  aprovado / não aprovado
-- L2. **Checklists de admissão personalizáveis**: botão criar checklist, com itens
-  detalhados (identidade, título de eleitor, comprovante de residência…) e modelos
-  diferentes por tipo de vínculo — o de PJ não é o de CLT
+- **L1. Etapa "Pesquisa social"** no kanban, **antes da Oferta**, com anexo e resultado aprovado / não aprovado
+- **L2. Checklist personalizável** (botão criar checklist; PJ ≠ CLT) com os itens que ela ditou: **documentos, ASO, contrato, acessos, uniforme e onboarding**
+- **L3.** Anexos da admissão vão para a **ficha do funcionário** — *"não vai ter mais subs, não vai ter mais servidor"*
 
 ---
 
 ### ONDA M — Pesquisa com público-alvo
 
-- M1. Ao criar a pesquisa, **selecionar quem é elegível a responder** — por unidade, cargo,
-  centro de custo, empresa ou seleção manual de pessoas
-- M2. Vale para os três tipos: anual, pulse e eNPS
-- M3. Adesão passa a ser medida sobre o público-alvo, não sobre a empresa inteira
+- **M1.** Ao criar a pesquisa, **selecionar quem é elegível a responder** (unidade, cargo, centro de custo, empresa ou seleção manual)
+- **M2.** Vale para anual, pulse e eNPS
+- **M3.** Adesão medida sobre o público-alvo, não sobre a empresa inteira
 
 ---
 
-## 3. Decisões — respondidas em 2026-07-30
+### ONDA N — Preparação para o uso real
 
-| # | Decisão | Resposta |
-|---|---|---|
-| 1 | Aprovação da revisão de valor de benefício | ✅ **O DP aprova** |
-| 2 | O que é "o resto" da ficha restrito | ⏳ **Em aberto** — o usuário vai reler a transcrição da reunião |
-| 3 | Alcance dos "líderes acima" | ✅ **Apenas de gerente para cima** — corte por nível, não pela cadeia |
-| 4 | Transferência entre CNPJs no eSocial | ✅ **Demite e recontrata** na outra empresa, sem perder dados nem histórico |
-| 5 | Marcações de ponto até o REP-P | ✅ **Prever importação de dados** enquanto não há registrador |
-| 6 | Regra do banco de horas | ✅ **Altamente parametrizável** pelo DP: padrões + personalização por funcionário |
+Nada aqui é urgente hoje, mas **tudo é pré-requisito para sair da demo**.
 
-### 3.1 Duas implicações estruturais dessas respostas
-
-**Da resposta 3 — "gerente para cima" precisa de nível hierárquico no cargo, que não existe.**
-Hoje o alcance é "o gestor vê os liderados diretos" (`rh.relacao_gestor`). O corte por nível é
-outra régua e exige um campo de **nível/senioridade no cargo**.
-⚠️ **Efeito colateral a validar com o DP:** um supervisor que lidera pessoas **deixaria de ver
-a ficha completa da própria equipe** — hoje ele vê. É restrição, não ampliação.
-
-**Da resposta 4 — separar PESSOA de VÍNCULO.**
-Hoje `rh.colaborador` é as duas coisas: quem a pessoa é (CPF, nascimento, dependentes) **e** o
-vínculo (matrícula, admissão, cargo, salário). Se o DP demite no CNPJ A e recontrata no B, no
-modelo atual isso vira **dois colaboradores** — e o histórico se parte, que é exatamente o que
-a diretora não quer.
-
-Desenho correto: **uma pessoa (CPF) com N vínculos**; cada vínculo com matrícula, admissão,
-rescisão e matrícula eSocial próprias; **a linha do tempo é da pessoa** e atravessa os
-vínculos. Barato agora, caro depois — **entra na Onda I**, que já era estrutural.
-
-### 3.2 Parametrização do banco de horas (resposta 6)
-
-Três níveis, do geral ao específico, todos versionados com vigência:
-1. **Padrão da empresa** (registro/CNPJ)
-2. **Padrão da unidade ou do cargo**, quando divergir
-3. **Exceção por colaborador**, que vence os anteriores
-
-Parâmetros: prazo de compensação, limite de saldo positivo e negativo, o que expira e quando,
-tratamento do saldo na rescisão, fator de conversão de hora extra. **Nenhum chumbado no
-código** — mesma diretriz dos centros de custo e das metas.
+- **N1. Importadores de carga inicial** — RCF/cargos, unidades e locais de trabalho, headcount, dados cadastrais. Layout a combinar com o Diego. É o que viabiliza a sua estratégia de carga em etapas
+- **N2. Ciência do Código de Conduta e Regulamento Interno no primeiro acesso** *(ato pontual)*: bloqueia o acesso até aceitar, **exige rolar o documento**, nova versão reabre a ciência para todos, registro com hash e data. Valor jurídico declarado por ela
+- **N3. Check-in de clima como pop-up no portal de vendas** — depende da Fase B da plataforma. Ela também sugeriu **dar um nome/marca** ao check-in
 
 ---
 
-## 4. O que continua dependendo de terceiros
+## 4. Decisões ainda em aberto
+
+### 4.1 Salário do time: o líder direto vê?
+
+Na reunião (00:42:33) ela aprovou explicitamente:
+
+> **Você:** *"O gestor tem que conseguir ver o salário do time dela."* → **Diretora: "Sim. O gestor, sim."**
+
+Mas a resposta posterior foi **"apenas gerente pra cima"**, o que tiraria o salário de um
+supervisor que lidera gente. Leitura provável: **o corte vale para quem NÃO é líder da pessoa**
+(a cadeia acima dela), e **o líder direto continua vendo a própria equipe**. Precisa de
+confirmação antes da Onda K.
+
+### 4.2 Lista completa de rubricas
+
+Ela sugeriu levantar com o **Diego**. As seis já nomeadas entram na G4; o restante depende
+desse levantamento.
+
+---
+
+## 5. Dependências de terceiros
 
 | Item | Depende de |
 |---|---|
-| Marcação de ponto com validade jurídica | Contratar REP-P homologado (a apuração e as visões **não** dependem) |
+| Marcação de ponto com validade jurídica | Contratar REP-P homologado — **a apuração e as visões não dependem** |
 | Transmissão do eSocial | Certificado digital e-CNPJ + homologação em produção restrita |
-| Treinamentos da equipe | Módulo de T&D — hoje no Sults, a absorver depois |
+| Treinamentos da equipe | Módulo de T&D — hoje no Sults |
+| Layout dos importadores e lista de rubricas | Diego |
 
 ---
 
-## 5. Resumo da ordem
+## 6. Resumo da ordem
 
-1. **F — Ponto e banco de horas** (prioridade declarada; o maior bloco)
-2. **G — Correções baratas** (avaliação em branco, link de experiência, folha retroativa, adicionar rubrica, NR-1)
-3. **I — Registro, lotação e centro de custo** (estrutura; tudo abaixo depende dela)
-4. **H — Benefícios** (inverte o modelo; quanto antes, menos migração)
-5. **J — Conferência de folha em 3 visões**
-6. **K — Visibilidade em camadas na ficha**
-7. **L — Pesquisa social e checklists de admissão**
-8. **M — Público-alvo da pesquisa de clima**
-
-**Sequência prática:** F e G correm juntas — G são correções pequenas e independentes, e
-entregá-las cedo tira da frente os defeitos que ela viu.
-
-**I subiu para a terceira posição** depois da decisão dos três campos: registro, lotação e
-centro de custo são a base de J (conferência da folha por CC e por empresa), de K (o que
-aparece na ficha) e dos filtros de relatório. Mexer nessa estrutura depois de construir as
-telas em cima dela significa refazer as telas.
+| | Onda | Nota |
+|---|---|---|
+| 1 | **F — Ponto e banco de horas** | prioridade declarada; maior bloco |
+| 2 | **G — Correções baratas** | corre junto da F |
+| 3 | **I — Registro, lotação, centro de custo e vínculos** | estrutura; tudo abaixo depende |
+| 4 | **H — Benefícios** | inverte o modelo; quanto antes, menos migração |
+| 5 | **J — Folha: conferência e OLAC** | depende de I |
+| 6 | **K — Visibilidade em camadas** | depende de 4.1 |
+| 7 | **L — Pesquisa social e checklists** | |
+| 8 | **M — Público-alvo da pesquisa** | |
+| 9 | **N — Preparação para o uso real** | pré-requisito para sair da demo |

@@ -310,6 +310,16 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #canonico #modelo-de-dados #regra-negocio #gap
 
+### [2026-07-30] DECISÕES DO USUÁRIO sobre os achados da transcrição
+
+**Decisão:** (1) **Ciência do Código de Conduta** — é ato **pontual**, não atividade recorrente; entra na preparação para o uso real, não nas ondas de correção urgente. (2) **Integração com a contabilidade externa (OLAC)** — resolve-se em dois tempos: **primeiro momento, arquivo de exportação e arquivo de importação**; **segundo momento, integração via API**. Isso fecha a questão de escopo que ficou aberta na reunião (a diretora levantou que Supply, DCS e Casa do Montador processam folha fora, no sistema Castor). (3) **Correção de intercorrências de ponto** — confirmada como necessária, mas o detalhamento fica para depois da base do controle de ponto existir.
+
+**Motivo:** Respostas do usuário ao cruzamento da transcrição com os 18 pontos (docs/11-achados-da-transcricao.md). O item 2 elimina o impasse "folha própria substitui tudo × parte é processada fora": convivem, com espelhamento por arquivo antes de API.
+
+**Contexto:** Os três esclarecimentos foram incorporados à reorganização do plano (docs/10). Segue **em aberto** a contradição 4.1: a diretora aprovou na reunião que o **gestor vê o salário do time** ("Sim. O gestor, sim."), o que conflita com o corte "apenas gerente pra cima" dado depois — provável leitura correta: o corte vale para quem NÃO é líder da pessoa, e o líder direto continua vendo a própria equipe. Também pendente: levantar com o Diego a lista completa de rubricas.
+
+**Tags:** #canonico #arquitetura #regra-negocio
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.
