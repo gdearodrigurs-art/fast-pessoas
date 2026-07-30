@@ -36,11 +36,13 @@ export function FormularioMovimentacao({
   const [justificativaExcecao, setJustificativaExcecao] = useState("");
   const [dataPretendida, setDataPretendida] = useState("");
   const [justificativa, setJustificativa] = useState("");
-  const [faixa, setFaixa] = useState<{
-    faixa_min: number;
-    faixa_max: number;
+  // Guarda a faixa JUNTO do cargo que a originou: assim trocar de cargo (ou de
+  // tipo) não deixa a faixa antiga na tela e o efeito não precisa "limpar"
+  // estado — a faixa exibida é derivada da escolha atual.
+  const [faixaCarregada, setFaixaCarregada] = useState<{
+    cargo_id: string;
+    faixa: { faixa_min: number; faixa_max: number } | null;
   } | null>(null);
-  const [semFaixa, setSemFaixa] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -64,11 +66,7 @@ export function FormularioMovimentacao({
 
   // Faixa vigente do cargo destino — leitura registrada no servidor.
   useEffect(() => {
-    if (tipo !== "promocao" || !cargoDestino) {
-      setFaixa(null);
-      setSemFaixa(false);
-      return;
-    }
+    if (tipo !== "promocao" || !cargoDestino) return;
     let ativo = true;
     (async () => {
       try {
@@ -77,8 +75,10 @@ export function FormularioMovimentacao({
         );
         const dados = await resposta.json().catch(() => ({}));
         if (!ativo || !resposta.ok) return;
-        setFaixa(dados.faixa ?? null);
-        setSemFaixa(dados.faixa === null);
+        setFaixaCarregada({
+          cargo_id: cargoDestino,
+          faixa: dados.faixa ?? null,
+        });
       } catch {
         /* sem faixa na tela não impede o envio: a trava vive no servidor */
       }
@@ -87,6 +87,16 @@ export function FormularioMovimentacao({
       ativo = false;
     };
   }, [tipo, cargoDestino]);
+
+  // Derivado da escolha atual: faixa de outro cargo nunca aparece.
+  const carregado =
+    tipo === "promocao" &&
+    cargoDestino &&
+    faixaCarregada?.cargo_id === cargoDestino
+      ? faixaCarregada
+      : null;
+  const faixa = carregado?.faixa ?? null;
+  const semFaixa = carregado !== null && carregado.faixa === null;
 
   const valor = salario.trim() === "" ? null : Number(salario);
   const foraDaFaixa =

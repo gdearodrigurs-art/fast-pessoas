@@ -6,7 +6,9 @@ import { Cabecalho } from "@/app/cabecalho";
 import { rotuloTransicao } from "@/dominios/demandas/esquemas";
 import { ROTULOS_PAPEL } from "@/dominios/usuarios/esquemas";
 import { AcoesDemanda } from "../acoes-demanda";
+import { AcoesEtapa } from "../acoes-etapa";
 import { CartaoDemanda } from "../cartao-demanda";
+import { CartaoMovimentacao } from "../cartao-movimentacao";
 import comum from "../comum.module.css";
 import { formatarDataHora } from "../formato";
 import { Comentario, Detalhe } from "../tipos";
@@ -107,6 +109,32 @@ export function DetalheDemanda({ id }: { id: number }) {
                 aoAtualizar={recarregar}
               />
             </CartaoDemanda>
+
+            {detalhe.movimentacao && (
+              <section className={estilos.bloco}>
+                <h2>Pedido de movimentação</h2>
+                <p className={estilos.notaFuso}>
+                  Cadeia de aprovação <b>líder → diretoria</b>: os dois níveis
+                  abaixo mostram quem decidiu o quê e quando.
+                </p>
+                <CartaoMovimentacao
+                  dados={{
+                    demanda: detalhe.demanda,
+                    movimentacao: detalhe.movimentacao,
+                    etapas: detalhe.etapas,
+                  }}
+                >
+                  {detalhe.acoes.decidir_etapa && (
+                    <AcoesEtapa
+                      demandaId={detalhe.demanda.id}
+                      numero={detalhe.demanda.numero}
+                      nivel={detalhe.acoes.decidir_etapa}
+                      aoAtualizar={recarregar}
+                    />
+                  )}
+                </CartaoMovimentacao>
+              </section>
+            )}
 
             <section className={estilos.bloco}>
               <h2>Histórico de transições</h2>

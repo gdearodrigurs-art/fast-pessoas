@@ -3,6 +3,10 @@ import { valorIndicadorAdesaoCheckin } from "../clima/servico";
 import { valorIndicadorEntrevistas } from "../desligamento/servico";
 import { valorIndicadorFeriasVencidas } from "../ferias/servico";
 import { valorIndicadorFolhaNoPrazo } from "../folha/servico";
+import {
+  valorIndicadorAdesaoPesquisa,
+  valorIndicadorEnps,
+} from "../pesquisas/servico";
 import { valorIndicadorVagasNoPrazo } from "../recrutamento/servico";
 import { valorIndicadorAsosValidos } from "../sst/servico";
 import { ESCOPO_GLOBAL, formatarValorMeta } from "./esquemas";
@@ -74,6 +78,29 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
         valor === null
           ? "nenhum dia com check-in nos últimos 30 dias"
           : "média diária de respondentes ÷ ativos (dias com check-in, 30 dias)",
+    };
+  },
+  adesao_pesquisa: async () => {
+    const valor = await valorIndicadorAdesaoPesquisa();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhuma pesquisa de clima encerrada"
+          : "participantes da última pesquisa encerrada ÷ colaboradores ativos",
+    };
+  },
+  enps: async () => {
+    const valor = await valorIndicadorEnps();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhuma pesquisa encerrada com pergunta de eNPS e amostra mínima"
+          : // A unidade do catálogo é '%' por limitação do CHECK de
+            // rh.indicador (ver 0022): o número são PONTOS de eNPS (−100 a
+            // +100), e o detalhe diz isso para a tela não mentir.
+            "promotores (9–10) menos detratores (0–6), em pontos, na última pesquisa encerrada",
     };
   },
   asos_validos: async () => {

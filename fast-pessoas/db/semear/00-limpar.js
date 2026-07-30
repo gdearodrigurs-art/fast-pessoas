@@ -38,8 +38,19 @@ const ORDEM_LIMPEZA = [
   'rh_folha.variavel_lancada',
   'rh_folha.competencia_folha',
 
-  // ---- clima (respostas; as perguntas são catálogo)
+  // ---- clima (respostas; as perguntas do CHECK-IN são catálogo)
   'rh_clima.checkin_resposta',
+
+  // ---- pesquisa de clima (0022) — módulo próprio, ao lado do check-in.
+  // Aqui NADA é catálogo: pesquisa, questionário, resposta, participação e
+  // plano de ação são todos dados de demonstração, criados por 13-pesquisas.js.
+  // Ordem filho → pai: plano e resposta/participação apontam para pesquisa;
+  // resposta aponta também para pergunta_pesquisa.
+  'rh_clima.plano_acao',
+  'rh_clima.resposta_pesquisa',
+  'rh_clima.participacao_pesquisa',
+  'rh_clima.pergunta_pesquisa',
+  'rh_clima.pesquisa',
 
   // ---- notificações internas
   'sistema.notificacao',
@@ -92,6 +103,11 @@ const ORDEM_LIMPEZA = [
   'rh.documento',
 
   // ---- demandas (os tipos são catálogo)
+  // A cadeia de aprovação e o pedido de movimentação (0021) apontam para
+  // rh.demanda: saem antes dela. `demanda_movimentacao` também referencia
+  // posicao_colaborador/lotacao, limpas mais abaixo — esta ordem cobre as duas.
+  'rh.etapa_aprovacao_demanda',
+  'rh.demanda_movimentacao',
   'rh.demanda_comentario',
   'rh.demanda_transicao',
   'rh.demanda',

@@ -17,19 +17,24 @@
 //                              depois do primeiro dia
 //     ferias_vencidas          meta   0  ·  real    5  → risco de férias em
 //                              dobro (art. 137 da CLT)
+//     enps                     meta  30  ·  real  ~25  → clima da rede abaixo do
+//                              pactuado, com uma unidade em eNPS negativo — é o
+//                              farol que explica os planos de ação de 13-pesquisas
 //   VERDE (o que está no lugar)
 //     vagas_no_prazo           meta 80%  ·  real  100%
 //     asos_validos             meta 75%  ·  real  ~77%
 //     folha_no_prazo           meta 98%  ·  real  100%
+//     adesao_pesquisa          meta 70%  ·  real  ~76%
 //
 // Os valores reais vêm das fontes de src/dominios/indicadores/valores.ts, que
 // leem o que os módulos 05–10 semearam. As metas acima foram escolhidas para
 // que o farol saia MISTO — uma tela toda verde não dá conversa, uma toda
 // vermelha não é crível.
 //
-// adesao_checkin ganha meta (70%) mas ainda não tem fonte no registry: aparece
-// na Central de Metas com a meta definida e sem farol. É proposital — mostra a
-// diferença entre "meta pactuada" e "indicador já instrumentado".
+// avaliacao_ciclo, turnover e tempo_admissao ganham meta mas ainda NÃO têm
+// fonte no registry (src/dominios/indicadores/valores.ts): aparecem na Central
+// de Metas com a meta definida e sem farol. É proposital — mostra a diferença
+// entre "meta pactuada" e "indicador já instrumentado".
 //
 // Escopo por unidade: dois indicadores recebem metas por filial (a tela agrupa
 // meta global + metas de unidade no mesmo cartão). Serve para demonstrar que a
@@ -137,6 +142,32 @@ const ROTEIRO = [
     chave: 'asos_validos',
     porque: 'ASO vigente é obrigação legal; meta atingível para dar um verde crível',
     metas: [{ escopo: ESCOPO_GLOBAL, valor: 75, vigencia_meses: 7, autor: AUTOR_DP }],
+  },
+  {
+    chave: 'adesao_pesquisa',
+    porque:
+      'adesão da pesquisa anual (13-pesquisas semeia ~76%): meta batida, e é o que dá ' +
+      'credibilidade ao eNPS logo abaixo — resultado de amostra pequena não se discute',
+    metas: [{ escopo: ESCOPO_GLOBAL, valor: 70, vigencia_meses: 6, autor: AUTOR_RH }],
+  },
+  {
+    chave: 'enps',
+    porque:
+      'eNPS pactuado com a diretoria em 30 pontos e a rede está abaixo (13-pesquisas semeia ' +
+      '~25, com uma unidade em eNPS negativo). É o vermelho que EXPLICA os dois planos de ' +
+      'ação da pesquisa — farol e plano contando a mesma história',
+    metas: [
+      // Primeira meta foi 20 (o ponto de partida medido na primeira pesquisa) e
+      // subiu para 30 quando a diretoria assumiu clima como indicador do comitê.
+      {
+        escopo: ESCOPO_GLOBAL,
+        valor: 20,
+        vigencia_meses: 9,
+        encerrada_meses: 3,
+        autor: AUTOR_RH,
+      },
+      { escopo: ESCOPO_GLOBAL, valor: 30, vigencia_meses: 3, autor: AUTOR_DIRETORIA },
+    ],
   },
   {
     chave: 'folha_no_prazo',

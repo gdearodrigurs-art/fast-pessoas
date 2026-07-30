@@ -294,6 +294,24 @@ export async function encerrarPesquisa(
 /**
  * Colaborador da sessão com a UNIDADE da lotação vigente — o único atributo
  * que acompanha a resposta anônima.
+ *
+ * RISCO CONHECIDO E ACEITO (verificação da onda D) — "vigente" aqui é
+ * `fim_vigencia IS NULL`, que é a convenção UNIFORME do projeto: as mesmas seis
+ * consultas de lotação em beneficios, clima, colaboradores e demandas fazem
+ * igual. A convenção tem um ponto cego: uma transferência de unidade APROVADA
+ * com vigência FUTURA já cria a lotação de destino com fim_vigencia nulo (ver
+ * `aplicarEfeito`/`encerrarLotacao` — a anterior fecha em `data - 1`). Na janela
+ * entre a aprovação e a data de vigência, a pessoa conta na unidade DESTINO —
+ * então a resposta de pesquisa dela entra no recorte da unidade nova antes de
+ * ela chegar lá. Consequência: o recorte da unidade de origem perde uma pessoa
+ * alguns dias antes; nada vaza e nada quebra, e o comportamento é o MESMO em
+ * todas as telas (não há número contraditório entre módulos).
+ *
+ * Por que não foi corrigido aqui: o conserto certo é trocar o critério nas seis
+ * consultas de uma vez — `l.inicio_vigencia <= hoje AND (l.fim_vigencia IS NULL
+ * OR l.fim_vigencia >= hoje)` — o que é mudança transversal a quatro domínios,
+ * fora do escopo de uma correção mínima de verificação. Fazer só aqui seria
+ * pior: criaria DUAS verdades da mesma pergunta ("qual a unidade dela hoje?").
  */
 export async function buscarColaboradorPorUsuario(
   usuarioId: number

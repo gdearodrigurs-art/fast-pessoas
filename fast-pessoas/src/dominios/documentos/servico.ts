@@ -26,6 +26,10 @@ import {
 const TABELA_DOCUMENTO = "rh.documento";
 const TABELA_CIENCIA = "rh.ciencia";
 const CHAVE_ENVIAR = "documento.enviar";
+// Escopo de leitura tem chave PRÓPRIA (migration 0024): quem envia arquivo não
+// herda, por isso, o direito de ler o documento de todo o quadro — era o furo
+// que deixava recrutador e T&D vendo contrato de qualquer pessoa.
+const CHAVE_VER_TODOS = "documento.ver.todos";
 const CHAVE_SENSIVEL_VER = "documento.sensivel.ver";
 const MIME_PADRAO = "application/octet-stream";
 
@@ -51,7 +55,7 @@ async function temPermissao(
 
 /**
  * Visibilidade de um documento específico. Escopo "todos" segue a chave
- * documento.enviar (hoje RH/DP) — checagem por chave, nunca por papel.
+ * documento.ver.todos (RH/DP/diretoria) — checagem por chave, nunca por papel.
  * Fora do escopo ou sensível sem documento.sensivel.ver: 404 — ausência,
  * não máscara; quem não pode ver nem sabe que o documento existe.
  */
@@ -59,7 +63,7 @@ async function exigirVisibilidade(
   sessao: PayloadSessao,
   metadados: MetadadosDocumento
 ): Promise<void> {
-  const verTodos = await temPermissao(sessao.usuario_id, CHAVE_ENVIAR);
+  const verTodos = await temPermissao(sessao.usuario_id, CHAVE_VER_TODOS);
   if (!verTodos && metadados.colaborador_id !== null) {
     const meuColaboradorId = await colaboradorDoUsuario(sessao.usuario_id);
     if (meuColaboradorId !== metadados.colaborador_id) {
@@ -101,7 +105,7 @@ export async function listarDocumentos(
   ) {
     throw new ErroHttp(403, "Sem permissão para ver documentos sensíveis.");
   }
-  const verTodos = await temPermissao(sessao.usuario_id, CHAVE_ENVIAR);
+  const verTodos = await temPermissao(sessao.usuario_id, CHAVE_VER_TODOS);
   const colaboradorIdDoUsuario = verTodos
     ? null
     : await colaboradorDoUsuario(sessao.usuario_id);

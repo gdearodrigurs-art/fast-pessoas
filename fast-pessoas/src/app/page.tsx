@@ -20,6 +20,7 @@ interface Permissoes extends Record<string, unknown> {
   clima_responder: boolean;
   clima_agregado_ver: boolean;
   clima_individual_ver: boolean;
+  pesquisas_acessar: boolean;
   indicador_ver: boolean;
   documento_ver: boolean;
   cargo_administrar: boolean;
@@ -58,6 +59,15 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'clima.responder')                AS clima_responder,
        sistema.tem_permissao($1, 'clima.agregado.ver')             AS clima_agregado_ver,
        sistema.tem_permissao($1, 'clima.resposta.individual.ver')  AS clima_individual_ver,
+       -- Espelha a guarda de /pesquisas (exigirAlgumaChavePesquisa): a tela
+       -- serve quatro públicos. Hoje todo papel com resultado.ver ou
+       -- plano.gerir também tem responder, então as quatro chaves equivalem a
+       -- "responder OR administrar"; as quatro estão aqui para que um perfil
+       -- recomposto em /perfis não ganhe acesso à tela sem ganhar o card.
+       (sistema.tem_permissao($1, 'pesquisa.responder')
+        OR sistema.tem_permissao($1, 'pesquisa.administrar')
+        OR sistema.tem_permissao($1, 'pesquisa.resultado.ver')
+        OR sistema.tem_permissao($1, 'pesquisa.plano.gerir'))      AS pesquisas_acessar,
        sistema.tem_permissao($1, 'indicador.ver')                  AS indicador_ver,
        sistema.tem_permissao($1, 'documento.ver')                  AS documento_ver,
        sistema.tem_permissao($1, 'rh.cargo.administrar')           AS cargo_administrar,
@@ -152,6 +162,13 @@ export default async function PaginaInicial() {
       titulo: "Clima individual",
       descricao: "Respostas individuais — leitura registrada em trilha.",
       mostrar: pode?.clima_individual_ver ?? false,
+    },
+    {
+      href: "/pesquisas",
+      titulo: "Pesquisas de clima",
+      descricao:
+        "Pesquisa anual, pulse e eNPS — resposta anônima e plano de ação.",
+      mostrar: pode?.pesquisas_acessar ?? false,
     },
     {
       href: "/metas",

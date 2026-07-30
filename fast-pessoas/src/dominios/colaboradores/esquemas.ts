@@ -419,7 +419,13 @@ export const FAIXAS_IDADE = [
 
 export type FaixaIdade = (typeof FAIXAS_IDADE)[number]["chave"];
 
-/** Idade em que a criança deixa de contar como "criança" no relatório. */
+/**
+ * Última idade que ainda conta como "criança" no relatório — limite INCLUSIVO.
+ * O agregado usa `idade <= IDADE_LIMITE_CRIANCA` (ver
+ * `agregarComposicaoFamiliar` no repositório) e a tela lê "crianças de até 12
+ * anos": os três lados dizem a mesma coisa. Mexer no número aqui muda o
+ * relatório e o rótulo juntos, sem tocar em SQL.
+ */
 export const IDADE_LIMITE_CRIANCA = 12;
 
 export const esquemaFiltroAniversariantes = z.object({

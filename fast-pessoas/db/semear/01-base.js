@@ -3,14 +3,19 @@
 // Perfil (o mesmo em TODOS os módulos de semeadura — coerência é obrigatória):
 //   Fast — distribuidora de materiais de construção/drywall, 5 unidades:
 //   Matriz Centro, Filial Norte, Filial Sul, Filial Leste, Filial Oeste.
-//   60 colaboradores ativos + 8 desligados nos últimos 12 meses.
+//   62 colaboradores ativos + 8 desligados nos últimos 12 meses.
 //
 // O que este módulo cria:
 //   • 5 estabelecimentos com versão vigente (CNPJ fictício com DV válido);
-//   • 15 cargos com versão vigente (descrição + CHA) e faixa salarial vigente;
-//   • 68 colaboradores (matrícula 1001+, CPF fictício com DV válido) com
-//     usuário, posição (cargo + salário), lotação, gestor e evento de admissão;
-//   • as 5 personas de demonstração, com 2FA já configurado onde é obrigatório.
+//   • 15 cargos com versão vigente (descrição + CHA) e faixa salarial vigente
+//     — o RCF completo (missão, atividades, setor, líder) é de 12-rcf.js;
+//   • 70 colaboradores (matrícula 1001+, CPF fictício com DV válido) com
+//     usuário, posição (cargo + salário), lotação, gestor e evento de admissão,
+//     TODOS com data de nascimento e gênero autodeclarado (relatórios de
+//     aniversariantes e diversidade nascem com dado de verdade);
+//   • as 7 personas de demonstração, com 2FA já configurado onde é obrigatório
+//     — inclusive `recrutador@` e `lidertd@`, os dois papéis da 0019, que
+//     existem justamente para demonstrar a segregação de acesso ao vivo.
 //
 // NÃO cria processo_desligamento (é de outro módulo) — os 8 desligados ficam
 // só no estado final: status desligado + data + usuário inativo.
@@ -22,11 +27,14 @@ const {
   anosAtras,
   cnpjValido,
   cpfValido,
+  dataRelativa,
   escolher,
   executarSozinho,
   hashSenha,
   inserirLote,
+  inteiro,
   iso,
+  hoje,
   log,
   mesesAtras,
   segredoTotp,
@@ -35,6 +43,14 @@ const {
 } = require('./comum');
 
 const SEMENTE = 20260729; // fixa: mesma execução ⇒ mesmos dados
+
+// Semente SEPARADA para data de nascimento, e isto é de propósito: a numeração
+// de matrícula (ordem de admissão), o CPF e o salário de cada pessoa saem do
+// stream de SEMENTE, e 02-pessoas/05-ferias ancoram cenários em matrículas
+// LITERAIS ('1013', '1043', '1045'…). Consumir SEMENTE para nascimento
+// deslocaria o stream e reescreveria essas matrículas em silêncio. Com stream
+// próprio, o nascimento é igualmente determinístico e não toca em nada.
+const SEMENTE_NASCIMENTO = 20260730;
 const SENHA_DEMO = 'FastDemo2026!';
 const DOMINIO = 'fastdemo.local';
 const RAZAO_SOCIAL = 'Fast Distribuidora de Materiais de Construção Ltda';
@@ -323,7 +339,12 @@ const PERSONAS = {
   rafael: {
     email: `rh@${DOMINIO}`,
     nome: 'Rafael Andrade Pires',
-    descricao: 'Analista de RH — recrutamento, avaliação 360, clima e desenvolvimento',
+    // A 0019 REBAIXOU o papel `rh`: as 5 chaves de R&S saíram e foram para o
+    // papel `recrutador`. A descrição não pode mais prometer recrutamento —
+    // seria a demo contradizendo a própria segregação que ela vai demonstrar.
+    descricao:
+      'Analista de RH generalista (papel `rh`) — avaliação 360, pesquisa e painel de clima, ' +
+      'documentos e relatórios; recrutamento saiu deste papel na 0019 e é do `recrutador`',
   },
   marcos: {
     email: `gestor@${DOMINIO}`,
@@ -336,6 +357,27 @@ const PERSONAS = {
     email: `funcionario@${DOMINIO}`,
     nome: 'Juliana Costa Ferreira',
     descricao: 'Vendedora na Matriz Centro, liderada do Marcos — visão de colaborador',
+  },
+  // Papéis criados pela migration 0019 (segregação de acesso, item 1 do
+  // feedback da analista de RH). Existem na demo para que a segregação seja
+  // DEMONSTRADA, não explicada: entrando nestas duas contas, o que não é da
+  // frente da pessoa simplesmente não está na tela.
+  //
+  // Nome de batismo fora dos catálogos NOMES_F/NOMES_M de propósito: garante
+  // que nenhum nome gerado pelo rng possa coincidir com o da persona.
+  solange: {
+    email: `recrutador@${DOMINIO}`,
+    nome: 'Solange Ferraz Bittencourt',
+    descricao:
+      'Recrutadora (papel `recrutador`) — R&S inteiro e o RCF do cargo para escrever a vaga; ' +
+      'sem salário, sem folha, sem saúde e sem clima individual',
+  },
+  rogerio: {
+    email: `lidertd@${DOMINIO}`,
+    nome: 'Rogério Sampaio Fontes',
+    descricao:
+      'Líder de T&D (papel `lider_td`) — estrutura, avaliação e desenvolvimento do quadro; ' +
+      'sem salário, sem saúde, sem motivo de desligamento e sem parecer de seleção',
   },
 };
 
@@ -423,6 +465,23 @@ const QUADRO = [
   { ref: 'dsl6', unidade: M, cc: 'loja', cargo: 'Conferente', papel: 'funcionario', chefe: 'marcos', genero: 'm', anos: 5.5, desligadoMeses: 11 },
   { ref: 'dsl7', unidade: N, cc: 'loja', cargo: 'Vendedor(a)', papel: 'funcionario', chefe: 'nt_ger', genero: 'f', anos: 1.2, desligadoMeses: 1 },
   { ref: 'dsl8', unidade: O, cc: 'loja', cargo: 'Auxiliar Administrativo', papel: 'funcionario', chefe: 'oe_ger', genero: 'f', anos: 6.0, desligadoMeses: 7 },
+
+  // ---------------------------------------------------------- personas dos papéis novos da 0019 (2)
+  // Entram no FIM do array por dois motivos que NÃO são estética:
+  //   1. rng — o stream de SEMENTE é consumido na ordem de QUADRO; estando por
+  //      último, nome, CPF e salário dos 68 anteriores ficam byte a byte iguais;
+  //   2. matrícula — `admissaoDias` as coloca como as DUAS admissões mais
+  //      recentes de toda a empresa (o restante do quadro tem no mínimo 1 mês
+  //      de casa), então elas ficam com as duas ÚLTIMAS matrículas e nenhuma
+  //      das âncoras literais de 02-pessoas/05-ferias ('1013', '1043', '1045',
+  //      '1020', '1030', '1003', '1033') se desloca. A conferência dura no fim
+  //      deste módulo transforma qualquer deslocamento em erro alto, não em
+  //      cenário silenciosamente trocado.
+  // Cargo 'Analista de RH' para as duas: o time de gente de uma rede de 5 lojas
+  // tem generalista, recrutamento e T&D no mesmo cargo — o que muda é a frente
+  // de trabalho, e é isso que o PAPEL representa.
+  { ref: 'solange', unidade: M, cc: 'adm', cargo: 'Analista de RH', papel: 'recrutador', chefe: 'helena', genero: 'f', admissaoDias: 12, persona: 'solange' },
+  { ref: 'rogerio', unidade: M, cc: 'adm', cargo: 'Analista de RH', papel: 'lider_td', chefe: 'helena', genero: 'm', admissaoDias: 9, persona: 'rogerio' },
 ];
 
 const TEMPO_DE_CASA = {
@@ -430,6 +489,73 @@ const TEMPO_DE_CASA = {
   padrao: [1.0, 4.0],
   medio: [4.0, 8.0],
   veterano: [8.0, 10.0],
+};
+
+// ------------------------------------------------------------------ nascimento e gênero
+//
+// Os dois campos entraram em rh.colaborador pela migration 0020 e são o que
+// destrava os relatórios de ANIVERSARIANTES e de DIVERSIDADE. A 0020 semeou um
+// lastro derivado do CPF só para a base de DEV não nascer vazia, e registrou
+// como pendência que o povoador precisava assumir o preenchimento — é o que
+// este bloco faz. Rodar `npm run db:demo` agora não zera mais os dois campos.
+
+/**
+ * Faixa de idade NA ADMISSÃO por cargo (mín, máx). Sorteia-se a idade na
+ * admissão, não a de hoje: o CHECK colaborador_data_nascimento_plausivel exige
+ * nascimento anterior à admissão, e a idade de hoje sai naturalmente somando o
+ * tempo de casa (um veterano de 9 anos fica realmente mais velho).
+ * Aprendiz e estagiário respeitam a faixa legal dos programas (Lei 10.097 e
+ * Lei 11.788): entram jovens e envelhecem só o tempo do contrato.
+ */
+const IDADE_NA_ADMISSAO = {
+  'Diretor(a) de Operações': [35, 45],
+  'Gerente de Loja': [30, 45],
+  'Supervisor(a) Comercial': [27, 42],
+  'Vendedor(a)': [21, 40],
+  'Auxiliar de Vendas': [19, 30],
+  Estoquista: [20, 42],
+  Conferente: [23, 44],
+  'Motorista Entregador': [25, 48],
+  'Analista de RH': [25, 40],
+  'Assistente de DP': [24, 40],
+  'Analista Financeiro': [26, 42],
+  'Auxiliar Administrativo': [19, 35],
+  'Comprador(a)': [28, 45],
+  'Estagiário(a)': [19, 24],
+  'Jovem Aprendiz': [16, 20],
+};
+
+/**
+ * ANIVERSARIANTES DO MÊS CORRENTE — 6 pessoas do quadro (todas ATIVAS: o
+ * relatório considera status <> 'desligado'), com o dia fixado. Sem isto o
+ * relatório de aniversariantes abre vazio na apresentação, porque a chance de o
+ * sorteio cair no mês certo é de 1/12 por pessoa.
+ * Dia sempre ≤ 28 para existir em qualquer mês — a demo roda em fevereiro
+ * também. Duas das seis são personas (gestor e funcionário), para o
+ * apresentador reconhecer os nomes na lista.
+ */
+const ANIVERSARIANTES_DO_MES = [
+  ['marcos', 4], // persona gestor
+  ['juliana', 9], // persona funcionário
+  ['nt_vend1', 13],
+  ['sl_estoq', 18],
+  ['le_auxv', 23],
+  ['oe_ger', 27],
+];
+
+/**
+ * Gênero AUTODECLARADO. Regra geral: coerente com o nome de batismo (uma demo
+ * em que "Juliana" aparece como masculino lê-se como bug, não como diversidade).
+ * As exceções abaixo são as pessoas que declararam algo diferente do que o nome
+ * sugere — 'outro' e 'nao_informado' FICAM na amostra de propósito: são o
+ * recorte pequeno que faz o relatório de diversidade ter de suprimir célula,
+ * e é isso que precisa ser mostrado funcionando.
+ * Distribuição resultante nos 70: 31 feminino (44%), 37 masculino (53%),
+ * 1 outro e 1 não informado (~3% de resto) — conferida no fim do módulo.
+ */
+const GENERO_DECLARADO = {
+  le_vend4: 'outro',
+  sl_vend1: 'nao_informado',
 };
 
 const RETRATOS = {
@@ -586,13 +712,21 @@ async function semear(cliente) {
     const email = persona ? persona.email : gerarEmail(nome);
     if (persona) emailsUsados.add(email);
 
+    // `admissaoDias` (dias atrás) é a única forma de cravar uma admissão mais
+    // recente que qualquer outra: anosAtras arredonda para MESES inteiros, e o
+    // quadro todo cai em 1 mês ou mais de casa.
     const anos =
-      linha.anos ??
-      (() => {
-        const [min, max] = TEMPO_DE_CASA[linha.tempo];
-        return min + rng() * (max - min);
-      })();
-    const admissao = anosAtras(anos);
+      linha.admissaoDias !== undefined
+        ? linha.admissaoDias / 365
+        : (linha.anos ??
+          (() => {
+            const [min, max] = TEMPO_DE_CASA[linha.tempo];
+            return min + rng() * (max - min);
+          })());
+    const admissao =
+      linha.admissaoDias !== undefined
+        ? dataRelativa(-linha.admissaoDias)
+        : anosAtras(anos);
     const desligamento = linha.desligadoMeses ? mesesAtras(linha.desligadoMeses) : null;
 
     const faixa = cargos.get(linha.cargo).faixa;
@@ -623,8 +757,55 @@ async function semear(cliente) {
     pessoa.matricula = String(MATRICULA_INICIAL + indice);
   });
 
+  // ---------------------------------------------------------- nascimento e gênero autodeclarado
+  // Stream próprio (SEMENTE_NASCIMENTO) e passada SEPARADA, depois de matrícula
+  // e admissão já definidas: nada aqui pode empurrar o stream de SEMENTE.
+  const rngNasc = aleatorio(SEMENTE_NASCIMENTO);
+  const mesCorrente = hoje().getUTCMonth() + 1;
+  const diaDoAniversario = new Map(ANIVERSARIANTES_DO_MES);
+  const outrosMeses = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].filter(
+    (mes) => mes !== mesCorrente
+  );
+
+  for (const pessoa of pessoas) {
+    const faixa = IDADE_NA_ADMISSAO[pessoa.cargo];
+    if (!faixa) throw new Error(`Sem faixa de idade para o cargo ${pessoa.cargo}`);
+    const idadeNaAdmissao = inteiro(rngNasc, faixa[0], faixa[1]);
+
+    const diaFixo = diaDoAniversario.get(pessoa.ref);
+    const mes = diaFixo ? mesCorrente : escolher(rngNasc, outrosMeses);
+    const dia = diaFixo ?? inteiro(rngNasc, 1, 28);
+
+    // O ano sai da idade na admissão; o laço é uma trava, não a regra: com
+    // idade mínima de 16 anos o nascimento já cai muito antes da admissão, mas
+    // se um dia a faixa de algum cargo encostar no limite, o CHECK do banco
+    // avisaria com um 23514 cru em vez de um dado plausível.
+    let ano = pessoa.admissao.getUTCFullYear() - idadeNaAdmissao;
+    let nascimento = new Date(Date.UTC(ano, mes - 1, dia));
+    while (nascimento >= pessoa.admissao) {
+      ano -= 1;
+      nascimento = new Date(Date.UTC(ano, mes - 1, dia));
+    }
+    pessoa.nascimento = nascimento;
+
+    pessoa.generoDeclarado =
+      GENERO_DECLARADO[pessoa.ref] ??
+      (pessoa.genero === 'f' ? 'feminino' : 'masculino');
+  }
+
   // ---------------------------------------------------------- usuários + colaboradores
-  const PAPEIS_COM_2FA = new Set(['rh', 'dp', 'diretoria', 'admin']);
+  // Espelha PAPEIS_COM_2FA de src/dominios/identidade/servico.ts — `recrutador`
+  // e `lider_td` também exigem 2FA (veem dado de pessoa além do próprio). Sem
+  // as duas chaves aqui, a demo travaria no enrolamento justamente nas contas
+  // criadas para demonstrar a segregação.
+  const PAPEIS_COM_2FA = new Set([
+    'rh',
+    'recrutador',
+    'lider_td',
+    'dp',
+    'diretoria',
+    'admin',
+  ]);
 
   // 2FA já configurado para quem o app obriga — a demo não trava no
   // enrolamento. O secret é determinístico: resetar não invalida o QR Code.
@@ -652,6 +833,7 @@ async function semear(cliente) {
     [
       'usuario_id', 'matricula', 'matricula_esocial', 'cpf', 'nome_completo',
       'tipo_vinculo', 'data_admissao', 'status', 'data_desligamento', 'retrato',
+      'data_nascimento', 'genero',
     ],
     pessoas.map((p) => [
       p.usuarioId,
@@ -664,6 +846,8 @@ async function semear(cliente) {
       p.ativo ? 'ativo' : 'desligado',
       p.desligamento ? iso(p.desligamento) : null,
       p.persona ? p.persona.descricao : (RETRATOS[p.cargo] ?? null),
+      iso(p.nascimento),
+      p.generoDeclarado,
     ]),
     'id, matricula'
   );
@@ -818,6 +1002,94 @@ async function semear(cliente) {
                          WHERE g.liderado_colaborador_id = c.id AND g.fim_vigencia IS NULL)`,
     0
   );
+  await conferir(
+    'fichas sem data de nascimento',
+    'SELECT count(*)::int AS total FROM rh.colaborador WHERE data_nascimento IS NULL',
+    0
+  );
+  await conferir(
+    'nascimento fora da faixa plausível de idade (16 a 70 anos hoje)',
+    `SELECT count(*)::int AS total FROM rh.colaborador
+      WHERE date_part('year', age(data_nascimento)) NOT BETWEEN 16 AND 70`,
+    0
+  );
+  // O relatório de aniversariantes é o que a analista pediu e o que abre a
+  // apresentação: se ele nascer vazio, isto quebra aqui e não na frente do RH.
+  await conferir(
+    'aniversariantes do mês corrente no quadro',
+    `SELECT count(*)::int AS total FROM rh.colaborador
+      WHERE status <> 'desligado'
+        AND date_part('month', data_nascimento)
+            = date_part('month', (now() AT TIME ZONE 'America/Sao_Paulo')::date)`,
+    ANIVERSARIANTES_DO_MES.length
+  );
+  const esperadoPorGenero = pessoas.reduce((acumulado, pessoa) => {
+    acumulado[pessoa.generoDeclarado] = (acumulado[pessoa.generoDeclarado] ?? 0) + 1;
+    return acumulado;
+  }, {});
+  const { rows: distribuicao } = await cliente.query(
+    'SELECT genero, count(*)::int AS total FROM rh.colaborador GROUP BY genero'
+  );
+  const obtidoPorGenero = new Map(distribuicao.map((linha) => [linha.genero, linha.total]));
+  if (obtidoPorGenero.size !== Object.keys(esperadoPorGenero).length) {
+    throw new Error(
+      `Gêneros no banco (${[...obtidoPorGenero.keys()].sort().join(', ')}) diferem dos ` +
+        `esperados (${Object.keys(esperadoPorGenero).sort().join(', ')}).`
+    );
+  }
+  for (const [genero, esperado] of Object.entries(esperadoPorGenero)) {
+    const obtido = obtidoPorGenero.get(genero) ?? 0;
+    if (obtido !== esperado) {
+      throw new Error(
+        `Invariante quebrada — gênero autodeclarado "${genero}": esperado ${esperado}, obtido ${obtido}`
+      );
+    }
+  }
+  log(
+    '01-base: gênero autodeclarado — ' +
+      Object.entries(esperadoPorGenero)
+        .sort((a, b) => b[1] - a[1])
+        .map(
+          ([genero, total]) =>
+            `${genero} ${total} (${((total / pessoas.length) * 100).toFixed(1)}%)`
+        )
+        .join(', ')
+  );
+
+  // ÂNCORAS DE MATRÍCULA — 02-pessoas e 05-ferias montam cenários em matrículas
+  // LITERAIS. Se um dia alguém mudar QUADRO/rng e essas matrículas mudarem de
+  // dono, aqueles módulos passariam a plantar o cenário na pessoa errada sem
+  // reclamar. Aqui isso vira erro alto.
+  const ANCORAS = [
+    ['1013', PERSONAS.marcos.nome], // MAT_GESTOR em 02-pessoas
+    ['1043', PERSONAS.juliana.nome], // MAT_FUNCIONARIO em 02-pessoas
+  ];
+  for (const [matricula, nomeEsperado] of ANCORAS) {
+    const { rows } = await cliente.query(
+      'SELECT nome_completo FROM rh.colaborador WHERE matricula = $1',
+      [matricula]
+    );
+    if (rows[0]?.nome_completo !== nomeEsperado) {
+      throw new Error(
+        `Âncora de matrícula deslocada — ${matricula} deveria ser "${nomeEsperado}" e é ` +
+          `"${rows[0]?.nome_completo ?? '(inexistente)'}". 02-pessoas e 05-ferias ancoram ` +
+          'cenários nessa matrícula: conserte QUADRO/rng antes de seguir.'
+      );
+    }
+  }
+
+  // As duas personas dos papéis novos têm de ser as ÚLTIMAS matrículas — é o que
+  // garante que acrescentá-las não empurrou ninguém.
+  for (const ref of ['solange', 'rogerio']) {
+    const pessoa = porRef.get(ref);
+    const posicaoEsperada = MATRICULA_INICIAL + pessoas.length - 2;
+    if (Number(pessoa.matricula) < posicaoEsperada) {
+      throw new Error(
+        `A persona ${ref} recebeu a matrícula ${pessoa.matricula}, que não está entre as duas ` +
+          'últimas — a admissão dela deixou de ser a mais recente e deslocou o quadro.'
+      );
+    }
+  }
 
   // ---------------------------------------------------------- contexto de saída
   const personas = Object.entries(PERSONAS).map(([ref, dados]) => {
@@ -835,6 +1107,13 @@ async function semear(cliente) {
       otpauth_uri: pessoa.totpSecret ? uriOtpauth(dados.email, pessoa.totpSecret) : null,
     };
   });
+
+  log(
+    `01-base: ${ANIVERSARIANTES_DO_MES.length} aniversariantes no mês corrente — ` +
+      ANIVERSARIANTES_DO_MES.map(
+        ([ref, dia]) => `dia ${dia}: ${porRef.get(ref).nome}`
+      ).join(' · ')
+  );
 
   log('\n01-base: personas de demonstração');
   for (const persona of personas) {

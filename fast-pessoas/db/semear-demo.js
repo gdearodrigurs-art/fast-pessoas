@@ -40,6 +40,8 @@ const TABELAS_RESUMO = [
   'rh.feedback_formal',
   'rh.acao_aberta',
   'rh.demanda',
+  'rh.etapa_aprovacao_demanda',
+  'rh.demanda_movimentacao',
   'rh.documento',
   'rh.meta_indicador_versao',
   'rh.periodo_aquisitivo',
@@ -57,6 +59,11 @@ const TABELAS_RESUMO = [
   'rh.epi_entrega',
   'rh.cat',
   'rh_clima.checkin_resposta',
+  'rh_clima.pesquisa',
+  'rh_clima.pergunta_pesquisa',
+  'rh_clima.resposta_pesquisa',
+  'rh_clima.participacao_pesquisa',
+  'rh_clima.plano_acao',
   'rh_folha.competencia_folha',
   'rh_folha.folha_colaborador',
   'sistema.notificacao',
@@ -101,7 +108,8 @@ function montarCredenciais(ctx) {
     '',
     '## Segunda etapa (2FA)',
     '',
-    'O app exige 2FA para os papéis `rh`, `dp`, `diretoria` e `admin`. Essas contas',
+    'O app exige 2FA para todo papel que vê dado de pessoa além do próprio:',
+    '`rh`, `recrutador`, `lider_td`, `dp`, `diretoria` e `admin`. Essas contas',
     'já vêm com o segredo TOTP configurado — não é preciso passar pelo enrolamento.',
     '',
     'Duas formas de obter o código de 6 dígitos na hora do login:',
@@ -125,13 +133,39 @@ function montarCredenciais(ctx) {
     );
   }
 
+  const porPapel = (papel) => personas.find((p) => p.papel === papel)?.email ?? '—';
   linhas.push(
     '',
     '## Roteiro sugerido',
     '',
-    `1. Entre como \`${personas.find((p) => p.papel === 'diretoria')?.email ?? '—'}\` para a visão de rede (5 unidades, indicadores, clima).`,
-    `2. Troque para \`${personas.find((p) => p.papel === 'gestor')?.email ?? '—'}\` e mostre que ele enxerga só a própria equipe.`,
-    `3. Termine em \`${personas.find((p) => p.papel === 'funcionario')?.email ?? '—'}\` para a experiência de quem só responde e consulta.`,
+    `1. Entre como \`${porPapel('diretoria')}\` para a visão de rede (5 unidades, indicadores, clima).`,
+    '   Há uma **promoção esperando a decisão da diretoria** em Demandas → Promoções e',
+    '   transferências: aprove ao vivo e mostre a posição nova, o evento na linha do tempo e',
+    '   as notificações de ciência que chegam ao DP e ao T&D no mesmo instante.',
+    `2. Troque para \`${porPapel('gestor')}\` e mostre que ele enxerga só a própria equipe —`,
+    '   e que o pedido de promoção que ele abriu está na aba "que eu abri".',
+    `3. Passe em \`${porPapel('funcionario')}\` para a experiência de quem só responde e consulta,`,
+    '   e responda o **pulse de clima aberto** (nenhuma persona respondeu ainda, de propósito).',
+    `4. Entre como \`${porPapel('rh')}\` e abra Pesquisas de clima → a pesquisa anual ENCERRADA:`,
+    '   média por pergunta, eNPS, recorte por unidade e comentários anônimos, com os planos',
+    '   de ação. Em Relatórios, mostre aniversariantes do mês e diversidade.',
+    '',
+    '### Segregação de acesso (papéis novos da migration 0019)',
+    '',
+    'É a correção do item 1 do feedback da analista de RH: hoje "todo mundo do RH vê tudo".',
+    'A forma de demonstrar é entrar nas duas contas e olhar o que **não** está na tela.',
+    '',
+    `- \`${porPapel('recrutador')}\` (papel \`recrutador\`) — tem Recrutamento inteiro e lê o RCF do`,
+    '  cargo para escrever a vaga. **Não tem** salário, folha, saúde/SST, clima individual nem',
+    '  motivo de desligamento. Os cards nem aparecem na home, e as rotas devolvem 403.',
+    `- \`${porPapel('lider_td')}\` (papel \`lider_td\`) — tem estrutura, avaliação, desenvolvimento,`,
+    '  relatórios e ciência de promoção/transferência. **Não tem** salário, saúde, parecer de',
+    '  seleção nem motivo de desligamento.',
+    '',
+    'A tela **Perfis de acesso** (`/perfis`), onde a composição de cada papel aparece chave por',
+    'chave e toda alteração é auditada, exige `perfil.administrar` — concedida na migration 0019',
+    'APENAS ao papel `admin`. Nenhuma persona da demo a tem (é a conta do dono do sistema), e o',
+    'card nem aparece na home das personas: para mostrar a tela, entre com a conta `admin`.',
     '',
     '## Demais colaboradores',
     '',
@@ -223,7 +257,10 @@ async function main() {
       for (const persona of contexto.personas) {
         log(`  ${persona.papel.padEnd(11)} ${persona.email.padEnd(34)} ${persona.nome}`);
       }
-      log('\n  2FA (papéis rh/dp/diretoria) já configurado. Código do momento:');
+      log(
+        '\n  2FA (papéis rh, recrutador, lider_td, dp e diretoria) já configurado.' +
+          ' Código do momento:'
+      );
       log('    node --env-file=.env db/codigo-2fa.js dp@fastdemo.local');
       log(`\n  Detalhes e URIs otpauth:// em ${path.relative(process.cwd(), ARQUIVO_CREDENCIAIS)}`);
     }

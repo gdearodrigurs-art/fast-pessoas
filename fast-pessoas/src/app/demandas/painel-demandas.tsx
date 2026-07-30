@@ -3,12 +3,15 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import { AcoesDemanda } from "./acoes-demanda";
+import { AcoesEtapa } from "./acoes-etapa";
 import { CartaoDemanda } from "./cartao-demanda";
+import { CartaoMovimentacao } from "./cartao-movimentacao";
 import comum from "./comum.module.css";
+import { FormularioMovimentacao } from "./formulario-movimentacao";
 import estilos from "./page.module.css";
-import { Demanda, Visao } from "./tipos";
+import { CartaoMovimentacao as DadosMovimentacao, Demanda, Visao } from "./tipos";
 
-type AbaPrincipal = "minhas" | "aprovacoes" | "fila";
+type AbaPrincipal = "minhas" | "aprovacoes" | "fila" | "movimentacoes";
 type AbaFila = "aberta" | "em_atendimento" | "encerradas";
 type FiltroAtraso = "todos" | "no_prazo" | "hoje" | "atrasadas";
 
@@ -25,6 +28,7 @@ export function PainelDemandas() {
   const [filtroAtraso, setFiltroAtraso] = useState<FiltroAtraso>("todos");
 
   const [dialogoNova, setDialogoNova] = useState(false);
+  const [dialogoMovimentacao, setDialogoMovimentacao] = useState(false);
   const [novoTipo, setNovoTipo] = useState("");
   const [novaDescricao, setNovaDescricao] = useState("");
   const [criando, setCriando] = useState(false);
@@ -66,7 +70,7 @@ export function PainelDemandas() {
   }
 
   function abrirDialogoNova() {
-    setNovoTipo(visao?.tipos[0]?.chave ?? "");
+    setNovoTipo(tiposPadrao[0]?.chave ?? "");
     setNovaDescricao("");
     setErroCriacao(null);
     setDialogoNova(true);
@@ -112,7 +116,52 @@ export function PainelDemandas() {
     );
   }
 
-  const tipoSelecionado = visao?.tipos.find((t) => t.chave === novoTipo);
+  // Promoção/transferência NÃO nascem do formulário genérico (só descrição
+  // livre, sem colaborador alvo): elas têm formulário próprio. O serviço já
+  // recusa; aqui a opção simplesmente não é oferecida.
+  const tiposPadrao = (visao?.tipos ?? []).filter((t) => t.fluxo === "padrao");
+  const tipoSelecionado = tiposPadrao.find((t) => t.chave === novoTipo);
+
+  // Quantas movimentações esperam uma decisão DESTE usuário (líder + diretoria)
+  // — o número na aba é o que faz o pedido não ficar esquecido.
+  const movimentacoes = visao?.movimentacoes ?? null;
+  const pendentesParaMim =
+    (movimentacoes?.do_lider?.length ?? 0) +
+    (movimentacoes?.da_diretoria?.length ?? 0);
+
+  /** Uma fila de movimentações; `decidir` liga os botões da etapa pendente. */
+  function secaoMovimentacoes(
+    titulo: string,
+    lista: DadosMovimentacao[],
+    vazio: string,
+    decidir?: "lider" | "diretoria"
+  ) {
+    return (
+      <section className={estilos.area}>
+        <h2 className={estilos.tituloArea}>{titulo}</h2>
+        {lista.length === 0 ? (
+          <p className={estilos.vazio}>{vazio}</p>
+        ) : (
+          lista.map((cartao) => (
+            <CartaoMovimentacao
+              key={cartao.demanda.id}
+              dados={cartao}
+              comLinkDetalhe
+            >
+              {decidir && (
+                <AcoesEtapa
+                  demandaId={cartao.demanda.id}
+                  numero={cartao.demanda.numero}
+                  nivel={decidir}
+                  aoAtualizar={recarregar}
+                />
+              )}
+            </CartaoMovimentacao>
+          ))
+        )}
+      </section>
+    );
+  }
 
   return (
     <div className={estilos.pagina}>
@@ -121,11 +170,20 @@ export function PainelDemandas() {
       <main className={estilos.conteudo}>
         <div className={estilos.linhaTitulo}>
           <h1>Demandas</h1>
+          {visao?.pode.solicitar_movimentacao && (
+            <button
+              className={comum.botaoSecundario}
+              type="button"
+              onClick={() => setDialogoMovimentacao(true)}
+            >
+              + Promoção / transferência
+            </button>
+          )}
           <button
             className={comum.botaoPrimario}
             type="button"
             onClick={abrirDialogoNova}
-            disabled={!visao || visao.tipos.length === 0}
+            disabled={tiposPadrao.length === 0}
           >
             + Nova solicitação
           </button>
@@ -140,7 +198,9 @@ export function PainelDemandas() {
 
         {visao && (
           <>
-            {(visao.pode.aprovar || visao.pode.ver_todas) && (
+            {(visao.pode.aprovar ||
+              visao.pode.ver_todas ||
+              visao.movimentacoes) && (
               <div className={estilos.abasPrincipais}>
                 <button
                   className={`${estilos.aba} ${abaPrincipal === "minhas" ? estilos.abaAtiva : ""}`}
@@ -168,6 +228,16 @@ export function PainelDemandas() {
                     onClick={() => setAbaPrincipal("fila")}
                   >
                     Fila do DP
+                  </button>
+                )}
+                {visao.movimentacoes && (
+                  <button
+                    className={`${estilos.aba} ${abaPrincipal === "movimentacoes" ? estilos.abaAtiva : ""}`}
+                    type="button"
+                    onClick={() => setAbaPrincipal("movimentacoes")}
+                  >
+                    Promoções e transferências
+                    {pendentesParaMim > 0 ? ` (${pendentesParaMim})` : ""}
                   </button>
                 )}
               </div>
@@ -218,6 +288,46 @@ export function PainelDemandas() {
                   visao.equipe_decididas ?? [],
                   "Nada por aqui ainda."
                 )}
+              </>
+            )}
+
+            {abaPrincipal === "movimentacoes" && movimentacoes && (
+              <>
+                <div className={estilos.aviso}>
+                  A cadeia é <b>líder → diretoria</b>. Com a aprovação da
+                  diretoria a nova posição/lotação passa a vigorar na data
+                  pretendida e o <b>DP e o T&amp;D são avisados</b>{" "}
+                  automaticamente para providenciar os trâmites.
+                </div>
+
+                {movimentacoes.do_lider &&
+                  secaoMovimentacoes(
+                    "Aguardando sua aprovação (líder)",
+                    movimentacoes.do_lider,
+                    "Nenhum pedido esperando sua decisão como líder.",
+                    "lider"
+                  )}
+
+                {movimentacoes.da_diretoria &&
+                  secaoMovimentacoes(
+                    "Aguardando aprovação da diretoria",
+                    movimentacoes.da_diretoria,
+                    "Nenhum pedido esperando a diretoria.",
+                    "diretoria"
+                  )}
+
+                {secaoMovimentacoes(
+                  "Pedidos que eu abri",
+                  movimentacoes.minhas,
+                  "Você não abriu pedidos de promoção ou transferência."
+                )}
+
+                {movimentacoes.aplicadas &&
+                  secaoMovimentacoes(
+                    "Aprovadas — trâmites de DP e T&D",
+                    movimentacoes.aplicadas,
+                    "Nenhuma movimentação aprovada ainda."
+                  )}
               </>
             )}
 
@@ -364,7 +474,7 @@ export function PainelDemandas() {
                 value={novoTipo}
                 onChange={(e) => setNovoTipo(e.target.value)}
               >
-                {visao?.tipos.map((tipo) => (
+                {tiposPadrao.map((tipo) => (
                   <option key={tipo.chave} value={tipo.chave}>
                     {tipo.nome}
                   </option>
@@ -410,6 +520,16 @@ export function PainelDemandas() {
             </form>
           </div>
         </div>
+      )}
+
+      {dialogoMovimentacao && (
+        <FormularioMovimentacao
+          aoFechar={() => setDialogoMovimentacao(false)}
+          aoCriar={() => {
+            setAbaPrincipal("movimentacoes");
+            recarregar();
+          }}
+        />
       )}
     </div>
   );
