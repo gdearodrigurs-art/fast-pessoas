@@ -77,12 +77,6 @@ function hojeIso(): string {
   });
 }
 
-function daquiADias(dias: number): string {
-  const base = new Date(`${hojeIso()}T00:00:00Z`);
-  base.setUTCDate(base.getUTCDate() + dias);
-  return base.toISOString().slice(0, 10);
-}
-
 const CLASSE_ETIQUETA: Record<StatusPesquisa, string> = {
   rascunho: estilos.etiquetaRascunho,
   aberta: estilos.etiquetaAberta,
@@ -117,7 +111,28 @@ export function PainelPesquisas({
   const [tipo, setTipo] = useState<TipoPesquisa>("anual");
   const [descricao, setDescricao] = useState("");
   const [inicio, setInicio] = useState(hojeIso());
-  const [fim, setFim] = useState(daquiADias(14));
+  /**
+   * O FIM DA PESQUISA NASCE VAZIO — de propósito, e é correção de defeito.
+   *
+   * Nascia `daquiADias(14)`. O campo é `required` e o corpo do POST lê o estado
+   * direto, então bastava escrever o título, uma pergunta e clicar em Criar
+   * para GRAVAR uma janela de resposta de quatorze dias que ninguém escolheu —
+   * e por quanto tempo a pesquisa fica aberta é a decisão inteira desta tela:
+   * é ela que a pessoa lê em "Responda até <data>", é ela que separa adesão de
+   * 30% de adesão de 80%. Reproduzido em 2026-07-31 contra o dev server com o
+   * corpo exato do formulário intocado: `{"inicio":"2026-07-31",
+   * "fim":"2026-08-14"}` virou a pesquisa 46 em rh_clima.pesquisa (linha
+   * removida em seguida).
+   *
+   * Aqui não há "versão vigente" de onde semear, como em SecaoJornadas ou em
+   * SecaoParametrosGerais: duração de pesquisa não é parâmetro da empresa, é a
+   * escolha de quem está montando AQUELE ciclo. Então a semeadura certa é
+   * nenhuma, e o vazio é a resposta honesta — o sistema não tem palpite a dar.
+   *
+   * `inicio` continua em `hojeIso()` e isso NÃO é o mesmo defeito: não há
+   * número de negócio nenhum ali, é a leitura do relógio no fuso de exibição.
+   */
+  const [fim, setFim] = useState("");
   const [anonima, setAnonima] = useState(true);
   const [perguntas, setPerguntas] = useState<PerguntaRascunho[]>([
     { ...PERGUNTA_VAZIA, tipo: "nps_0_10", enunciado: "" },
@@ -200,6 +215,11 @@ export function PainelPesquisas({
       setMostrarForm(false);
       setTitulo("");
       setDescricao("");
+      // O fim volta a VAZIO junto com o resto: deixá-lo com a data do ciclo
+      // anterior faria o próximo formulário nascer com uma janela escolhida
+      // para outra pesquisa — o mesmo defeito por outro caminho.
+      setInicio(hojeIso());
+      setFim("");
       setPerguntas([{ ...PERGUNTA_VAZIA, tipo: "nps_0_10" }]);
       recarregar();
     } catch {

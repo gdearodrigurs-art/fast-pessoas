@@ -109,18 +109,6 @@ function formatarData(dataIso: string): string {
   return `${dia}/${mes}/${ano}`;
 }
 
-function hojeIso(): string {
-  return new Date().toLocaleDateString("en-CA", {
-    timeZone: "America/Sao_Paulo",
-  });
-}
-
-function daquiADias(dias: number): string {
-  const base = new Date(`${hojeIso()}T00:00:00Z`);
-  base.setUTCDate(base.getUTCDate() + dias);
-  return base.toISOString().slice(0, 10);
-}
-
 // ------------------------------------------------------------------ componente
 
 export function PainelResultado({
@@ -142,7 +130,19 @@ export function PainelResultado({
   const [descricao, setDescricao] = useState("");
   const [unidadeId, setUnidadeId] = useState("");
   const [responsavel, setResponsavel] = useState("");
-  const [prazo, setPrazo] = useState(daquiADias(30));
+  /**
+   * O PRAZO DO PLANO DE AÇÃO NASCE VAZIO — mesma correção do fim da pesquisa.
+   *
+   * Nascia `daquiADias(30)`. Campo `required`, corpo do POST lendo o estado
+   * direto: título + responsável + Salvar gravava um prazo de trinta dias que
+   * ninguém escolheu, e prazo de plano de ação é compromisso de pessoa com
+   * data — é o que a tela cobra depois e o que vira atraso.
+   *
+   * Trinta dias não é parâmetro da empresa nem tem versão vigente de onde
+   * semear: é a combinação daquele plano com aquele responsável. Semeadura
+   * certa é nenhuma.
+   */
+  const [prazo, setPrazo] = useState("");
   const [enviando, setEnviando] = useState(false);
 
   const recarregar = useCallback(() => setVersao((v) => v + 1), []);
@@ -214,6 +214,9 @@ export function PainelResultado({
       setMostrarForm(false);
       setTitulo("");
       setDescricao("");
+      // Prazo volta a vazio: reaproveitar a data do plano anterior é inventar
+      // o prazo do próximo por outro caminho.
+      setPrazo("");
       recarregar();
     } catch {
       setErro("Falha de conexão ao criar o plano.");
