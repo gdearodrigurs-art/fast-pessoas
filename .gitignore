@@ -18,3 +18,7 @@ Thumbs.db
 
 # arquivos temporários do Office
 ~$*
+
+# worktrees temporários de agentes
+.claude/worktrees/
+fast-pessoas/.claude/worktrees/
