@@ -26,3 +26,9 @@ fast-pessoas/.claude/worktrees/
 # conexao do banco local de desenvolvimento
 .env.local-db
 fast-pessoas/.env.local-db
+
+# temporarios de agente
+.tmp-*/
+fast-pessoas/.tmp-*/
+_verif-*
+fast-pessoas/_verif-*
