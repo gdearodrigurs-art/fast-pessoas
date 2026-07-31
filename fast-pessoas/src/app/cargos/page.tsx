@@ -15,11 +15,12 @@ export default async function PaginaCargos() {
   const linhas = await consultar<{
     pode_admin_cargo: boolean;
     pode_ver_cargo: boolean;
-    pode_admin_estabelecimento: boolean;
+    pode_admin_estrutura: boolean;
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.cargo.administrar') AS pode_admin_cargo,
             sistema.tem_permissao($1, 'rh.cargo.ver')         AS pode_ver_cargo,
-            sistema.tem_permissao($1, 'rh.estabelecimento.administrar') AS pode_admin_estabelecimento`,
+            sistema.tem_permissao($1, 'rh.estabelecimento.administrar')
+              AS pode_admin_estrutura`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -29,7 +30,7 @@ export default async function PaginaCargos() {
   return (
     <PainelCargos
       podeAdministrar={Boolean(pode?.pode_admin_cargo)}
-      podeAdminEstabelecimento={Boolean(pode?.pode_admin_estabelecimento)}
+      podeAdminEstrutura={Boolean(pode?.pode_admin_estrutura)}
     />
   );
 }

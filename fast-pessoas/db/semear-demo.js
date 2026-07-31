@@ -26,11 +26,16 @@ const ARQUIVO_CREDENCIAIS = path.join(DIR_MODULOS, 'CREDENCIAIS-DEMO.md');
 // Tabelas do resumo final, na ordem em que fazem sentido para quem confere.
 const TABELAS_RESUMO = [
   'sistema.usuario',
+  'rh.empresa_grupo',
+  'rh.empresa_grupo_versao',
   'rh.estabelecimento',
   'rh.estabelecimento_versao',
+  'rh.centro_custo',
+  'rh.centro_custo_versao',
   'rh.cargo',
   'rh.cargo_versao',
   'rh.tabela_salarial_versao',
+  'rh.pessoa',
   'rh.colaborador',
   'rh.posicao_colaborador',
   'rh.lotacao',

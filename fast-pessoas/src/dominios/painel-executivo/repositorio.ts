@@ -34,6 +34,17 @@ const ATIVO_EM = (alias: string, parametro: string) =>
   `${alias}.data_admissao <= ${parametro}::date
      AND (${alias}.data_desligamento IS NULL OR ${alias}.data_desligamento > ${parametro}::date)`;
 
+/**
+ * Turnover é sobre o GRUPO, não sobre o CNPJ. Quem é transferido de uma
+ * empresa do grupo para outra (migration 0048) aparece em rh.colaborador como
+ * um vínculo desligado e outro admitido — e sem estes dois filtros o painel
+ * contaria uma demissão e uma admissão que nunca aconteceram, inflando os dois
+ * lados do indicador que a diretoria olha. As funções rh.saiu_do_grupo /
+ * rh.entrou_no_grupo respondem pelo elo `sucede_vinculo_id`.
+ */
+const SAIDA_DO_GRUPO = (alias: string) => `rh.saiu_do_grupo(${alias}.id)`;
+const ENTRADA_NO_GRUPO = (alias: string) => `rh.entrou_no_grupo(${alias}.id)`;
+
 /** Lotação vigente na data $n (a unidade DA ÉPOCA, não a de hoje). */
 const LOTACAO_EM = (alias: string, parametro: string) =>
   `${alias}.inicio_vigencia <= ${parametro}::date
@@ -171,10 +182,12 @@ export async function turnoverJanela(
 ): Promise<TurnoverBruto> {
   const linhas = await consultar<TurnoverBruto>(
     `SELECT
-       (SELECT COUNT(*)::int FROM rh.colaborador
-         WHERE data_desligamento > $1::date AND data_desligamento <= $2::date) AS desligados,
-       (SELECT COUNT(*)::int FROM rh.colaborador
-         WHERE data_admissao > $1::date AND data_admissao <= $2::date) AS admitidos,
+       (SELECT COUNT(*)::int FROM rh.colaborador c
+         WHERE c.data_desligamento > $1::date AND c.data_desligamento <= $2::date
+           AND ${SAIDA_DO_GRUPO("c")}) AS desligados,
+       (SELECT COUNT(*)::int FROM rh.colaborador c
+         WHERE c.data_admissao > $1::date AND c.data_admissao <= $2::date
+           AND ${ENTRADA_NO_GRUPO("c")}) AS admitidos,
        (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$1")}) AS hc_inicio,
        (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$2")}) AS hc_fim`,
     [inicio, fim]
@@ -190,7 +203,8 @@ export async function serieDesligamentos(
     `SELECT to_char(g.mes, 'YYYY-MM') AS mes,
             (SELECT COUNT(*)::int FROM rh.colaborador c
               WHERE c.data_desligamento >= g.mes::date
-                AND c.data_desligamento < (g.mes + interval '1 month')::date) AS valor
+                AND c.data_desligamento < (g.mes + interval '1 month')::date
+                AND ${SAIDA_DO_GRUPO("c")}) AS valor
        FROM generate_series($1::date, date_trunc('month', $2::date)::date,
                             interval '1 month') AS g(mes)
       ORDER BY 1`,

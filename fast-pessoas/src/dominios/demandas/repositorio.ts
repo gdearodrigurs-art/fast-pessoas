@@ -1,5 +1,6 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
+import { TipoVinculo } from "../colaboradores/esquemas";
 import {
   FiltroDemandas,
   FluxoDemanda,
@@ -334,8 +335,10 @@ export async function colaboradorDoUsuario(
   cliente: PoolClient,
   usuarioId: number
 ): Promise<number | null> {
+  // rh.vinculo_atual (0046): a conta é da PESSOA, e ela pode ter mais de um
+  // vínculo. Com um só — o caso de hoje — devolve o mesmo id de antes.
   const { rows } = await cliente.query<{ id: string }>(
-    "SELECT id FROM rh.colaborador WHERE usuario_id = $1",
+    "SELECT id FROM rh.colaborador WHERE id = rh.vinculo_atual($1)",
     [usuarioId]
   );
   return rows.length ? Number(rows[0].id) : null;
@@ -770,7 +773,18 @@ export interface Movimentacao {
   cargo_destino: string | null;
   estabelecimento_destino_id: number | null;
   unidade_destino: string | null;
+  centro_custo_destino_id: number | null;
   centro_custo_destino: string | null;
+  /** REGISTRO (0047/0048): a empresa do grupo de onde sai e para onde vai. */
+  empresa_origem: string | null;
+  empresa_destino_id: number | null;
+  empresa_destino: string | null;
+  /** Só em 'transferencia_empresa': o contrato que nasce na empresa destino. */
+  matricula_destino: string | null;
+  tipo_vinculo_destino: TipoVinculo | null;
+  /** Preenchido na aplicação do efeito: o vínculo criado na empresa destino. */
+  vinculo_destino_id: number | null;
+  vinculo_destino_matricula: string | null;
   data_pretendida: string;
   justificativa: string;
   dentro_faixa: boolean | null;
@@ -795,7 +809,15 @@ interface LinhaMovimentacao extends Record<string, unknown> {
   cargo_destino: string | null;
   estabelecimento_destino_id: string | null;
   unidade_destino: string | null;
+  centro_custo_destino_id: string | null;
   centro_custo_destino: string | null;
+  empresa_origem: string | null;
+  empresa_destino_id: string | null;
+  empresa_destino: string | null;
+  matricula_destino: string | null;
+  tipo_vinculo_destino: TipoVinculo | null;
+  vinculo_destino_id: string | null;
+  vinculo_destino_matricula: string | null;
   data_pretendida: string;
   justificativa: string;
   dentro_faixa: boolean | null;
@@ -844,7 +866,26 @@ const SELECT_MOVIMENTACAO = `
          (SELECT ev.unidade FROM rh.estabelecimento_versao ev
            WHERE ev.estabelecimento_id = m.estabelecimento_destino_id
              AND ev.status = 'ativa') AS unidade_destino,
-         m.centro_custo_destino, m.data_pretendida::text AS data_pretendida,
+         m.centro_custo_destino_id, m.centro_custo_destino,
+         -- REGISTRO de ONDE a pessoa saiu, pela mesma régua da véspera usada
+         -- acima: depois de aplicada a transferência, a alocação de hoje já é
+         -- a da empresa nova, e ler "hoje" faria o cartão dizer "DCS → DCS".
+         (SELECT ld.empresa_nome
+            FROM rh.lotacao_detalhada ld
+           WHERE ld.colaborador_id = m.colaborador_id
+             AND ld.inicio_vigencia <= m.data_pretendida - 1
+             AND (ld.fim_vigencia IS NULL OR ld.fim_vigencia >= m.data_pretendida - 1)
+           ORDER BY ld.inicio_vigencia DESC
+           LIMIT 1)
+           AS empresa_origem,
+         m.empresa_destino_id,
+         (SELECT ev.nome_fantasia FROM rh.empresa_grupo_versao ev
+           WHERE ev.empresa_id = m.empresa_destino_id AND ev.status = 'ativa')
+           AS empresa_destino,
+         m.matricula_destino, m.tipo_vinculo_destino, m.vinculo_destino_id,
+         (SELECT vd.matricula FROM rh.colaborador vd
+           WHERE vd.id = m.vinculo_destino_id) AS vinculo_destino_matricula,
+         m.data_pretendida::text AS data_pretendida,
          m.justificativa, m.dentro_faixa, m.justificativa_excecao, m.aplicada_em,
          m.salario_proposto::text AS salario_proposto,
          m.faixa_min::text AS faixa_min, m.faixa_max::text AS faixa_max
@@ -867,7 +908,15 @@ function paraMovimentacao(linha: LinhaMovimentacao): Movimentacao {
     cargo_destino: linha.cargo_destino,
     estabelecimento_destino_id: numeroOuNulo(linha.estabelecimento_destino_id),
     unidade_destino: linha.unidade_destino,
+    centro_custo_destino_id: numeroOuNulo(linha.centro_custo_destino_id),
     centro_custo_destino: linha.centro_custo_destino,
+    empresa_origem: linha.empresa_origem,
+    empresa_destino_id: numeroOuNulo(linha.empresa_destino_id),
+    empresa_destino: linha.empresa_destino,
+    matricula_destino: linha.matricula_destino,
+    tipo_vinculo_destino: linha.tipo_vinculo_destino,
+    vinculo_destino_id: numeroOuNulo(linha.vinculo_destino_id),
+    vinculo_destino_matricula: linha.vinculo_destino_matricula,
     data_pretendida: linha.data_pretendida,
     justificativa: linha.justificativa,
     dentro_faixa: linha.dentro_faixa,
@@ -916,7 +965,10 @@ export async function inserirMovimentacao(
     colaborador_id: number;
     cargo_destino_id: number | null;
     estabelecimento_destino_id: number | null;
-    centro_custo_destino: string | null;
+    centro_custo_destino_id: number | null;
+    empresa_destino_id: number | null;
+    matricula_destino: string | null;
+    tipo_vinculo_destino: TipoVinculo | null;
     salario_proposto: number | null;
     faixa_min: number | null;
     faixa_max: number | null;
@@ -929,10 +981,11 @@ export async function inserirMovimentacao(
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.demanda_movimentacao
        (demanda_id, tipo, colaborador_id, cargo_destino_id,
-        estabelecimento_destino_id, centro_custo_destino, salario_proposto,
+        estabelecimento_destino_id, centro_custo_destino_id, empresa_destino_id,
+        matricula_destino, tipo_vinculo_destino, salario_proposto,
         faixa_min, faixa_max, dentro_faixa, justificativa_excecao,
         data_pretendida, justificativa)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      RETURNING id`,
     [
       dados.demanda_id,
@@ -940,7 +993,10 @@ export async function inserirMovimentacao(
       dados.colaborador_id,
       dados.cargo_destino_id,
       dados.estabelecimento_destino_id,
-      dados.centro_custo_destino,
+      dados.centro_custo_destino_id,
+      dados.empresa_destino_id,
+      dados.matricula_destino,
+      dados.tipo_vinculo_destino,
       dados.salario_proposto,
       dados.faixa_min,
       dados.faixa_max,
@@ -956,14 +1012,214 @@ export async function inserirMovimentacao(
 export async function marcarMovimentacaoAplicada(
   cliente: PoolClient,
   movimentacaoId: number,
-  dados: { posicao_id: number | null; lotacao_id: number | null }
+  dados: {
+    posicao_id: number | null;
+    lotacao_id: number | null;
+    /** Só na transferência entre empresas: o vínculo que nasceu do efeito. */
+    vinculo_destino_id?: number | null;
+  }
 ): Promise<void> {
   await cliente.query(
     `UPDATE rh.demanda_movimentacao
-        SET aplicada_em = now(), posicao_id = $2, lotacao_id = $3
+        SET aplicada_em = now(), posicao_id = $2, lotacao_id = $3,
+            vinculo_destino_id = $4
       WHERE id = $1`,
-    [movimentacaoId, dados.posicao_id, dados.lotacao_id]
+    [
+      movimentacaoId,
+      dados.posicao_id,
+      dados.lotacao_id,
+      dados.vinculo_destino_id ?? null,
+    ]
   );
+}
+
+// ------------------------------------------------------------------ transferência entre empresas (0048)
+
+/** Empresa do grupo com versão de nome ativa e não inativada (o REGISTRO). */
+export interface EmpresaAtiva {
+  id: number;
+  nome_fantasia: string;
+  cnpj: string | null;
+}
+
+export async function listarEmpresasAtivas(): Promise<EmpresaAtiva[]> {
+  const linhas = await consultar<{
+    id: string;
+    nome_fantasia: string;
+    cnpj: string | null;
+  }>(
+    `SELECT e.id, v.nome_fantasia, e.cnpj
+       FROM rh.empresa_grupo e
+       JOIN rh.empresa_grupo_versao v
+         ON v.empresa_id = e.id AND v.status = 'ativa'
+      WHERE e.inativada_em IS NULL
+      ORDER BY v.nome_fantasia`
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+export async function empresaAtiva(
+  cliente: PoolClient,
+  empresaId: number
+): Promise<EmpresaAtiva | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    nome_fantasia: string;
+    cnpj: string | null;
+  }>(
+    `SELECT e.id, v.nome_fantasia, e.cnpj
+       FROM rh.empresa_grupo e
+       JOIN rh.empresa_grupo_versao v
+         ON v.empresa_id = e.id AND v.status = 'ativa'
+      WHERE e.id = $1 AND e.inativada_em IS NULL`,
+    [empresaId]
+  );
+  return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+/**
+ * Centro de custo do catálogo, com a empresa que o MANTÉM. A 0047 decidiu de
+ * propósito NÃO travar "centro de custo tem que ser da mesma empresa da
+ * lotação" (o exemplo do dono: registrado na Supply, custo caindo no CSC) —
+ * por isso aqui só se confere que ele existe e está ativo.
+ */
+export async function centroCustoAtivo(
+  cliente: PoolClient,
+  centroCustoId: number
+): Promise<{ id: number; codigo: string; empresa_id: number } | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    codigo: string;
+    empresa_id: string;
+  }>(
+    `SELECT id, codigo, empresa_id
+       FROM rh.centro_custo
+      WHERE id = $1 AND inativado_em IS NULL`,
+    [centroCustoId]
+  );
+  return rows.length
+    ? {
+        id: Number(rows[0].id),
+        codigo: rows[0].codigo,
+        empresa_id: Number(rows[0].empresa_id),
+      }
+    : null;
+}
+
+/** A matrícula é UNIQUE no grupo inteiro (0001): duas empresas, duas matrículas. */
+export async function matriculaEmUso(
+  cliente: PoolClient,
+  matricula: string
+): Promise<boolean> {
+  const { rows } = await cliente.query<{ existe: boolean }>(
+    "SELECT EXISTS (SELECT 1 FROM rh.colaborador WHERE matricula = $1) AS existe",
+    [matricula]
+  );
+  return rows[0].existe;
+}
+
+/**
+ * O vínculo alvo, travado para escrita, com o que a transferência precisa
+ * decidir: de quem é a pessoa (para o novo contrato ser DELA) e qual empresa
+ * está registrada hoje (transferir para a MESMA empresa não é transferência).
+ */
+export interface VinculoParaTransferir {
+  id: number;
+  pessoa_id: number;
+  nome_completo: string;
+  matricula: string;
+  tipo_vinculo: TipoVinculo;
+  status: string;
+  data_admissao: string;
+  usuario_id: number | null;
+  ja_sucedido: boolean;
+}
+
+export async function buscarVinculoParaTransferir(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<VinculoParaTransferir | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    pessoa_id: string;
+    nome_completo: string;
+    matricula: string;
+    tipo_vinculo: TipoVinculo;
+    status: string;
+    data_admissao: string;
+    usuario_id: string | null;
+    ja_sucedido: boolean;
+  }>(
+    `SELECT c.id, c.pessoa_id, c.nome_completo, c.matricula, c.tipo_vinculo,
+            c.status, c.data_admissao::text AS data_admissao, c.usuario_id,
+            NOT rh.saiu_do_grupo(c.id) AS ja_sucedido
+       FROM rh.colaborador c
+      WHERE c.id = $1
+      FOR UPDATE OF c`,
+    [colaboradorId]
+  );
+  if (rows.length === 0) return null;
+  return {
+    ...rows[0],
+    id: Number(rows[0].id),
+    pessoa_id: Number(rows[0].pessoa_id),
+    usuario_id: rows[0].usuario_id === null ? null : Number(rows[0].usuario_id),
+  };
+}
+
+/**
+ * O vínculo NOVO sucede o antigo. É o elo da 0048 — sem ele o sistema tem duas
+ * fichas soltas da mesma pessoa e o turnover conta uma demissão que não houve.
+ */
+export async function ligarSucessao(
+  cliente: PoolClient,
+  vinculoNovoId: number,
+  vinculoAnteriorId: number
+): Promise<void> {
+  await cliente.query(
+    "UPDATE rh.colaborador SET sucede_vinculo_id = $2 WHERE id = $1",
+    [vinculoNovoId, vinculoAnteriorId]
+  );
+}
+
+/**
+ * Copia os dependentes do vínculo que fecha para o que abre, com rastro.
+ * Ver o item (f) do cabeçalho da 0048: sem a cópia, a primeira folha da
+ * empresa nova calcula IRRF sem dependente e nenhum plano pode ser aderido
+ * sem o DP redigitar filho por filho.
+ */
+export async function copiarDependentes(
+  cliente: PoolClient,
+  vinculoOrigemId: number,
+  vinculoDestinoId: number
+): Promise<number> {
+  const { rowCount } = await cliente.query(
+    `INSERT INTO rh.dependente
+       (colaborador_id, nome, nascimento, parentesco, cpf, origem_dependente_id)
+     SELECT $2, d.nome, d.nascimento, d.parentesco, d.cpf, d.id
+       FROM rh.dependente d
+      WHERE d.colaborador_id = $1`,
+    [vinculoOrigemId, vinculoDestinoId]
+  );
+  return rowCount ?? 0;
+}
+
+/** Liderados VIGENTES de um vínculo — a equipe que ele leva consigo. */
+export async function listarLiderados(
+  cliente: PoolClient,
+  gestorColaboradorId: number
+): Promise<{ relacao_id: number; liderado_id: number }[]> {
+  const { rows } = await cliente.query<{ id: string; liderado: string }>(
+    `SELECT rg.id, rg.liderado_colaborador_id AS liderado
+       FROM rh.relacao_gestor rg
+      WHERE rg.gestor_colaborador_id = $1 AND rg.fim_vigencia IS NULL
+      FOR UPDATE OF rg`,
+    [gestorColaboradorId]
+  );
+  return rows.map((linha) => ({
+    relacao_id: Number(linha.id),
+    liderado_id: Number(linha.liderado),
+  }));
 }
 
 /** O usuário é gestor VIGENTE do colaborador alvo? (nível 'lider' da cadeia.) */
@@ -1016,6 +1272,7 @@ export async function gestorVigenteDoColaborador(
 export interface ColaboradorAlvo {
   id: number;
   nome_completo: string;
+  matricula: string;
   usuario_id: number | null;
   status: string;
 }
@@ -1027,10 +1284,11 @@ export async function buscarColaboradorAlvo(
   const { rows } = await cliente.query<{
     id: string;
     nome_completo: string;
+    matricula: string;
     usuario_id: string | null;
     status: string;
   }>(
-    `SELECT id, nome_completo, usuario_id, status
+    `SELECT id, nome_completo, matricula, usuario_id, status
        FROM rh.colaborador WHERE id = $1`,
     [colaboradorId]
   );
@@ -1038,6 +1296,7 @@ export async function buscarColaboradorAlvo(
   return {
     id: Number(rows[0].id),
     nome_completo: rows[0].nome_completo,
+    matricula: rows[0].matricula,
     usuario_id:
       rows[0].usuario_id === null ? null : Number(rows[0].usuario_id),
     status: rows[0].status,
@@ -1220,7 +1479,12 @@ export async function listarAlvosPossiveis(
        FROM rh.colaborador c
       WHERE c.status = 'ativo' ${filtro}
       ORDER BY c.nome_completo`,
-    [usuarioId]
+    // O parâmetro só vai quando o filtro o USA. Mandar $1 para uma consulta
+    // sem $1 é erro do Postgres ("bind message supplies 1 parameters, but
+    // prepared statement requires 0") — era o que fazia /movimentacao/opcoes
+    // devolver 500 justamente para DP e diretoria, que são quem abre o pedido
+    // em nome do líder. Achado ao abrir a transferência entre empresas (I3).
+    todos ? [] : [usuarioId]
   );
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
 }
@@ -1244,7 +1508,8 @@ export async function listarUnidadesAtivas(): Promise<
   const linhas = await consultar<{ id: string; unidade: string }>(
     `SELECT ev.estabelecimento_id AS id, ev.unidade
        FROM rh.estabelecimento_versao ev
-      WHERE ev.status = 'ativa'
+       JOIN rh.estabelecimento e ON e.id = ev.estabelecimento_id
+      WHERE ev.status = 'ativa' AND e.inativado_em IS NULL
       ORDER BY ev.unidade`
   );
   return linhas.map((linha) => ({

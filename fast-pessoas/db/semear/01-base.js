@@ -57,19 +57,34 @@ const RAZAO_SOCIAL = 'Fast Distribuidora de Materiais de Construção Ltda';
 const RAIZ_CNPJ = 41235678; // raiz fictícia, comum às 5 inscrições
 const MATRICULA_INICIAL = 1001;
 
-// ------------------------------------------------------------------ unidades
+// ------------------------------------------------------------------ empresas do grupo (REGISTRO)
+// As quatro citadas pela diretoria. São o CNPJ em que a pessoa está
+// REGISTRADA — coisa diferente do LOCAL onde ela trabalha (as unidades abaixo)
+// e do CENTRO DE CUSTO onde o custo dela cai. A quarta não foi nomeada na
+// reunião e nasce com nome de placeholder, editável pela tela de estrutura.
+const EMPRESAS = [
+  { nome: 'Supply', tipo: 'matriz' },
+  { nome: 'DCS', tipo: 'filial' },
+  { nome: 'Casa do Montador', tipo: 'filial' },
+  { nome: 'Quarta empresa do grupo (renomear)', tipo: 'filial' },
+];
 
+// ------------------------------------------------------------------ unidades (LOTAÇÃO)
+// O local físico. Note que são CINCO locais para QUATRO empresas: a Supply
+// responde por dois (Matriz Centro e Filial Oeste) — é exatamente o caso que o
+// desenho antigo não conseguia representar, porque o CNPJ morava no local.
 const UNIDADES = [
   {
     nome: 'Matriz Centro',
     endereco: 'Av. Sete de Setembro, 1420 — Centro',
+    empresa: 'Supply',
     ccLoja: 'CC-1000',
     ccAdm: 'CC-1900',
   },
-  { nome: 'Filial Norte', endereco: 'Rod. BR-116, km 22 — Distrito Industrial Norte', ccLoja: 'CC-2000' },
-  { nome: 'Filial Sul', endereco: 'Av. das Indústrias, 3050 — Jardim Sul', ccLoja: 'CC-3000' },
-  { nome: 'Filial Leste', endereco: 'Av. Leste-Oeste, 780 — Vila Leste', ccLoja: 'CC-4000' },
-  { nome: 'Filial Oeste', endereco: 'Rua dos Construtores, 215 — Parque Oeste', ccLoja: 'CC-5000' },
+  { nome: 'Filial Norte', endereco: 'Rod. BR-116, km 22 — Distrito Industrial Norte', empresa: 'DCS', ccLoja: 'CC-2000' },
+  { nome: 'Filial Sul', endereco: 'Av. das Indústrias, 3050 — Jardim Sul', empresa: 'Casa do Montador', ccLoja: 'CC-3000' },
+  { nome: 'Filial Leste', endereco: 'Av. Leste-Oeste, 780 — Vila Leste', empresa: 'Quarta empresa do grupo (renomear)', ccLoja: 'CC-4000' },
+  { nome: 'Filial Oeste', endereco: 'Rua dos Construtores, 215 — Parque Oeste', empresa: 'Supply', ccLoja: 'CC-5000' },
 ];
 
 // ------------------------------------------------------------------ cargos (CHA + faixa)
@@ -583,26 +598,62 @@ async function semear(cliente) {
   const proximoNome = criarGeradorNomes(rng);
   const senhaHash = hashSenha(SENHA_DEMO); // um hash só: 68 bcrypts seriam lentos à toa
 
-  // ---------------------------------------------------------- estabelecimentos
+  // ---------------------------------------------------------- estrutura do grupo
+  // Três catálogos separados (migration 0047): REGISTRO (empresa/CNPJ),
+  // LOTAÇÃO (local físico, sem CNPJ próprio) e CENTRO DE CUSTO.
   const inicioEstrutura = iso(anosAtras(12)); // a Fast já tinha as 5 unidades
-  const cnpjs = UNIDADES.map((_, indice) => cnpjValido(RAIZ_CNPJ, indice + 1));
 
-  const estabs = await inserirLote(
+  // -- REGISTRO: uma inscrição por empresa do grupo.
+  const cnpjs = EMPRESAS.map((_, indice) => cnpjValido(RAIZ_CNPJ, indice + 1));
+  const empresasCriadas = await inserirLote(
     cliente,
-    'rh.estabelecimento',
+    'rh.empresa_grupo',
     ['cnpj'],
     cnpjs.map((cnpj) => [cnpj]),
     'id, cnpj'
   );
-  const idPorCnpj = new Map(estabs.map((linha) => [linha.cnpj, Number(linha.id)]));
+  const empresaIdPorCnpj = new Map(
+    empresasCriadas.map((linha) => [linha.cnpj, Number(linha.id)])
+  );
+  const empresaIdPorNome = new Map(
+    EMPRESAS.map((empresa, indice) => [
+      empresa.nome,
+      empresaIdPorCnpj.get(cnpjs[indice]),
+    ])
+  );
+  await inserirLote(
+    cliente,
+    'rh.empresa_grupo_versao',
+    ['empresa_id', 'razao_social', 'nome_fantasia', 'tipo', 'status', 'inicio_vigencia'],
+    EMPRESAS.map((empresa) => [
+      empresaIdPorNome.get(empresa.nome),
+      `${RAZAO_SOCIAL} — ${empresa.nome}`,
+      empresa.nome,
+      empresa.tipo,
+      'ativa',
+      inicioEstrutura,
+    ])
+  );
+
+  // -- LOTAÇÃO: o prédio. Sem CNPJ — quem tem CNPJ é a empresa.
+  const estabs = await inserirLote(
+    cliente,
+    'rh.estabelecimento',
+    ['cnpj'],
+    UNIDADES.map(() => [null]),
+    'id'
+  );
+  const idPorUnidade = new Map(
+    UNIDADES.map((unidade, indice) => [unidade.nome, Number(estabs[indice].id)])
+  );
 
   const versoesEstab = await inserirLote(
     cliente,
     'rh.estabelecimento_versao',
     ['estabelecimento_id', 'razao_social', 'unidade', 'endereco_resumido', 'status', 'inicio_vigencia'],
-    UNIDADES.map((unidade, indice) => [
-      idPorCnpj.get(cnpjs[indice]),
-      RAZAO_SOCIAL,
+    UNIDADES.map((unidade) => [
+      idPorUnidade.get(unidade.nome),
+      null,
       unidade.nome,
       unidade.endereco,
       'ativa',
@@ -614,21 +665,56 @@ async function semear(cliente) {
     versoesEstab.map((linha) => [Number(linha.estabelecimento_id), Number(linha.id)])
   );
 
+  // -- CENTRO DE CUSTO: código + nome, mantido pela empresa do local.
+  const centrosDesejados = [];
+  for (const unidade of UNIDADES) {
+    const empresaId = empresaIdPorNome.get(unidade.empresa);
+    centrosDesejados.push([empresaId, unidade.ccLoja, `Operação ${unidade.nome}`]);
+    if (unidade.ccAdm) {
+      centrosDesejados.push([empresaId, unidade.ccAdm, `Administrativo ${unidade.nome}`]);
+    }
+  }
+  const centrosCriados = await inserirLote(
+    cliente,
+    'rh.centro_custo',
+    ['empresa_id', 'codigo'],
+    centrosDesejados.map(([empresaId, codigo]) => [empresaId, codigo]),
+    'id, empresa_id, codigo'
+  );
+  const centroIdPorCodigo = new Map(
+    centrosCriados.map((linha) => [linha.codigo, Number(linha.id)])
+  );
+  await inserirLote(
+    cliente,
+    'rh.centro_custo_versao',
+    ['centro_custo_id', 'nome', 'status', 'inicio_vigencia'],
+    centrosDesejados.map(([, codigo, nome]) => [
+      centroIdPorCodigo.get(codigo),
+      nome,
+      'ativa',
+      inicioEstrutura,
+    ])
+  );
+
   const unidades = new Map(
-    UNIDADES.map((unidade, indice) => {
-      const estabelecimentoId = idPorCnpj.get(cnpjs[indice]);
+    UNIDADES.map((unidade) => {
+      const estabelecimentoId = idPorUnidade.get(unidade.nome);
       return [
         unidade.nome,
         {
           id: estabelecimentoId,
           versaoId: versaoPorEstab.get(estabelecimentoId),
+          empresaId: empresaIdPorNome.get(unidade.empresa),
           ...unidade,
           ccAdm: unidade.ccAdm ?? unidade.ccLoja,
         },
       ];
     })
   );
-  log(`01-base: ${unidades.size} estabelecimentos com versão vigente.`);
+  log(
+    `01-base: ${EMPRESAS.length} empresas do grupo, ${unidades.size} locais de ` +
+      `trabalho e ${centrosDesejados.length} centros de custo.`
+  );
 
   // ---------------------------------------------------------- cargos + faixas
   // A descrição/CHA do cargo é estável (vigente há 12 anos); a tabela salarial
@@ -814,11 +900,36 @@ async function semear(cliente) {
       pessoa.ativo && PAPEIS_COM_2FA.has(pessoa.papel) ? segredoTotp(rng) : null;
   }
 
+  // A PESSOA nasce primeiro (migration 0046): é dela o CPF, o nome, o
+  // nascimento, o gênero e o retrato. Depois a CONTA, ligada à pessoa. Só
+  // então o VÍNCULO — que só carrega o que é do contrato; o resto desce
+  // sozinho pelo trigger de projeção.
+  const pessoasCriadas = await inserirLote(
+    cliente,
+    'rh.pessoa',
+    ['cpf', 'nome_completo', 'data_nascimento', 'genero', 'retrato'],
+    pessoas.map((p) => [
+      p.cpf,
+      p.nome,
+      iso(p.nascimento),
+      p.generoDeclarado,
+      p.persona ? p.persona.descricao : (RETRATOS[p.cargo] ?? null),
+    ]),
+    'id, cpf'
+  );
+  const pessoaPorCpf = new Map(pessoasCriadas.map((linha) => [linha.cpf, Number(linha.id)]));
+  for (const pessoa of pessoas) {
+    pessoa.pessoaId = pessoaPorCpf.get(pessoa.cpf);
+    if (!pessoa.pessoaId) throw new Error(`Pessoa não retornada para o CPF ${pessoa.cpf}`);
+  }
+
   const usuarios = await inserirLote(
     cliente,
     'sistema.usuario',
-    ['email', 'nome', 'senha_hash', 'papel', 'ativo', 'totp_secret'],
-    pessoas.map((p) => [p.email, p.nome, senhaHash, p.papel, p.ativo, p.totpSecret]),
+    ['email', 'nome', 'senha_hash', 'papel', 'ativo', 'totp_secret', 'pessoa_id'],
+    pessoas.map((p) => [
+      p.email, p.nome, senhaHash, p.papel, p.ativo, p.totpSecret, p.pessoaId,
+    ]),
     'id, email'
   );
   const usuarioPorEmail = new Map(usuarios.map((linha) => [linha.email, Number(linha.id)]));
@@ -831,23 +942,17 @@ async function semear(cliente) {
     cliente,
     'rh.colaborador',
     [
-      'usuario_id', 'matricula', 'matricula_esocial', 'cpf', 'nome_completo',
-      'tipo_vinculo', 'data_admissao', 'status', 'data_desligamento', 'retrato',
-      'data_nascimento', 'genero',
+      'pessoa_id', 'matricula', 'matricula_esocial', 'tipo_vinculo',
+      'data_admissao', 'status', 'data_desligamento',
     ],
     pessoas.map((p) => [
-      p.usuarioId,
+      p.pessoaId,
       p.matricula,
       p.matricula, // matricula_esocial = matricula (RET), decisão de 2026-07-27
-      p.cpf,
-      p.nome,
       p.vinculo,
       iso(p.admissao),
       p.ativo ? 'ativo' : 'desligado',
       p.desligamento ? iso(p.desligamento) : null,
-      p.persona ? p.persona.descricao : (RETRATOS[p.cargo] ?? null),
-      iso(p.nascimento),
-      p.generoDeclarado,
     ]),
     'id, matricula'
   );
@@ -887,13 +992,21 @@ async function semear(cliente) {
     const cargo = cargos.get(pessoa.cargo);
     const unidade = unidades.get(pessoa.unidade);
     const centroCusto = pessoa.cc === 'adm' ? unidade.ccAdm : unidade.ccLoja;
+    const centroCustoId = centroIdPorCodigo.get(centroCusto);
     const inicio = iso(pessoa.admissao);
 
     // Vigências ficam ABERTAS mesmo para desligados: é o que o app faz ao
     // encerrar um processo (ver src/dominios/desligamento/servico.ts) — a ficha
     // do desligado continua mostrando cargo, salário e unidade do desligamento.
     posicoes.push([pessoa.colaboradorId, cargo.versaoId, pessoa.salario.toFixed(2), inicio]);
-    lotacoes.push([pessoa.colaboradorId, unidade.id, centroCusto, inicio]);
+    // Os três campos, na mesma linha de vigência.
+    lotacoes.push([
+      pessoa.colaboradorId,
+      unidade.empresaId,
+      unidade.id,
+      centroCustoId,
+      inicio,
+    ]);
 
     if (pessoa.chefe) {
       const gestor = porRef.get(pessoa.chefe);
@@ -951,7 +1064,7 @@ async function semear(cliente) {
   await inserirLote(
     cliente,
     'rh.lotacao',
-    ['colaborador_id', 'estabelecimento_id', 'centro_custo', 'inicio_vigencia'],
+    ['colaborador_id', 'empresa_id', 'estabelecimento_id', 'centro_custo_id', 'inicio_vigencia'],
     lotacoes
   );
   await inserirLote(

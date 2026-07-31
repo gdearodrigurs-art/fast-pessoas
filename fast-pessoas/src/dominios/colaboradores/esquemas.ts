@@ -275,11 +275,18 @@ export const esquemaDefinicaoGestor = z.object({
 
 export type DefinicaoGestor = z.infer<typeof esquemaDefinicaoGestor>;
 
-// ------------------------------------------------------------------ lotação
+// ------------------------------------------------------------------ alocação: os três campos
+// REGISTRO (empresa_id), LOTAÇÃO (estabelecimento_id) e CENTRO DE CUSTO
+// (centro_custo_id) são independentes e escolhidos SEPARADAMENTE — não há
+// derivação de um pelo outro. Os três entram numa única linha de vigência
+// (migration 0047): mudar um encerra a linha e abre outra.
+// O centro de custo deixou de ser texto livre: é id de catálogo. Digitar
+// "CC-100" com um zero a menos criava um centro de custo novo em silêncio.
 
 export const esquemaDefinicaoLotacao = z.object({
+  empresa_id: z.number().int().positive(),
   estabelecimento_id: z.number().int().positive(),
-  centro_custo: z.string().trim().min(1, "Informe o centro de custo").max(30),
+  centro_custo_id: z.number().int().positive(),
   inicio_vigencia: esquemaData,
 });
 
@@ -366,26 +373,50 @@ export const esquemaNovaFaixaSalarial = z
 
 export type NovaFaixaSalarial = z.infer<typeof esquemaNovaFaixaSalarial>;
 
-// ------------------------------------------------------------------ estabelecimento
+// ------------------------------------------------------------------ estabelecimento = LOTAÇÃO (local físico)
+// Desde a migration 0047 o local físico não tem CNPJ nem razão social próprios —
+// quem tem é a empresa do grupo (esquemas do domínio "estrutura"). Os dois
+// campos continuam aceitos, opcionais, para não perder o que já estava
+// preenchido e para o caso de o DP querer anotar o estabelecimento do eSocial.
 
-const esquemaCnpj = z
+export const esquemaCnpj = z
   .string()
   .transform((valor) => valor.replace(/\D/g, ""))
   .refine((valor) => /^\d{14}$/.test(valor), {
     message: "CNPJ deve ter 14 dígitos",
   });
 
+/** Campo de CNPJ que aceita vazio como "ainda não informado". */
+export const esquemaCnpjOpcional = z
+  .string()
+  .trim()
+  .transform((valor) => valor.replace(/\D/g, ""))
+  .refine((valor) => valor === "" || /^\d{14}$/.test(valor), {
+    message: "CNPJ deve ter 14 dígitos",
+  })
+  .transform((valor) => (valor === "" ? null : valor))
+  .nullable()
+  .optional();
+
 const camposVersaoEstabelecimento = {
-  razao_social: z.string().trim().min(2, "Informe a razão social").max(200),
+  razao_social: z.string().trim().max(200).optional(),
   unidade: z.string().trim().min(2, "Informe o nome da unidade").max(120),
   endereco_resumido: z.string().trim().max(300).optional(),
   inicio_vigencia: esquemaData,
 };
 
 export const esquemaCriacaoEstabelecimento = z.object({
-  cnpj: esquemaCnpj,
+  cnpj: esquemaCnpjOpcional,
   ...camposVersaoEstabelecimento,
 });
+
+export const esquemaInativacaoEstabelecimento = z.object({
+  inativo: z.boolean(),
+});
+
+export type InativacaoEstabelecimento = z.infer<
+  typeof esquemaInativacaoEstabelecimento
+>;
 
 export type CriacaoEstabelecimento = z.infer<
   typeof esquemaCriacaoEstabelecimento

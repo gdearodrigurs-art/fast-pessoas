@@ -1,3 +1,4 @@
+import { TipoVinculo } from "@/dominios/colaboradores/esquemas";
 import {
   FluxoDemanda,
   NivelAprovacao,
@@ -87,7 +88,17 @@ export interface Movimentacao {
   cargo_destino: string | null;
   estabelecimento_destino_id: number | null;
   unidade_destino: string | null;
+  centro_custo_destino_id: number | null;
   centro_custo_destino: string | null;
+  /** REGISTRO: a empresa do grupo de onde sai e para onde vai (0047/0048). */
+  empresa_origem: string | null;
+  empresa_destino_id: number | null;
+  empresa_destino: string | null;
+  /** Só em 'transferencia_empresa': o contrato que nasce na empresa destino. */
+  matricula_destino: string | null;
+  tipo_vinculo_destino: TipoVinculo | null;
+  vinculo_destino_id: number | null;
+  vinculo_destino_matricula: string | null;
   data_pretendida: string;
   justificativa: string;
   dentro_faixa: boolean | null;
@@ -122,6 +133,15 @@ export interface OpcoesMovimentacao {
   }[];
   cargos: { id: number; nome: string }[];
   unidades: { id: number; unidade: string }[];
+  centros_custo: {
+    id: number;
+    codigo: string;
+    nome: string;
+    empresa_id: number;
+    empresa_nome: string | null;
+  }[];
+  /** Vazio para quem não tem movimentacao.transferir_empresa (0048). */
+  empresas: { id: number; nome_fantasia: string; cnpj: string | null }[];
 }
 
 export interface Visao {
@@ -133,6 +153,7 @@ export interface Visao {
     aprovar_diretoria: boolean;
     ciencia_movimentacao: boolean;
     ver_salario: boolean;
+    transferir_empresa: boolean;
   };
   tipos: TipoDemanda[];
   minhas: Demanda[];

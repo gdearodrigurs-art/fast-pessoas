@@ -34,7 +34,7 @@ export default async function PaginaMeuPonto() {
           ORDER BY ap.ano DESC, ap.mes DESC
           LIMIT 1
        ) a ON TRUE
-      WHERE c.usuario_id = $1`,
+      WHERE c.id = rh.vinculo_atual($1)`,
     [sessao.usuario_id]
   );
 

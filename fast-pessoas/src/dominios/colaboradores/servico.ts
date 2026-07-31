@@ -4,6 +4,12 @@ import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { PayloadSessao } from "../identidade/esquemas";
+// Catálogos de REGISTRO e CENTRO DE CUSTO (migration 0047). A alocação escolhe
+// os três campos, e dois deles moram no domínio "estrutura".
+import {
+  buscarCentroCusto as buscarCentroCustoDaEstrutura,
+  buscarEmpresa as buscarEmpresaDaEstrutura,
+} from "../estrutura/repositorio";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
@@ -46,8 +52,13 @@ import {
   Aniversariante,
   atualizar,
   atualizarAcao,
+  atualizarPessoa,
   buscarAcaoParaAtualizar,
   buscarBasico,
+  buscarPessoaPorCpf,
+  CamposPessoa,
+  criarPessoa,
+  vincularContaAPessoa,
   buscarCargoVersaoAtiva,
   buscarRcfPorCargo,
   contarCoberturaNascimento,
@@ -81,6 +92,7 @@ import {
   encerrarRelacaoGestor,
   encerrarVersaoCargo,
   encerrarVersaoEstabelecimento,
+  definirInativacaoEstabelecimento,
   Escopo,
   EstabelecimentoResumo,
   EventoLinhaTempo,
@@ -123,6 +135,8 @@ import {
 } from "./repositorio";
 
 const ORIGEM_COLABORADOR = "rh.colaborador";
+/** O ser humano por trás do vínculo (migration 0046) — trilha própria. */
+const ORIGEM_PESSOA = "rh.pessoa";
 
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
@@ -195,7 +209,9 @@ function mapearConflito(erro: unknown): never {
       "matricula"
     );
   }
-  if (restricao === "colaborador_cpf_key") {
+  // Desde a 0046 o CPF é único em rh.pessoa, não em rh.colaborador: o UNIQUE
+  // que estourava aqui mudou de nome junto com a coluna que o carrega.
+  if (restricao === "pessoa_cpf_key") {
     throw new ErroHttpCampo(409, "Já existe um colaborador com este CPF.", "cpf");
   }
   throw erro;
@@ -270,24 +286,43 @@ export async function criarColaborador(
     const colaborador = await comTransacao(
       sessao.usuario_id,
       async (cliente) => {
+        // A PESSOA nasce primeiro (0046): é dela o CPF, e é a ela que a conta
+        // de acesso se liga. Depois vem o VÍNCULO.
+        //
+        // Se já existe pessoa com este CPF, esta tela ainda recusa — ela cria
+        // conta nova, e conta é uma por gente. Abrir o segundo vínculo de quem
+        // já está no grupo é fluxo próprio, com escolha do registro (empresa) e
+        // reaproveitamento do login; o schema já aguenta, a tela é o passo
+        // seguinte da onda.
+        const jaExiste = await buscarPessoaPorCpf(cliente, dados.cpf);
+        if (jaExiste) {
+          throw new ErroHttpCampo(
+            409,
+            "Já existe um colaborador com este CPF.",
+            "cpf"
+          );
+        }
+        const pessoaId = await criarPessoa(cliente, {
+          cpf: dados.cpf,
+          nome_completo: dados.nome_completo,
+          data_nascimento: dados.data_nascimento,
+          genero: dados.genero,
+          retrato: dados.retrato ?? null,
+          contexto: dados.contexto ?? null,
+        });
         const usuario = await criarUsuario(cliente, {
           email: dados.email,
           nome: dados.nome_completo,
           papel: "funcionario",
           senhaHash,
         });
+        await vincularContaAPessoa(cliente, usuario.id, pessoaId);
         const criado = await criar(cliente, {
-          usuario_id: usuario.id,
+          pessoa_id: pessoaId,
           matricula: dados.matricula,
           matricula_esocial: dados.matricula,
-          cpf: dados.cpf,
-          nome_completo: dados.nome_completo,
           tipo_vinculo: dados.tipo_vinculo,
           data_admissao: dados.data_admissao,
-          data_nascimento: dados.data_nascimento,
-          genero: dados.genero,
-          retrato: dados.retrato ?? null,
-          contexto: dados.contexto ?? null,
         });
         await inserirEvento(cliente, {
           colaborador_id: criado.id,
@@ -315,15 +350,12 @@ export async function criarColaborador(
             Ativo: { de: null, para: "Sim" },
           },
         });
-        const diffColaborador: Diff = {
-          "Matrícula": { de: null, para: dados.matricula },
+        // Trilha em DUAS entidades porque agora são duas: o que é do ser
+        // humano (CPF, nome, nascimento, gênero, retrato, contexto) é da
+        // pessoa; o que é do contrato é do vínculo.
+        const diffPessoa: Diff = {
           CPF: { de: null, para: dados.cpf },
           "Nome completo": { de: null, para: dados.nome_completo },
-          "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
-          "Data de admissão": {
-            de: null,
-            para: formatarData(dados.data_admissao),
-          },
           "Data de nascimento": {
             de: null,
             para: formatarData(dados.data_nascimento),
@@ -335,21 +367,36 @@ export async function criarColaborador(
             de: null,
             para: ROTULOS_GENERO[dados.genero],
           },
-          Status: { de: null, para: ROTULOS_STATUS.ativo },
         };
         if (dados.retrato) {
-          diffColaborador.Retrato = { de: null, para: dados.retrato };
+          diffPessoa.Retrato = { de: null, para: dados.retrato };
         }
         if (dados.contexto) {
-          diffColaborador.Contexto = { de: null, para: dados.contexto };
+          diffPessoa.Contexto = { de: null, para: dados.contexto };
         }
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "criacao",
+          tabela: ORIGEM_PESSOA,
+          registroId: String(pessoaId),
+          diff: diffPessoa,
+        });
         await registrarAlteracao(cliente, {
           usuarioId: sessao.usuario_id,
           papel: sessao.papel,
           acao: "criacao",
           tabela: ORIGEM_COLABORADOR,
           registroId: String(criado.id),
-          diff: diffColaborador,
+          diff: {
+            "Matrícula": { de: null, para: dados.matricula },
+            "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
+            "Data de admissão": {
+              de: null,
+              para: formatarData(dados.data_admissao),
+            },
+            Status: { de: null, para: ROTULOS_STATUS.ativo },
+          },
         });
         return criado;
       }
@@ -371,26 +418,31 @@ export async function atualizarColaborador(
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
 
+    // Duas gavetas: o que muda no ser humano vai para rh.pessoa e desce
+    // sozinho para todos os contratos dele; o que muda no contrato fica no
+    // vínculo. Quem separa é aqui — abaixo o repositório só executa.
     const campos: CamposColaborador = {};
+    const camposPessoa: CamposPessoa = {};
     const diff: Diff = {};
+    const diffPessoa: Diff = {};
 
     if (
       dados.nome_completo !== undefined &&
       dados.nome_completo !== atual.nome_completo
     ) {
-      campos.nome_completo = dados.nome_completo;
-      diff["Nome completo"] = {
+      camposPessoa.nome_completo = dados.nome_completo;
+      diffPessoa["Nome completo"] = {
         de: atual.nome_completo,
         para: dados.nome_completo,
       };
     }
     if (dados.retrato !== undefined && dados.retrato !== atual.retrato) {
-      campos.retrato = dados.retrato;
-      diff.Retrato = { de: atual.retrato, para: dados.retrato };
+      camposPessoa.retrato = dados.retrato;
+      diffPessoa.Retrato = { de: atual.retrato, para: dados.retrato };
     }
     if (dados.contexto !== undefined && dados.contexto !== atual.contexto) {
-      campos.contexto = dados.contexto;
-      diff.Contexto = { de: atual.contexto, para: dados.contexto };
+      camposPessoa.contexto = dados.contexto;
+      diffPessoa.Contexto = { de: atual.contexto, para: dados.contexto };
     }
     if (
       dados.data_nascimento !== undefined &&
@@ -403,8 +455,8 @@ export async function atualizarColaborador(
           "data_nascimento"
         );
       }
-      campos.data_nascimento = dados.data_nascimento;
-      diff["Data de nascimento"] = {
+      camposPessoa.data_nascimento = dados.data_nascimento;
+      diffPessoa["Data de nascimento"] = {
         de: atual.data_nascimento ? formatarData(atual.data_nascimento) : null,
         para: formatarData(dados.data_nascimento),
       };
@@ -413,8 +465,8 @@ export async function atualizarColaborador(
     // valor atual em nenhum payload de leitura (o formulário é "cego"). A
     // trilha registra a mudança — é lá que se audita quem tocou no campo.
     if (dados.genero !== undefined && dados.genero !== atual.genero) {
-      campos.genero = dados.genero;
-      diff["Gênero (autodeclarado)"] = {
+      camposPessoa.genero = dados.genero;
+      diffPessoa["Gênero (autodeclarado)"] = {
         de: ROTULOS_GENERO[atual.genero],
         para: ROTULOS_GENERO[dados.genero],
       };
@@ -463,17 +515,22 @@ export async function atualizarColaborador(
       }
     }
 
-    if (Object.keys(campos).length === 0) {
+    if (
+      Object.keys(campos).length === 0 &&
+      Object.keys(camposPessoa).length === 0
+    ) {
       return;
     }
 
+    await atualizarPessoa(cliente, atual.pessoa_id, camposPessoa);
     await atualizar(cliente, id, campos);
 
     const desligando =
       campos.status === "desligado" && dados.data_desligamento !== undefined;
     if (desligando && dados.data_desligamento) {
-      if (atual.usuario_ativo) {
-        await desativarUsuario(cliente, atual.usuario_id);
+      // Só trava o acesso se a pessoa não tiver outro contrato de pé — quem
+      // saiu da Supply e continua na DCS não pode perder o login.
+      if (atual.usuario_ativo && (await desativarUsuario(cliente, atual.usuario_id))) {
         await registrarAlteracao(cliente, {
           usuarioId: sessao.usuario_id,
           papel: sessao.papel,
@@ -518,14 +575,26 @@ export async function atualizarColaborador(
       });
     }
 
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "atualizacao",
-      tabela: ORIGEM_COLABORADOR,
-      registroId: String(id),
-      diff,
-    });
+    if (Object.keys(diffPessoa).length > 0) {
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "atualizacao",
+        tabela: ORIGEM_PESSOA,
+        registroId: String(atual.pessoa_id),
+        diff: diffPessoa,
+      });
+    }
+    if (Object.keys(diff).length > 0) {
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "atualizacao",
+        tabela: ORIGEM_COLABORADOR,
+        registroId: String(id),
+        diff,
+      });
+    }
   });
 
   // Quem tem rh.colaborador.editar enxerga tudo — escopo pleno na releitura.
@@ -1054,6 +1123,13 @@ export async function obterLotacoes(
   return { vigente, historico };
 }
 
+/**
+ * Define a ALOCAÇÃO do vínculo: os três campos de uma vez, com vigência.
+ * Registro, lotação e centro de custo são escolhidos separadamente (nenhum é
+ * derivado do outro) e entram numa linha só. Mudar qualquer um encerra a linha
+ * vigente e abre outra — a linha encerrada vira imutável no banco, e é por isso
+ * que trocar o centro de custo hoje não mexe na folha de fevereiro.
+ */
 export async function definirLotacao(
   sessao: PayloadSessao,
   colaboradorId: number,
@@ -1064,6 +1140,14 @@ export async function definirLotacao(
     if (!colaborador) {
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
+    const empresa = await buscarEmpresaDaEstrutura(cliente, dados.empresa_id);
+    if (!empresa || empresa.inativada_em !== null) {
+      throw new ErroHttpCampo(
+        400,
+        "Empresa do grupo inexistente ou inativa.",
+        "empresa_id"
+      );
+    }
     const versaoEstabelecimento = await buscarEstabelecimentoVersaoAtiva(
       cliente,
       dados.estabelecimento_id
@@ -1071,8 +1155,19 @@ export async function definirLotacao(
     if (!versaoEstabelecimento) {
       throw new ErroHttpCampo(
         400,
-        "Estabelecimento inexistente ou sem versão ativa.",
+        "Lotação inexistente ou sem versão ativa.",
         "estabelecimento_id"
+      );
+    }
+    const centro = await buscarCentroCustoDaEstrutura(
+      cliente,
+      dados.centro_custo_id
+    );
+    if (!centro || centro.inativado_em !== null) {
+      throw new ErroHttpCampo(
+        400,
+        "Centro de custo inexistente ou inativo.",
+        "centro_custo_id"
       );
     }
     const vigente = await buscarLotacaoVigenteParaAtualizar(
@@ -1081,10 +1176,11 @@ export async function definirLotacao(
     );
     if (
       vigente &&
+      vigente.empresa_id === dados.empresa_id &&
       vigente.estabelecimento_id === dados.estabelecimento_id &&
-      vigente.centro_custo === dados.centro_custo
+      vigente.centro_custo_id === dados.centro_custo_id
     ) {
-      throw new ErroHttp(400, "Lotação informada já é a vigente.");
+      throw new ErroHttp(400, "Alocação informada já é a vigente.");
     }
     if (vigente) {
       if (dados.inicio_vigencia <= vigente.inicio_vigencia) {
@@ -1098,22 +1194,35 @@ export async function definirLotacao(
     }
     const lotacaoId = await inserirLotacao(cliente, {
       colaborador_id: colaboradorId,
+      empresa_id: dados.empresa_id,
       estabelecimento_id: dados.estabelecimento_id,
-      centro_custo: dados.centro_custo,
+      centro_custo_id: dados.centro_custo_id,
       inicio_vigencia: dados.inicio_vigencia,
     });
 
-    // Transferência de unidade é fato relevante; a primeira lotação faz parte
-    // do arranjo da admissão e fica só na trilha de audit.
-    if (vigente && vigente.estabelecimento_id !== dados.estabelecimento_id) {
+    // Fato relevante na linha do tempo: mudar de EMPRESA ou de LOCAL. Trocar só
+    // o centro de custo é rearranjo contábil e fica na trilha de audit — a
+    // primeira alocação faz parte do arranjo da admissão, idem.
+    const mudouEmpresa = vigente && vigente.empresa_id !== dados.empresa_id;
+    const mudouLocal =
+      vigente && vigente.estabelecimento_id !== dados.estabelecimento_id;
+    if (vigente && (mudouEmpresa || mudouLocal)) {
+      const de = mudouEmpresa
+        ? (vigente.empresa_nome ?? "empresa anterior")
+        : (vigente.unidade ?? "unidade anterior");
+      const para = mudouEmpresa
+        ? (empresa.nome_fantasia ?? `empresa ${dados.empresa_id}`)
+        : versaoEstabelecimento.unidade;
       await inserirEvento(cliente, {
         colaborador_id: colaboradorId,
         tipo: "transferencia",
         ocorrido_em: `${dados.inicio_vigencia}T00:00:00Z`,
         origem_tabela: "rh.lotacao",
         origem_id: lotacaoId,
-        resumo: `Transferência: ${vigente.unidade ?? "unidade anterior"} → ${versaoEstabelecimento.unidade} em ${formatarData(dados.inicio_vigencia)}`,
+        resumo: `Transferência: ${de} → ${para} em ${formatarData(dados.inicio_vigencia)}`,
         payload: {
+          de_empresa_id: vigente.empresa_id,
+          para_empresa_id: dados.empresa_id,
           de_estabelecimento_id: vigente.estabelecimento_id,
           para_estabelecimento_id: dados.estabelecimento_id,
         },
@@ -1127,13 +1236,17 @@ export async function definirLotacao(
       tabela: "rh.lotacao",
       registroId: String(lotacaoId),
       diff: {
-        Unidade: {
+        Registro: {
+          de: vigente?.empresa_nome ?? null,
+          para: empresa.nome_fantasia,
+        },
+        Lotação: {
           de: vigente?.unidade ?? null,
           para: versaoEstabelecimento.unidade,
         },
         "Centro de custo": {
           de: vigente?.centro_custo ?? null,
-          para: dados.centro_custo,
+          para: centro.codigo,
         },
         "Início da vigência": {
           de: vigente ? formatarData(vigente.inicio_vigencia) : null,
@@ -1456,11 +1569,11 @@ export async function criarEstabelecimento(
     await comTransacao(sessao.usuario_id, async (cliente) => {
       const estabelecimentoId = await inserirEstabelecimento(
         cliente,
-        dados.cnpj
+        dados.cnpj ?? null
       );
       const versaoId = await inserirVersaoEstabelecimento(cliente, {
         estabelecimento_id: estabelecimentoId,
-        razao_social: dados.razao_social,
+        razao_social: dados.razao_social ?? null,
         unidade: dados.unidade,
         endereco_resumido: dados.endereco_resumido ?? null,
         inicio_vigencia: dados.inicio_vigencia,
@@ -1472,8 +1585,8 @@ export async function criarEstabelecimento(
         tabela: "rh.estabelecimento_versao",
         registroId: String(versaoId),
         diff: {
-          CNPJ: { de: null, para: dados.cnpj },
-          "Razão social": { de: null, para: dados.razao_social },
+          CNPJ: { de: null, para: dados.cnpj ?? null },
+          "Razão social": { de: null, para: dados.razao_social ?? null },
           Unidade: { de: null, para: dados.unidade },
           "Início da vigência": {
             de: null,
@@ -1492,6 +1605,37 @@ export async function criarEstabelecimento(
     }
     throw erro;
   }
+}
+
+/** Liga/desliga o local físico para uso NOVO. Não apaga e não mexe no passado. */
+export async function definirEstabelecimentoInativo(
+  sessao: PayloadSessao,
+  estabelecimentoId: number,
+  inativo: boolean
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    if (!(await existeEstabelecimento(cliente, estabelecimentoId))) {
+      throw new ErroHttp(404, "Lotação não encontrada.");
+    }
+    await definirInativacaoEstabelecimento(
+      cliente,
+      estabelecimentoId,
+      inativo ? sessao.usuario_id : null
+    );
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "edicao",
+      tabela: "rh.estabelecimento",
+      registroId: String(estabelecimentoId),
+      diff: {
+        Situação: {
+          de: inativo ? "ativa" : "inativa",
+          para: inativo ? "inativa" : "ativa",
+        },
+      },
+    });
+  });
 }
 
 export async function criarVersaoEstabelecimento(
@@ -1524,7 +1668,7 @@ export async function criarVersaoEstabelecimento(
     }
     const versaoId = await inserirVersaoEstabelecimento(cliente, {
       estabelecimento_id: estabelecimentoId,
-      razao_social: dados.razao_social,
+      razao_social: dados.razao_social ?? null,
       unidade: dados.unidade,
       endereco_resumido: dados.endereco_resumido ?? null,
       inicio_vigencia: dados.inicio_vigencia,
@@ -1538,7 +1682,7 @@ export async function criarVersaoEstabelecimento(
       diff: {
         "Razão social": {
           de: ativa?.razao_social ?? null,
-          para: dados.razao_social,
+          para: dados.razao_social ?? null,
         },
         Unidade: { de: ativa?.unidade ?? null, para: dados.unidade },
         "Início da vigência": {

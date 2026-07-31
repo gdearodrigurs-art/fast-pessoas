@@ -1,4 +1,7 @@
 import { z } from "zod";
+// O tipo de vínculo é do domínio de colaboradores; a transferência entre
+// empresas do grupo escolhe um deles para o contrato que nasce (0048).
+import { TIPOS_VINCULO } from "../colaboradores/esquemas";
 
 export const STATUS_DEMANDA = [
   "aguardando_aprovacao",
@@ -133,13 +136,21 @@ export const FLUXOS_DEMANDA = ["padrao", "movimentacao"] as const;
 
 export type FluxoDemanda = (typeof FLUXOS_DEMANDA)[number];
 
-export const TIPOS_MOVIMENTACAO = ["promocao", "transferencia_unidade"] as const;
+export const TIPOS_MOVIMENTACAO = [
+  "promocao",
+  "transferencia_unidade",
+  // Migration 0048: mudar de CNPJ dentro do grupo. É a terceira movimentação,
+  // e a única que ENCERRA um vínculo e ABRE outro — a pessoa (rh.pessoa) é a
+  // mesma, o contrato é que muda de empregador.
+  "transferencia_empresa",
+] as const;
 
 export type TipoMovimentacao = (typeof TIPOS_MOVIMENTACAO)[number];
 
 export const ROTULOS_TIPO_MOVIMENTACAO: Record<TipoMovimentacao, string> = {
   promocao: "Promoção",
   transferencia_unidade: "Transferência de unidade",
+  transferencia_empresa: "Transferência entre empresas do grupo",
 };
 
 export const NIVEIS_APROVACAO = ["lider", "diretoria"] as const;
@@ -174,7 +185,15 @@ export const esquemaCriacaoMovimentacao = z
     colaborador_id: z.number().int().positive(),
     cargo_destino_id: z.number().int().positive().optional(),
     estabelecimento_destino_id: z.number().int().positive().optional(),
-    centro_custo_destino: z.string().trim().min(1).max(60).optional(),
+    // Centro de custo destino é ESCOLHA de catálogo desde a 0047 — antes era
+    // texto livre, e um zero a menos criava um centro novo em silêncio.
+    centro_custo_destino_id: z.number().int().positive().optional(),
+    // REGISTRO destino (0048): só na transferência entre empresas do grupo.
+    empresa_destino_id: z.number().int().positive().optional(),
+    matricula_destino: z.string().trim().min(1).max(30).optional(),
+    // O tipo de vínculo pode mudar de empresa para empresa — exemplo do dono:
+    // CLT na Supply, PJ na DCS. Ausente = mantém o do vínculo de origem.
+    tipo_vinculo_destino: z.enum(TIPOS_VINCULO).optional(),
     // Remuneração é opcional: promoção sem mudança de salário existe.
     salario_proposto: z.number().nonnegative().max(9_999_999.99).optional(),
     justificativa_excecao: z.string().trim().min(1).max(2000).optional(),
@@ -196,6 +215,42 @@ export const esquemaCriacaoMovimentacao = z
     {
       message: "Escolha a unidade destino",
       path: ["estabelecimento_destino_id"],
+    }
+  )
+  // Transferir de CNPJ exige os TRÊS campos da 0047 (registro, lotação e
+  // centro de custo) mais a matrícula na empresa nova: o vínculo que nasce
+  // precisa existir inteiro no primeiro dia, não pela metade.
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.empresa_destino_id !== undefined,
+    { message: "Escolha a empresa destino", path: ["empresa_destino_id"] }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.estabelecimento_destino_id !== undefined,
+    {
+      message: "Escolha a lotação destino",
+      path: ["estabelecimento_destino_id"],
+    }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.centro_custo_destino_id !== undefined,
+    {
+      message: "Escolha o centro de custo destino",
+      path: ["centro_custo_destino_id"],
+    }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.matricula_destino !== undefined,
+    {
+      message: "Informe a matrícula na empresa destino",
+      path: ["matricula_destino"],
     }
   );
 

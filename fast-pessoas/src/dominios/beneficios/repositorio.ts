@@ -314,7 +314,7 @@ export async function perfilPorUsuario(
   usuarioId: number
 ): Promise<PerfilBeneficios | null> {
   const linhas = await consultar<LinhaPerfil>(
-    `${SELECT_PERFIL} WHERE c.usuario_id = $1`,
+    `${SELECT_PERFIL} WHERE c.id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   return linhas.length > 0 ? paraPerfil(linhas[0]) : null;

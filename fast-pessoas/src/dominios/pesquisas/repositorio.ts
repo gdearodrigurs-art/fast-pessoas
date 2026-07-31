@@ -332,7 +332,7 @@ export async function buscarColaboradorPorUsuario(
        LEFT JOIN rh.estabelecimento_versao ev
               ON ev.estabelecimento_id = l.estabelecimento_id
              AND ev.status = 'ativa'
-      WHERE c.usuario_id = $1`,
+      WHERE c.id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   if (linhas.length === 0) return null;

@@ -356,6 +356,13 @@
   font-weight: 600;
 }
 
+.ajuda {
+  color: #6b6763;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: -4px 0 12px;
+}
+
 .vazio {
   color: #6b6763;
   font-style: italic;
@@ -630,4 +637,9 @@
   padding: 8px 10px;
   border-bottom: 1px solid #f0eeeb;
   font-variant-numeric: tabular-nums;
+}
+
+/* O vínculo cuja ficha está aberta, na lista de contratos da pessoa. */
+.linhaAtual {
+  background: #fbf9f6;
 }

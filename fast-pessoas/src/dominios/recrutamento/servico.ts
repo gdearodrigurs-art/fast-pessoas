@@ -14,9 +14,12 @@ import {
 } from "../admissao/repositorio";
 import { ROTULOS_VINCULO } from "../colaboradores/esquemas";
 import {
+  buscarPessoaPorCpf,
   criar as criarColaborador,
+  criarPessoa,
   inserirEvento,
   registrarLeituraSensivel,
+  vincularContaAPessoa,
 } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import { criar as criarUsuario } from "../usuarios/repositorio";
@@ -1014,23 +1017,37 @@ export async function iniciarAdmissao(
         );
       }
 
-      // 1) Usuário + colaborador (mesmo arranjo de colaboradores.criarColaborador).
+      // 1) Pessoa + usuário + vínculo (mesmo arranjo de
+      //    colaboradores.criarColaborador). Desde a 0046 o CPF mora na PESSOA:
+      //    ela nasce primeiro, a conta se liga a ela, e só então vem o vínculo.
+      //    Candidato que JÁ é gente do grupo (readmissão) não passa por aqui
+      //    ainda — a tela de R&S cria conta nova, e conta é uma por pessoa.
+      if (await buscarPessoaPorCpf(cliente, dados.cpf)) {
+        throw new ErroHttp(
+          409,
+          "Já existe uma pessoa com este CPF no grupo. Readmissão de quem já " +
+            "trabalhou aqui não passa pela abertura de admissão da seleção."
+        );
+      }
+      const pessoaId = await criarPessoa(cliente, {
+        cpf: dados.cpf,
+        nome_completo: candidatura.candidato_nome,
+        retrato: null,
+        contexto: null,
+      });
       const usuario = await criarUsuario(cliente, {
         email: candidatura.candidato_email,
         nome: candidatura.candidato_nome,
         papel: "funcionario",
         senhaHash,
       });
+      await vincularContaAPessoa(cliente, usuario.id, pessoaId);
       const colaborador = await criarColaborador(cliente, {
-        usuario_id: usuario.id,
+        pessoa_id: pessoaId,
         matricula: dados.matricula,
         matricula_esocial: dados.matricula,
-        cpf: dados.cpf,
-        nome_completo: candidatura.candidato_nome,
         tipo_vinculo: dados.tipo_vinculo,
         data_admissao: dataAdmissao,
-        retrato: null,
-        contexto: null,
       });
       await inserirEvento(cliente, {
         colaborador_id: colaborador.id,
@@ -1059,6 +1076,18 @@ export async function iniciarAdmissao(
           Ativo: { de: null, para: "Sim" },
         },
       });
+      // CPF e nome são da PESSOA (0046): trilha na entidade certa.
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "rh.pessoa",
+        registroId: String(pessoaId),
+        diff: {
+          CPF: { de: null, para: dados.cpf },
+          "Nome completo": { de: null, para: candidatura.candidato_nome },
+        },
+      });
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
@@ -1067,8 +1096,6 @@ export async function iniciarAdmissao(
         registroId: String(colaborador.id),
         diff: {
           "Matrícula": { de: null, para: dados.matricula },
-          CPF: { de: null, para: dados.cpf },
-          "Nome completo": { de: null, para: candidatura.candidato_nome },
           "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
           "Data de admissão": { de: null, para: formatarData(dataAdmissao) },
           Origem: {

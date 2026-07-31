@@ -67,12 +67,24 @@ export function CartaoMovimentacao({
   const { demanda, movimentacao, etapas } = dados;
   const estagio = rotuloEstagioCadeia(etapas);
   const promocao = movimentacao.tipo === "promocao";
+  // A transferência entre empresas do grupo (0048) mostra o par de REGISTRO
+  // (o CNPJ), não o de cargo nem o de local: é o que muda nela.
+  const trocaDeEmpresa = movimentacao.tipo === "transferencia_empresa";
+  const rotuloPar = promocao
+    ? "Cargo"
+    : trocaDeEmpresa
+      ? "Registro (empresa)"
+      : "Unidade";
   const de = promocao
     ? movimentacao.cargo_origem
-    : movimentacao.unidade_origem;
+    : trocaDeEmpresa
+      ? movimentacao.empresa_origem
+      : movimentacao.unidade_origem;
   const para = promocao
     ? movimentacao.cargo_destino
-    : movimentacao.unidade_destino;
+    : trocaDeEmpresa
+      ? movimentacao.empresa_destino
+      : movimentacao.unidade_destino;
   return (
     <article className={comum.demanda}>
       <div className={comum.topo}>
@@ -114,12 +126,28 @@ export function CartaoMovimentacao({
           : ""}
       </div>
       <div className={comum.descricao}>
-        {promocao ? "Cargo" : "Unidade"}: <b>{de ?? "—"}</b> →{" "}
-        <b>{para ?? "—"}</b>
+        {rotuloPar}: <b>{de ?? "—"}</b> → <b>{para ?? "—"}</b>
         {!promocao && movimentacao.centro_custo_destino
           ? ` · centro de custo ${movimentacao.centro_custo_destino}`
           : ""}
+        {trocaDeEmpresa && movimentacao.unidade_destino
+          ? ` · lotação ${movimentacao.unidade_destino}`
+          : ""}
       </div>
+      {trocaDeEmpresa && (
+        <div className={comum.descricao}>
+          Encerra o vínculo atual e abre outro com a matrícula{" "}
+          <b>{movimentacao.matricula_destino ?? "—"}</b>
+          {movimentacao.tipo_vinculo_destino
+            ? ` (${movimentacao.tipo_vinculo_destino})`
+            : ""}
+          . A pessoa é a mesma: mesmo CPF, mesma conta de acesso e histórico
+          preservado.
+          {movimentacao.vinculo_destino_matricula
+            ? ` Vínculo já aberto: matrícula ${movimentacao.vinculo_destino_matricula}.`
+            : ""}
+        </div>
+      )}
       <div className={comum.descricao}>
         Justificativa: {movimentacao.justificativa}
       </div>

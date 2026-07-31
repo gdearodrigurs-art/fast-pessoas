@@ -74,7 +74,7 @@ export async function buscarColaboradorPorUsuario(
   const linhas = await consultar<{ id: string; nome_completo: string }>(
     `SELECT id, nome_completo
        FROM rh.colaborador
-      WHERE usuario_id = $1`,
+      WHERE id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   if (linhas.length === 0) return null;

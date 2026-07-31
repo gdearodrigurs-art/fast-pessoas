@@ -38,11 +38,18 @@ function condicaoEscopo(
        WHERE rg.gestor_colaborador_id = $${n} AND rg.fim_vigencia IS NULL))`;
 }
 
+/**
+ * O vínculo que responde por "eu". Passa por rh.vinculo_atual (migration 0046)
+ * em vez de `WHERE usuario_id = $1`: desde que a PESSOA subiu para tabela
+ * própria, uma conta pode ter mais de um vínculo (readmissão em outro CNPJ do
+ * grupo) e aquele WHERE devolveria N linhas. Com um vínculo só — o caso de
+ * hoje — devolve exatamente o mesmo id de antes.
+ */
 export async function colaboradorIdDoUsuario(
   usuarioId: number
 ): Promise<number | null> {
   const linhas = await consultar<{ id: string }>(
-    "SELECT id FROM rh.colaborador WHERE usuario_id = $1",
+    "SELECT id FROM rh.colaborador WHERE id = rh.vinculo_atual($1)",
     [usuarioId]
   );
   return linhas.length > 0 ? Number(linhas[0].id) : null;
@@ -103,8 +110,28 @@ export interface ColaboradorResumo {
   dias_desde_admissao: number;
 }
 
+/** Um contrato da pessoa, para a ficha mostrar a vida dela no grupo inteiro. */
+export interface VinculoDaPessoa {
+  id: number;
+  matricula: string;
+  tipo_vinculo: TipoVinculo;
+  status: StatusColaborador;
+  data_admissao: string;
+  data_desligamento: string | null;
+  /** REGISTRO do contrato: em qual empresa do grupo ele existe (0047/0048). */
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  /** Elo da transferência entre empresas (0048): quem continua quem. */
+  sucede_vinculo_id: number | null;
+  sucedido_por_vinculo_id: number | null;
+}
+
 export interface FichaColaborador extends ColaboradorResumo {
   usuario_id: number;
+  /** A PESSOA por trás deste vínculo (migration 0046). */
+  pessoa_id: number;
+  /** Todos os contratos dela, deste inclusive — do mais antigo ao mais novo. */
+  vinculos: VinculoDaPessoa[];
   matricula_esocial: string;
   cpf: string;
   data_nascimento: string | null;
@@ -113,7 +140,12 @@ export interface FichaColaborador extends ColaboradorResumo {
   contexto: string | null;
   email: string;
   usuario_ativo: boolean;
+  /** REGISTRO vigente: em qual empresa do grupo o vínculo está registrado. */
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  /** Código do CENTRO DE CUSTO vigente (o nome legível vem em centro_custo_nome). */
   centro_custo: string | null;
+  centro_custo_nome: string | null;
   gestor_id: number | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
@@ -128,6 +160,7 @@ export interface FichaColaborador extends ColaboradorResumo {
 export interface ColaboradorParaAtualizar {
   id: number;
   usuario_id: number;
+  pessoa_id: number;
   matricula: string;
   nome_completo: string;
   tipo_vinculo: TipoVinculo;
@@ -146,15 +179,27 @@ export interface EventoLinhaTempo {
   tipo: string;
   ocorrido_em: string;
   resumo: string;
+  /** Em qual contrato o fato aconteceu — a linha do tempo atravessa vínculos. */
+  vinculo_id: number;
+  vinculo_matricula: string;
 }
 
+/** Campos do VÍNCULO (o contrato). Ver CamposPessoa para os da pessoa. */
 export interface CamposColaborador {
-  nome_completo?: string;
-  retrato?: string | null;
-  contexto?: string | null;
   tipo_vinculo?: TipoVinculo;
   status?: StatusColaborador;
   data_desligamento?: string | null;
+}
+
+/**
+ * Campos da PESSOA. Gravam em rh.pessoa e descem sozinhos para TODOS os
+ * vínculos dela (trigger de projeção da migration 0046) — é o que garante que
+ * corrigir o nome num contrato corrija no outro.
+ */
+export interface CamposPessoa {
+  nome_completo?: string;
+  retrato?: string | null;
+  contexto?: string | null;
   data_nascimento?: string;
   genero?: Genero;
 }
@@ -174,6 +219,7 @@ interface LinhaResumo extends Record<string, unknown> {
 
 interface LinhaFicha extends LinhaResumo {
   usuario_id: string;
+  pessoa_id: string;
   matricula_esocial: string;
   cpf: string;
   data_nascimento: string | null;
@@ -182,7 +228,10 @@ interface LinhaFicha extends LinhaResumo {
   contexto: string | null;
   email: string;
   usuario_ativo: boolean;
+  empresa_id: string | null;
+  empresa_nome: string | null;
   centro_custo: string | null;
+  centro_custo_nome: string | null;
   gestor_id: string | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
@@ -296,12 +345,14 @@ const LATERAIS_VIGENTES = `
       JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
      WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
   ) pos ON TRUE
+  -- Registro, lotação e centro de custo VIGENTES (migration 0047): três campos
+  -- independentes, lidos da view que já resolve o nome de cada catálogo.
   LEFT JOIN LATERAL (
-    SELECT ev.unidade, l.centro_custo
-      FROM rh.lotacao l
-      LEFT JOIN rh.estabelecimento_versao ev
-        ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-     WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+    SELECT ld.empresa_id, ld.empresa_nome,
+           ld.lotacao_nome AS unidade,
+           ld.centro_custo_codigo AS centro_custo, ld.centro_custo_nome
+      FROM rh.lotacao_detalhada ld
+     WHERE ld.colaborador_id = c.id AND ld.fim_vigencia IS NULL
   ) lot ON TRUE
   LEFT JOIN LATERAL (
     SELECT f.realizado_em::text AS ultimo_feedback_em,
@@ -351,21 +402,25 @@ export async function buscarFicha(
 ): Promise<FichaColaborador | null> {
   const parametros: unknown[] = [id];
   const linhas = await consultar<LinhaFicha>(
-    `SELECT c.id, c.usuario_id, c.matricula, c.matricula_esocial, c.cpf,
-            c.nome_completo, c.tipo_vinculo, c.status,
+    `SELECT c.id, c.usuario_id, c.pessoa_id, c.matricula, c.matricula_esocial,
+            c.cpf, c.nome_completo, c.tipo_vinculo, c.status,
             c.data_admissao::text AS data_admissao,
             c.data_nascimento::text AS data_nascimento,
             c.data_desligamento::text AS data_desligamento,
             c.retrato, c.contexto,
             u.email, u.ativo AS usuario_ativo,
-            pos.cargo_nome, lot.unidade, lot.centro_custo,
+            pos.cargo_nome,
+            lot.empresa_id, lot.empresa_nome, lot.unidade,
+            lot.centro_custo, lot.centro_custo_nome,
             ges.gestor_id, ges.gestor_nome,
             fb.ultimo_feedback_em, fb.dias_desde_feedback,
             rcf.rcf,
             ((now() AT TIME ZONE 'America/Sao_Paulo')::date - c.data_admissao)
               AS dias_desde_admissao
        FROM rh.colaborador c
-       JOIN sistema.usuario u ON u.id = c.usuario_id
+       -- A conta é da PESSOA, não do contrato (migration 0046): dois vínculos
+       -- da mesma gente compartilham o mesmo login.
+       JOIN sistema.usuario u ON u.pessoa_id = c.pessoa_id
        ${LATERAIS_VIGENTES}
        LEFT JOIN LATERAL (
          SELECT g.id AS gestor_id, g.nome_completo AS gestor_nome
@@ -379,14 +434,61 @@ export async function buscarFicha(
   );
   if (linhas.length === 0) return null;
   const linha = linhas[0];
+  const pessoaId = Number(linha.pessoa_id);
   return {
     ...linha,
     id: Number(linha.id),
     usuario_id: Number(linha.usuario_id),
+    pessoa_id: pessoaId,
+    vinculos: await listarVinculosDaPessoa(pessoaId),
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
     gestor_id: linha.gestor_id === null ? null : Number(linha.gestor_id),
   };
 }
 
+/** Contratos da pessoa no grupo, do mais antigo ao mais novo. */
+export async function listarVinculosDaPessoa(
+  pessoaId: number
+): Promise<VinculoDaPessoa[]> {
+  const linhas = await consultar<{
+    id: string;
+    matricula: string;
+    tipo_vinculo: TipoVinculo;
+    status: StatusColaborador;
+    data_admissao: string;
+    data_desligamento: string | null;
+    empresa_id: string | null;
+    empresa_nome: string | null;
+    sucede_vinculo_id: string | null;
+    sucedido_por_vinculo_id: string | null;
+  }>(
+    `SELECT id, matricula, tipo_vinculo, status,
+            data_admissao::text AS data_admissao,
+            data_desligamento::text AS data_desligamento,
+            empresa_id, empresa_nome,
+            sucede_vinculo_id, sucedido_por_vinculo_id
+       FROM rh.vinculos_da_pessoa($1)`,
+    [pessoaId]
+  );
+  const numeroOuNulo = (valor: string | null) =>
+    valor === null ? null : Number(valor);
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    empresa_id: numeroOuNulo(linha.empresa_id),
+    sucede_vinculo_id: numeroOuNulo(linha.sucede_vinculo_id),
+    sucedido_por_vinculo_id: numeroOuNulo(linha.sucedido_por_vinculo_id),
+  }));
+}
+
+/**
+ * A linha do tempo é da PESSOA, não do contrato. Cada fato continua nascendo
+ * num vínculo (rh.evento_colaborador aponta para rh.colaborador e continua
+ * append-only), mas a pergunta da ficha é "o que aconteceu com esta pessoa" —
+ * e a resposta soma os vínculos dela, identificando em qual cada fato caiu.
+ * É o que o dono pediu ao dizer que não queria perder o histórico de quem é
+ * demitido e recontratado em outra empresa do grupo.
+ */
 export async function listarEventos(
   colaboradorId: number,
   incluirRestritos: boolean
@@ -396,57 +498,111 @@ export async function listarEventos(
     tipo: string;
     ocorrido_em: string;
     resumo: string;
+    vinculo_id: string;
+    vinculo_matricula: string;
   }>(
-    `SELECT id, tipo, ocorrido_em, resumo
-       FROM rh.evento_colaborador
-      WHERE colaborador_id = $1
-        AND ($2 OR COALESCE(payload->>'restrita', 'false') <> 'true')
-      ORDER BY ocorrido_em DESC, id DESC`,
+    `SELECT e.id, e.tipo, e.ocorrido_em, e.resumo,
+            e.vinculo_id, e.vinculo_matricula
+       FROM rh.evento_da_pessoa e
+      WHERE e.pessoa_id = (SELECT pessoa_id FROM rh.colaborador WHERE id = $1)
+        AND ($2 OR COALESCE(e.payload->>'restrita', 'false') <> 'true')
+      ORDER BY e.ocorrido_em DESC, e.id DESC`,
     [colaboradorId, incluirRestritos]
   );
-  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    vinculo_id: Number(linha.vinculo_id),
+  }));
 }
 
-export async function criar(
+/** Pessoa existente com este CPF (null quando é gente nova para o grupo). */
+export async function buscarPessoaPorCpf(
+  cliente: PoolClient,
+  cpf: string
+): Promise<{ id: number; nome_completo: string } | null> {
+  const { rows } = await cliente.query<{ id: string; nome_completo: string }>(
+    "SELECT id, nome_completo FROM rh.pessoa WHERE cpf = $1 FOR UPDATE",
+    [cpf]
+  );
+  return rows.length
+    ? { id: Number(rows[0].id), nome_completo: rows[0].nome_completo }
+    : null;
+}
+
+export async function criarPessoa(
   cliente: PoolClient,
   dados: {
-    usuario_id: number;
-    matricula: string;
-    matricula_esocial: string;
     cpf: string;
     nome_completo: string;
-    tipo_vinculo: TipoVinculo;
-    data_admissao: string;
-    // Opcionais no repositório de propósito: a admissão vinda de Recrutamento
-    // (outro domínio) ainda não coleta estes dois campos do candidato. A coluna
-    // é nullable (ver migration 0020) e o relatório conta explicitamente as
-    // fichas sem data de nascimento — a lacuna aparece em vez de virar zero.
+    // Opcionais de propósito: a admissão vinda de Recrutamento (outro domínio)
+    // ainda não coleta estes dois campos do candidato. A coluna é nullable (ver
+    // migration 0020) e o relatório conta explicitamente as fichas sem data de
+    // nascimento — a lacuna aparece em vez de virar zero.
     // EVOLUÇÃO: pedir data de nascimento e gênero no aceite da proposta em R&S.
     data_nascimento?: string | null;
     genero?: Genero;
     retrato: string | null;
     contexto: string | null;
   }
-): Promise<ColaboradorResumo> {
-  const { rows } = await cliente.query<LinhaResumo>(
-    `INSERT INTO rh.colaborador
-       (usuario_id, matricula, matricula_esocial, cpf, nome_completo,
-        tipo_vinculo, data_admissao, data_nascimento, genero, retrato, contexto)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     RETURNING id, matricula, nome_completo, tipo_vinculo, status,
-               data_admissao::text AS data_admissao`,
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.pessoa
+       (cpf, nome_completo, data_nascimento, genero, retrato, contexto)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
     [
-      dados.usuario_id,
-      dados.matricula,
-      dados.matricula_esocial,
       dados.cpf,
       dados.nome_completo,
-      dados.tipo_vinculo,
-      dados.data_admissao,
       dados.data_nascimento ?? null,
       dados.genero ?? "nao_informado",
       dados.retrato,
       dados.contexto,
+    ]
+  );
+  return Number(rows[0].id);
+}
+
+/** Liga uma conta de acesso à pessoa. Uma conta por gente (UNIQUE no banco). */
+export async function vincularContaAPessoa(
+  cliente: PoolClient,
+  usuarioId: number,
+  pessoaId: number
+): Promise<void> {
+  await cliente.query(
+    "UPDATE sistema.usuario SET pessoa_id = $2 WHERE id = $1",
+    [usuarioId, pessoaId]
+  );
+}
+
+/**
+ * Cria o VÍNCULO. cpf, nome, nascimento, gênero, retrato, contexto e usuario_id
+ * NÃO são passados aqui de propósito: desde a 0046 são leitura da pessoa,
+ * preenchidos pelo trigger `colaborador_projetar_pessoa`. O que se grava num
+ * vínculo é só o que é do contrato.
+ */
+export async function criar(
+  cliente: PoolClient,
+  dados: {
+    pessoa_id: number;
+    matricula: string;
+    matricula_esocial: string;
+    tipo_vinculo: TipoVinculo;
+    data_admissao: string;
+  }
+): Promise<ColaboradorResumo> {
+  const { rows } = await cliente.query<LinhaResumo>(
+    `INSERT INTO rh.colaborador
+       (pessoa_id, matricula, matricula_esocial, tipo_vinculo, data_admissao)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, matricula, nome_completo, tipo_vinculo, status,
+               data_admissao::text AS data_admissao`,
+    [
+      dados.pessoa_id,
+      dados.matricula,
+      dados.matricula_esocial,
+      dados.tipo_vinculo,
+      dados.data_admissao,
     ]
   );
   const linha = rows[0];
@@ -460,6 +616,7 @@ export async function buscarParaAtualizar(
   const { rows } = await cliente.query<{
     id: string;
     usuario_id: string;
+    pessoa_id: string;
     matricula: string;
     nome_completo: string;
     tipo_vinculo: TipoVinculo;
@@ -472,13 +629,14 @@ export async function buscarParaAtualizar(
     contexto: string | null;
     usuario_ativo: boolean;
   }>(
-    `SELECT c.id, c.usuario_id, c.matricula, c.nome_completo, c.tipo_vinculo,
-            c.status, c.data_desligamento::text AS data_desligamento,
+    `SELECT c.id, c.usuario_id, c.pessoa_id, c.matricula, c.nome_completo,
+            c.tipo_vinculo, c.status,
+            c.data_desligamento::text AS data_desligamento,
             c.data_admissao::text AS data_admissao,
             c.data_nascimento::text AS data_nascimento, c.genero,
             c.retrato, c.contexto, u.ativo AS usuario_ativo
        FROM rh.colaborador c
-       JOIN sistema.usuario u ON u.id = c.usuario_id
+       JOIN sistema.usuario u ON u.pessoa_id = c.pessoa_id
       WHERE c.id = $1
       FOR UPDATE`,
     [id]
@@ -489,20 +647,25 @@ export async function buscarParaAtualizar(
     ...linha,
     id: Number(linha.id),
     usuario_id: Number(linha.usuario_id),
+    pessoa_id: Number(linha.pessoa_id),
   };
 }
 
 const COLUNAS_ATUALIZAVEIS: Record<keyof CamposColaborador, string> = {
-  nome_completo: "nome_completo",
-  retrato: "retrato",
-  contexto: "contexto",
   tipo_vinculo: "tipo_vinculo",
   status: "status",
   data_desligamento: "data_desligamento",
+};
+
+const COLUNAS_PESSOA: Record<keyof CamposPessoa, string> = {
+  nome_completo: "nome_completo",
+  retrato: "retrato",
+  contexto: "contexto",
   data_nascimento: "data_nascimento",
   genero: "genero",
 };
 
+/** Escreve o que é do CONTRATO. */
 export async function atualizar(
   cliente: PoolClient,
   id: number,
@@ -516,6 +679,27 @@ export async function atualizar(
   await cliente.query(
     `UPDATE rh.colaborador SET ${atribuicoes.join(", ")} WHERE id = $1`,
     [id, ...chaves.map((chave) => campos[chave])]
+  );
+}
+
+/**
+ * Escreve o que é da PESSOA. O trigger da 0046 desce o valor para todos os
+ * vínculos dela — corrigir o nome num contrato corrige no outro, que é o
+ * comportamento certo para quem foi readmitido em outra empresa do grupo.
+ */
+export async function atualizarPessoa(
+  cliente: PoolClient,
+  pessoaId: number,
+  campos: CamposPessoa
+): Promise<void> {
+  const chaves = Object.keys(campos) as (keyof CamposPessoa)[];
+  if (chaves.length === 0) return;
+  const atribuicoes = chaves.map(
+    (chave, indice) => `${COLUNAS_PESSOA[chave]} = $${indice + 2}`
+  );
+  await cliente.query(
+    `UPDATE rh.pessoa SET ${atribuicoes.join(", ")} WHERE id = $1`,
+    [pessoaId, ...chaves.map((chave) => campos[chave])]
   );
 }
 
@@ -550,14 +734,27 @@ export async function inserirEvento(
   );
 }
 
+/**
+ * Desliga a CONTA de acesso. A conta é da pessoa (0046), e a pessoa pode ter
+ * mais de um contrato: desativar por causa de UM desligamento trancaria alguém
+ * que continua trabalhando no outro CNPJ do grupo. Por isso a condição — só
+ * apaga o acesso quando não sobra nenhum vínculo em pé. Devolve se desativou,
+ * para o chamador registrar a trilha só quando houve mudança de verdade.
+ */
 export async function desativarUsuario(
   cliente: PoolClient,
   usuarioId: number
-): Promise<void> {
-  await cliente.query(
-    "UPDATE sistema.usuario SET ativo = FALSE WHERE id = $1",
+): Promise<boolean> {
+  const { rowCount } = await cliente.query(
+    `UPDATE sistema.usuario u
+        SET ativo = FALSE
+      WHERE u.id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM rh.colaborador c
+           WHERE c.pessoa_id = u.pessoa_id AND c.status <> 'desligado')`,
     [usuarioId]
   );
+  return (rowCount ?? 0) > 0;
 }
 
 // ------------------------------------------------------------------ apoio a escritas
@@ -901,6 +1098,13 @@ export async function listarPosicoes(
 export interface PosicaoVigente {
   id: number;
   cargo_id: number;
+  /**
+   * A VERSÃO do cargo que esta posição congelou. A transferência entre
+   * empresas (0048) reabre a posição no vínculo novo com a MESMA versão: o
+   * cargo não muda ao trocar de CNPJ, e reler a versão "ativa" faria a pessoa
+   * mudar de RCF sem ninguém ter decidido isso.
+   */
+  cargo_versao_id: number;
   cargo_nome: string;
   salario: number;
   inicio_vigencia: string;
@@ -913,11 +1117,13 @@ export async function buscarPosicaoVigenteParaAtualizar(
   const { rows } = await cliente.query<{
     id: string;
     cargo_id: string;
+    cargo_versao_id: string;
     cargo_nome: string;
     salario: string;
     inicio_vigencia: string;
   }>(
-    `SELECT p.id, cv.cargo_id, cv.nome AS cargo_nome, p.salario::text AS salario,
+    `SELECT p.id, cv.cargo_id, p.cargo_versao_id, cv.nome AS cargo_nome,
+            p.salario::text AS salario,
             p.inicio_vigencia::text AS inicio_vigencia
        FROM rh.posicao_colaborador p
        JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
@@ -930,6 +1136,7 @@ export async function buscarPosicaoVigenteParaAtualizar(
     ...rows[0],
     id: Number(rows[0].id),
     cargo_id: Number(rows[0].cargo_id),
+    cargo_versao_id: Number(rows[0].cargo_versao_id),
     salario: Number(rows[0].salario),
   };
 }
@@ -1073,79 +1280,88 @@ export async function inserirRelacaoGestor(
   return Number(rows[0].id);
 }
 
-// ------------------------------------------------------------------ lotação
+// ------------------------------------------------------------------ alocação: registro + lotação + centro de custo
+// rh.lotacao é a linha de vigência da ALOCAÇÃO do vínculo, e desde a migration
+// 0047 carrega os TRÊS campos que o dono separou: em qual empresa do grupo a
+// pessoa está registrada, em que local físico trabalha e em que centro de custo
+// o custo dela cai. Mudar qualquer um deles encerra a linha e abre outra —
+// linha encerrada é imutável no banco, e é isso que impede a folha de fevereiro
+// de mudar quando o centro de custo troca em março.
 
 export interface Lotacao {
   id: number;
+  empresa_id: number;
+  empresa_nome: string | null;
   estabelecimento_id: number;
   unidade: string | null;
+  centro_custo_id: number;
   centro_custo: string;
+  centro_custo_nome: string | null;
   inicio_vigencia: string;
   fim_vigencia: string | null;
+}
+
+const COLUNAS_LOTACAO = `ld.id, ld.empresa_id, ld.empresa_nome,
+            ld.estabelecimento_id, ld.lotacao_nome AS unidade,
+            ld.centro_custo_id, ld.centro_custo, ld.centro_custo_nome,
+            ld.inicio_vigencia::text AS inicio_vigencia,
+            ld.fim_vigencia::text AS fim_vigencia`;
+
+interface LinhaLotacao extends Record<string, unknown> {
+  id: string;
+  empresa_id: string;
+  empresa_nome: string | null;
+  estabelecimento_id: string;
+  unidade: string | null;
+  centro_custo_id: string;
+  centro_custo: string;
+  centro_custo_nome: string | null;
+  inicio_vigencia: string;
+  fim_vigencia: string | null;
+}
+
+function montarLotacao(linha: LinhaLotacao): Lotacao {
+  return {
+    ...linha,
+    id: Number(linha.id),
+    empresa_id: Number(linha.empresa_id),
+    estabelecimento_id: Number(linha.estabelecimento_id),
+    centro_custo_id: Number(linha.centro_custo_id),
+  };
 }
 
 export async function listarLotacoes(
   colaboradorId: number
 ): Promise<Lotacao[]> {
-  const linhas = await consultar<{
-    id: string;
-    estabelecimento_id: string;
-    unidade: string | null;
-    centro_custo: string;
-    inicio_vigencia: string;
-    fim_vigencia: string | null;
-  }>(
-    `SELECT l.id, l.estabelecimento_id, ev.unidade, l.centro_custo,
-            l.inicio_vigencia::text AS inicio_vigencia,
-            l.fim_vigencia::text AS fim_vigencia
-       FROM rh.lotacao l
-       LEFT JOIN rh.estabelecimento_versao ev
-         ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-      WHERE l.colaborador_id = $1
-      ORDER BY l.inicio_vigencia DESC, l.id DESC`,
+  const linhas = await consultar<LinhaLotacao>(
+    `SELECT ${COLUNAS_LOTACAO}
+       FROM rh.lotacao_detalhada ld
+      WHERE ld.colaborador_id = $1
+      ORDER BY ld.inicio_vigencia DESC, ld.id DESC`,
     [colaboradorId]
   );
-  return linhas.map((linha) => ({
-    ...linha,
-    id: Number(linha.id),
-    estabelecimento_id: Number(linha.estabelecimento_id),
-  }));
+  return linhas.map(montarLotacao);
 }
 
-export interface LotacaoVigente {
-  id: number;
-  estabelecimento_id: number;
-  unidade: string | null;
-  centro_custo: string;
-  inicio_vigencia: string;
-}
+export type LotacaoVigente = Omit<Lotacao, "fim_vigencia">;
 
 export async function buscarLotacaoVigenteParaAtualizar(
   cliente: PoolClient,
   colaboradorId: number
 ): Promise<LotacaoVigente | null> {
-  const { rows } = await cliente.query<{
-    id: string;
-    estabelecimento_id: string;
-    unidade: string | null;
-    centro_custo: string;
-    inicio_vigencia: string;
-  }>(
-    `SELECT l.id, l.estabelecimento_id, ev.unidade, l.centro_custo,
-            l.inicio_vigencia::text AS inicio_vigencia
-       FROM rh.lotacao l
-       LEFT JOIN rh.estabelecimento_versao ev
-         ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-      WHERE l.colaborador_id = $1 AND l.fim_vigencia IS NULL
-      FOR UPDATE OF l`,
+  // O FOR UPDATE tem que pegar a TABELA, não a view: por isso a trava é numa
+  // subconsulta em rh.lotacao e a leitura legível vem da view.
+  const { rows } = await cliente.query<LinhaLotacao>(
+    `SELECT ${COLUNAS_LOTACAO}
+       FROM rh.lotacao_detalhada ld
+      WHERE ld.id = (
+        SELECT l.id FROM rh.lotacao l
+         WHERE l.colaborador_id = $1 AND l.fim_vigencia IS NULL
+         FOR UPDATE)`,
     [colaboradorId]
   );
   if (rows.length === 0) return null;
-  return {
-    ...rows[0],
-    id: Number(rows[0].id),
-    estabelecimento_id: Number(rows[0].estabelecimento_id),
-  };
+  return montarLotacao(rows[0]);
 }
 
 export async function encerrarLotacao(
@@ -1163,19 +1379,24 @@ export async function inserirLotacao(
   cliente: PoolClient,
   dados: {
     colaborador_id: number;
+    empresa_id: number;
     estabelecimento_id: number;
-    centro_custo: string;
+    centro_custo_id: number;
     inicio_vigencia: string;
   }
 ): Promise<number> {
+  // centro_custo (texto) não é passado de propósito: é projeção do código do
+  // catálogo, escrita por trigger (migration 0047).
   const { rows } = await cliente.query<{ id: string }>(
-    `INSERT INTO rh.lotacao (colaborador_id, estabelecimento_id, centro_custo, inicio_vigencia)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO rh.lotacao
+       (colaborador_id, empresa_id, estabelecimento_id, centro_custo_id, inicio_vigencia)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
     [
       dados.colaborador_id,
+      dados.empresa_id,
       dados.estabelecimento_id,
-      dados.centro_custo,
+      dados.centro_custo_id,
       dados.inicio_vigencia,
     ]
   );
@@ -1452,16 +1673,24 @@ export async function inserirFaixaSalarial(
   return Number(rows[0].id);
 }
 
-// ------------------------------------------------------------------ estabelecimentos
+// ------------------------------------------------------------------ estabelecimentos = catálogo de LOTAÇÃO
+// Desde a migration 0047 rh.estabelecimento é SÓ o local físico. CNPJ e razão
+// social continuam nas colunas por legado, opcionais: quem responde pelo CNPJ é
+// rh.empresa_grupo (domínio "estrutura"). Local novo nasce só com nome e
+// endereço. Inativar em vez de excluir — quem já esteve lotado ali continua
+// tendo passado.
 
 export interface EstabelecimentoResumo {
   id: number;
-  cnpj: string;
+  cnpj: string | null;
   versao_id: number | null;
   razao_social: string | null;
   unidade: string | null;
   endereco_resumido: string | null;
   inicio_vigencia: string | null;
+  inativado_em: string | null;
+  /** Quantas alocações (vigentes ou não) já apontaram para este local. */
+  alocacoes: number;
 }
 
 export async function listarEstabelecimentos(): Promise<
@@ -1469,25 +1698,46 @@ export async function listarEstabelecimentos(): Promise<
 > {
   const linhas = await consultar<{
     id: string;
-    cnpj: string;
+    cnpj: string | null;
     versao_id: string | null;
     razao_social: string | null;
     unidade: string | null;
     endereco_resumido: string | null;
     inicio_vigencia: string | null;
+    inativado_em: string | null;
+    alocacoes: string;
   }>(
     `SELECT e.id, e.cnpj, ev.id AS versao_id, ev.razao_social, ev.unidade,
-            ev.endereco_resumido, ev.inicio_vigencia::text AS inicio_vigencia
+            ev.endereco_resumido, ev.inicio_vigencia::text AS inicio_vigencia,
+            e.inativado_em::text AS inativado_em,
+            (SELECT count(*) FROM rh.lotacao l
+              WHERE l.estabelecimento_id = e.id) AS alocacoes
        FROM rh.estabelecimento e
        LEFT JOIN rh.estabelecimento_versao ev
          ON ev.estabelecimento_id = e.id AND ev.status = 'ativa'
-      ORDER BY ev.unidade NULLS LAST, e.id`
+      ORDER BY e.inativado_em NULLS FIRST, ev.unidade NULLS LAST, e.id`
   );
   return linhas.map((linha) => ({
     ...linha,
     id: Number(linha.id),
     versao_id: linha.versao_id === null ? null : Number(linha.versao_id),
+    alocacoes: Number(linha.alocacoes),
   }));
+}
+
+/** Liga/desliga o local para uso NOVO. Não apaga e não mexe no passado. */
+export async function definirInativacaoEstabelecimento(
+  cliente: PoolClient,
+  estabelecimentoId: number,
+  usuarioId: number | null
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.estabelecimento
+        SET inativado_em = CASE WHEN $2::bigint IS NULL THEN NULL ELSE now() END,
+            inativado_por = $2
+      WHERE id = $1`,
+    [estabelecimentoId, usuarioId]
+  );
 }
 
 export async function buscarEstabelecimentoVersaoAtiva(
@@ -1496,14 +1746,14 @@ export async function buscarEstabelecimentoVersaoAtiva(
   travar = false
 ): Promise<{
   id: number;
-  razao_social: string;
+  razao_social: string | null;
   unidade: string;
   endereco_resumido: string | null;
   inicio_vigencia: string;
 } | null> {
   const { rows } = await cliente.query<{
     id: string;
-    razao_social: string;
+    razao_social: string | null;
     unidade: string;
     endereco_resumido: string | null;
     inicio_vigencia: string;
@@ -1532,7 +1782,7 @@ export async function existeEstabelecimento(
 
 export async function inserirEstabelecimento(
   cliente: PoolClient,
-  cnpj: string
+  cnpj: string | null
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
     "INSERT INTO rh.estabelecimento (cnpj) VALUES ($1) RETURNING id",
@@ -1558,7 +1808,7 @@ export async function inserirVersaoEstabelecimento(
   cliente: PoolClient,
   dados: {
     estabelecimento_id: number;
-    razao_social: string;
+    razao_social: string | null;
     unidade: string;
     endereco_resumido: string | null;
     inicio_vigencia: string;

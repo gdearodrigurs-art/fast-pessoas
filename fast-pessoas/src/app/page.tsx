@@ -28,6 +28,7 @@ interface Permissoes extends Record<string, unknown> {
   colaborador_ver: boolean;
   colaborador_ver_todos: boolean;
   cargo_administrar: boolean;
+  estrutura_administrar: boolean;
   relatorio_ver: boolean;
   painel_executivo_ver: boolean;
   usuario_administrar: boolean;
@@ -90,6 +91,12 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'rh.colaborador.ver')             AS colaborador_ver,
        sistema.tem_permissao($1, 'rh.colaborador.ver.todos')       AS colaborador_ver_todos,
        sistema.tem_permissao($1, 'rh.cargo.administrar')           AS cargo_administrar,
+       -- Estrutura do grupo: basta UMA das três chaves para a tela ter conteúdo
+       -- (cada seção se mostra pela sua própria chave).
+       (sistema.tem_permissao($1, 'rh.empresa.administrar')
+        OR sistema.tem_permissao($1, 'rh.centro_custo.administrar')
+        OR sistema.tem_permissao($1, 'rh.estabelecimento.administrar'))
+                                                                   AS estrutura_administrar,
        sistema.tem_permissao($1, 'relatorio.ver')                   AS relatorio_ver,
        sistema.tem_permissao($1, 'painel.executivo.ver')            AS painel_executivo_ver,
        sistema.tem_permissao($1, 'usuario.administrar')            AS usuario_administrar,
@@ -285,9 +292,16 @@ export default async function PaginaInicial() {
         },
         {
           href: "/cargos",
-          titulo: "Cargos e estrutura",
-          descricao: "Cargos com CHA, faixas salariais e estabelecimentos.",
+          titulo: "Cargos",
+          descricao: "Cargos com CHA, RCF e faixas salariais.",
           mostrar: pode?.cargo_administrar ?? false,
+        },
+        {
+          href: "/estrutura",
+          titulo: "Estrutura do grupo",
+          descricao:
+            "Empresas do grupo (registro), locais de trabalho (lotação) e centros de custo.",
+          mostrar: pode?.estrutura_administrar ?? false,
         },
         {
           href: "/relatorios",

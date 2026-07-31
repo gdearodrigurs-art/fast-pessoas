@@ -148,6 +148,13 @@ const ORDEM_LIMPEZA = [
   'rh.tabela_salarial_versao',
   'rh.cargo_versao',
   'rh.cargo',
+  // ---- catálogos da estrutura do grupo (migration 0047). Vêm ANTES de
+  // rh.estabelecimento: empresa_grupo.origem_estabelecimento_id (o rastro do
+  // backfill que partiu "unidade" em três) aponta para lá.
+  'rh.centro_custo_versao',
+  'rh.centro_custo',
+  'rh.empresa_grupo_versao',
+  'rh.empresa_grupo',
   'rh.estabelecimento_versao',
   // PARCIAL: feriado de UNIDADE aponta para o estabelecimento e sai; o
   // nacional é catálogo da 0027 e fica.
@@ -172,7 +179,7 @@ const CONDICAO_PARCIAL = {
 // Triggers a desligar: append-only (audit.bloquear_mutacao) e congelamento de
 // vigência/versão encerrada bloqueiam DELETE. Desligamos os triggers de
 // APLICAÇÃO de todas as tabelas tocadas — os de FK continuam ativos.
-const TABELAS_COM_TRIGGER = [...ORDEM_LIMPEZA, 'sistema.usuario'];
+const TABELAS_COM_TRIGGER = [...ORDEM_LIMPEZA, 'sistema.usuario', 'rh.pessoa'];
 
 async function semear(cliente) {
   const removidos = {};
@@ -203,6 +210,16 @@ async function semear(cliente) {
       [USUARIO_REAL_ID]
     );
     if (usuarios.rowCount > 0) removidos['sistema.usuario'] = usuarios.rowCount;
+
+    // Pessoas: DEPOIS dos vínculos (ORDEM_LIMPEZA) e DEPOIS das contas — as
+    // duas apontam para cá (migration 0046). Some quem ficou sem nenhuma das
+    // duas, o que preserva a pessoa do usuário real caso ele tenha ficha.
+    const pessoas = await cliente.query(
+      `DELETE FROM rh.pessoa p
+        WHERE NOT EXISTS (SELECT 1 FROM rh.colaborador c WHERE c.pessoa_id = p.id)
+          AND NOT EXISTS (SELECT 1 FROM sistema.usuario u WHERE u.pessoa_id = p.id)`
+    );
+    if (pessoas.rowCount > 0) removidos['rh.pessoa'] = pessoas.rowCount;
   });
 
   const totais = Object.values(removidos).reduce((a, b) => a + b, 0);

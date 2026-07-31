@@ -12,8 +12,10 @@ const STATUS_PROGRAMACAO_ATIVA = "('solicitada','aprovada','em_gozo')";
 export async function colaboradorDoUsuario(
   usuarioId: number
 ): Promise<number | null> {
+  // rh.vinculo_atual (0046): a conta é da PESSOA, e ela pode ter mais de um
+  // vínculo. Com um só — o caso de hoje — devolve o mesmo id de antes.
   const linhas = await consultar<{ id: string }>(
-    "SELECT id FROM rh.colaborador WHERE usuario_id = $1",
+    "SELECT id FROM rh.colaborador WHERE id = rh.vinculo_atual($1)",
     [usuarioId]
   );
   return linhas.length > 0 ? Number(linhas[0].id) : null;

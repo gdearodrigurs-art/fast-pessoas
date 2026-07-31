@@ -22,3 +22,7 @@ Thumbs.db
 # worktrees temporários de agentes
 .claude/worktrees/
 fast-pessoas/.claude/worktrees/
+
+# conexao do banco local de desenvolvimento
+.env.local-db
+fast-pessoas/.env.local-db

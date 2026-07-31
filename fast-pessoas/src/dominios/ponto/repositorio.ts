@@ -2206,7 +2206,8 @@ export async function colaboradorDoUsuario(
     nome_completo: string;
     matricula: string;
   }>(
-    `SELECT id, nome_completo, matricula FROM rh.colaborador WHERE usuario_id = $1`,
+    `SELECT id, nome_completo, matricula FROM rh.colaborador
+      WHERE id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   return linhas[0]

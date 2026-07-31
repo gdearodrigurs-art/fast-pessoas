@@ -642,8 +642,13 @@ export async function encerrarProcessoDesligamento(
     });
 
     // Revogação de acesso na MESMA transação — garantia estrutural.
-    if (colaborador.usuario_ativo) {
-      await desativarUsuario(cliente, colaborador.usuario_id);
+    // A conta é da PESSOA (0046): `desativarUsuario` só revoga quando não
+    // sobra nenhum vínculo em pé, para não trancar quem foi desligado de uma
+    // empresa do grupo e segue trabalhando em outra.
+    if (
+      colaborador.usuario_ativo &&
+      (await desativarUsuario(cliente, colaborador.usuario_id))
+    ) {
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
