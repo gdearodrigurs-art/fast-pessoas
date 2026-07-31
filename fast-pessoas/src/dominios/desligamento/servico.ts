@@ -10,6 +10,7 @@ import {
   inserirEvento,
 } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
+import { liquidarBancoNaRescisao } from "../ponto/servico";
 import {
   CorpoAgendarEntrevista,
   CorpoEncerrar,
@@ -652,6 +653,38 @@ export async function encerrarProcessoDesligamento(
         diff: { Ativo: { de: "Sim", para: "Não" } },
       });
     }
+
+    // ACERTO DO BANCO DE HORAS — na MESMA transação que encerra o contrato.
+    // `tratamento_rescisao` é parâmetro da regra de banco (empresa → unidade ou
+    // cargo → pessoa) e até aqui não era lido por linha de código nenhuma: o
+    // contrato terminava e o saldo ficava lá, intacto e mudo. Quem decide o que
+    // fazer é o domínio de ponto (ver liquidarBancoNaRescisao) — aqui só se
+    // registra o que ele decidiu, com o número, na trilha do desligamento.
+    const acerto = await liquidarBancoNaRescisao(
+      cliente,
+      sessao.usuario_id,
+      processo.colaborador_id,
+      dados.data_termino_efetiva
+    );
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "desligamento.banco_horas",
+      tabela: "rh.banco_horas_movimento",
+      registroId: acerto.movimento_id
+        ? String(acerto.movimento_id)
+        : `colaborador:${processo.colaborador_id}`,
+      diff: {
+        "Saldo do banco de horas no desligamento": {
+          de: null,
+          para: acerto.resumo,
+        },
+        "Tratamento na rescisão (regra vigente)": {
+          de: null,
+          para: acerto.tratamento,
+        },
+      },
+    });
 
     await inserirEvento(cliente, {
       colaborador_id: processo.colaborador_id,

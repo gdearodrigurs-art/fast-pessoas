@@ -406,8 +406,35 @@ export type NovaVersaoEstabelecimento = z.infer<
  * (gênero, faixa de idade, composição familiar): recorte com menos que isto é
  * SUPRIMIDO — devolvemos null em vez do número, porque num quadro de 68 pessoas
  * "1 pessoa de gênero outro na Loja Centro" identifica alguém.
+ *
+ * ESTE NÚMERO NÃO É A POLÍTICA — é o PADRÃO DE FÁBRICA dela. A política vigente
+ * mora em sistema.parametro_privacidade.minimo_por_recorte (migration 0044) e é
+ * administrável pela tela, porque o k certo depende do tamanho do quadro: 5
+ * numa empresa de 68 pessoas, 10 numa de 900. Quem calcula relatório lê o
+ * parâmetro (`lerMinimoPorRecorte()` no repositório de colaboradores); esta
+ * constante só serve de DEFAULT da coluna e de fallback documentado.
  */
-export const MINIMO_POR_RECORTE = 5;
+export const MINIMO_POR_RECORTE_PADRAO = 5;
+
+/** Limites do k aceitos pela tela e pelo CHECK do banco (migration 0044). */
+export const MINIMO_POR_RECORTE_MIN = 2;
+export const MINIMO_POR_RECORTE_MAX = 100;
+
+export const esquemaParametroPrivacidade = z.object({
+  minimo_por_recorte: z
+    .number("Informe o piso de anonimato")
+    .int("O piso de anonimato é um número inteiro de pessoas")
+    .min(
+      MINIMO_POR_RECORTE_MIN,
+      `O piso mínimo é ${MINIMO_POR_RECORTE_MIN}: com 1 não haveria supressão nenhuma`
+    )
+    .max(
+      MINIMO_POR_RECORTE_MAX,
+      `O piso máximo é ${MINIMO_POR_RECORTE_MAX}: acima disso todo recorte sai suprimido`
+    ),
+});
+
+export type ParametroPrivacidade = z.infer<typeof esquemaParametroPrivacidade>;
 
 export const FAIXAS_IDADE = [
   { chave: "ate_24", rotulo: "Até 24 anos", min: 0, max: 24 },

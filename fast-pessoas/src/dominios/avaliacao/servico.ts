@@ -131,6 +131,15 @@ function formatarData(dataIso: string): string {
   return `${dia}/${mes}/${ano}`;
 }
 
+/** Instante do banco (UTC) exibido em America/Sao_Paulo — regra do projeto. */
+function formatarDataHora(instante: string | Date): string {
+  return new Date(instante).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
 function hojeSaoPaulo(): string {
   return new Date().toLocaleDateString("en-CA", {
     timeZone: "America/Sao_Paulo",
@@ -335,16 +344,141 @@ export interface CicloPayload {
   criado_em: string;
 }
 
+/**
+ * Estado do ciclo EXPLICADO (G1a): quem não é o avaliador via uma tela sem
+ * formulário, sem resultado e sem decisão — e, antes desta correção, sem
+ * explicação nenhuma (parecia página quebrada). O texto nasce aqui, no
+ * serviço, porque depende das MESMAS regras que liberam as ações.
+ */
+export interface SituacaoCiclo {
+  /** Estado atual em uma frase ("Aguardando o avaliador responder"). */
+  titulo: string;
+  /** Quem é quem e o que já aconteceu, com o prazo. */
+  detalhe: string;
+  /** O que precisa acontecer para o ciclo andar (independe de quem lê). */
+  proximo_passo: string;
+  /** O que ESTA pessoa pode fazer aqui — nunca vazio (diz "nada" quando é nada). */
+  o_que_posso_fazer: string[];
+}
+
 export interface DetalheCiclo {
   pode: PermissoesAvaliacao & { sou_avaliador: boolean };
   ciclo: CicloPayload;
-  /** Modelo congelado do ciclo — presente só para quem vê respostas. */
+  /** Estado explicado — sempre presente, para nunca haver tela em branco. */
+  situacao: SituacaoCiclo;
+  /**
+   * Modelo congelado do ciclo (pilares/indicadores/pesos). Não é dado pessoal:
+   * vai para quem vê respostas E para quem configura o modelo — é o que a
+   * pessoa já lê em /avaliacoes/modelos.
+   */
   estrutura: EstruturaCongelada | null;
   respostas: RespostaGravada[] | null;
   /** RESTRITO a avaliacao.resultado.ver — ausência, não máscara. */
   resultado: ResultadoPayload | null;
   decisao: DecisaoGravada | null;
   acoes: { responder: boolean; decidir: boolean; cancelar: boolean };
+}
+
+interface AcoesCiclo {
+  responder: boolean;
+  decidir: boolean;
+  cancelar: boolean;
+}
+
+function textoPrazo(prazo: string, dias: number, vivo: boolean): string {
+  const data = formatarData(prazo);
+  if (!vivo) return `prazo ${data}`;
+  if (dias < 0) return `prazo ${data} — vencido há ${Math.abs(dias)} dia(s)`;
+  if (dias === 0) return `prazo ${data} — vence hoje`;
+  return `prazo ${data} — faltam ${dias} dia(s)`;
+}
+
+function montarSituacao(
+  ciclo: CicloDetalhe,
+  souAvaliador: boolean,
+  pode: PermissoesAvaliacao,
+  acoes: AcoesCiclo,
+  temResultado: boolean
+): SituacaoCiclo {
+  const vivo = ciclo.status === "aberto" || ciclo.status === "em_avaliacao";
+  const quem =
+    `${ROTULOS_TIPO_CICLO[ciclo.tipo]} de ${ciclo.colaborador_nome} ` +
+    `(matrícula ${ciclo.matricula}) · avaliador: ${ciclo.avaliador_nome}`;
+  const prazo = textoPrazo(ciclo.prazo, ciclo.dias_para_prazo, vivo);
+
+  let titulo: string;
+  let detalhe: string;
+  let proximo_passo: string;
+  if (vivo) {
+    titulo = souAvaliador
+      ? "Esta avaliação está com você"
+      : "Aguardando o avaliador responder";
+    detalhe =
+      `${quem}. ${prazo}. ` +
+      (ciclo.status === "em_avaliacao"
+        ? "Já há rascunho salvo, ainda não enviado."
+        : "Nenhuma resposta gravada até agora.");
+    proximo_passo =
+      `O avaliador responde TODOS os indicadores do modelo congelado ` +
+      `(v${ciclo.modelo_versao}) — nota 1–5 ou "não observado" — e envia. ` +
+      "O envio consolida o resultado automaticamente; envio parcial não existe.";
+  } else if (ciclo.status === "consolidado") {
+    titulo = "Aguardando decisão";
+    detalhe =
+      `${quem}. ${prazo}. Avaliação enviada` +
+      (ciclo.enviado_em ? ` em ${formatarDataHora(ciclo.enviado_em)}` : "") +
+      " e resultado consolidado — respostas imutáveis.";
+    proximo_passo =
+      "DP ou diretoria registra a decisão humana. A faixa é recomendação: " +
+      "divergir dela exige justificativa.";
+  } else if (ciclo.status === "decidido") {
+    titulo = "Ciclo concluído";
+    detalhe = `${quem}. ${prazo}. Enviado, consolidado e com decisão registrada.`;
+    proximo_passo =
+      "Nada pendente. Ciclo fechado não reabre — correção é ciclo novo.";
+  } else {
+    titulo = "Ciclo cancelado";
+    detalhe = `${quem}. ${prazo}. Cancelado antes do envio — nenhum resultado foi consolidado.`;
+    proximo_passo = "Se ainda for preciso avaliar, o RH abre um ciclo novo.";
+  }
+
+  const posso: string[] = [];
+  if (acoes.responder) {
+    posso.push(
+      "Responder e enviar esta avaliação — você é o avaliador deste ciclo."
+    );
+  } else if (souAvaliador && ciclo.avaliacao_estado === "enviada") {
+    posso.push("Consultar o que você respondeu (enviado é imutável).");
+  }
+  if (acoes.decidir) {
+    posso.push("Registrar a decisão humana sobre o resultado consolidado.");
+  } else if (pode.decidir && vivo) {
+    posso.push(
+      "Decidir — só depois que o avaliador enviar e o resultado for consolidado."
+    );
+  }
+  if (acoes.cancelar) {
+    posso.push(
+      "Cancelar o ciclo enquanto não houver envio (o motivo fica na trilha)."
+    );
+  }
+  if (pode.configurar) {
+    posso.push(
+      "Configurar o modelo (pilares, indicadores, pesos e faixas) em Modelos — " +
+        "vale só para ciclos abertos depois da ativação."
+    );
+  }
+  if (pode.resultado_ver && !temResultado && vivo) {
+    posso.push(
+      "Ver o resultado consolidado — ele aparece aqui assim que o avaliador enviar."
+    );
+  }
+  if (posso.length === 0) {
+    posso.push(
+      "Nada a fazer aqui: este ciclo é só acompanhamento para o seu perfil."
+    );
+  }
+  return { titulo, detalhe, proximo_passo, o_que_posso_fazer: posso };
 }
 
 /**
@@ -369,8 +503,12 @@ export async function obterDetalhe(
   }
 
   const incluirRespostas = souAvaliador || pode.resultado_ver;
+  // A estrutura do modelo NÃO é dado pessoal (é o mesmo conteúdo de
+  // /avaliacoes/modelos): quem configura também recebe, senão o RH abre o
+  // ciclo e não vê sequer o que está sendo perguntado (parte do G1a).
+  const incluirEstrutura = incluirRespostas || pode.configurar;
   const [estrutura, respostas, resultado, decisao] = await Promise.all([
-    incluirRespostas ? buscarEstrutura(ciclo.modelo_versao_id) : null,
+    incluirEstrutura ? buscarEstrutura(ciclo.modelo_versao_id) : null,
     incluirRespostas && ciclo.avaliacao_id !== null
       ? listarRespostas(ciclo.avaliacao_id)
       : null,
@@ -401,6 +539,17 @@ export async function obterDetalhe(
     });
   }
 
+  const acoes: AcoesCiclo = {
+    responder:
+      souAvaliador &&
+      (ciclo.status === "aberto" || ciclo.status === "em_avaliacao") &&
+      ciclo.avaliacao_estado !== "enviada",
+    decidir: pode.decidir && ciclo.status === "consolidado",
+    cancelar:
+      pode.configurar &&
+      (ciclo.status === "aberto" || ciclo.status === "em_avaliacao"),
+  };
+
   return {
     pode: { ...pode, sou_avaliador: souAvaliador },
     ciclo: {
@@ -419,6 +568,13 @@ export async function obterDetalhe(
       enviado_em: ciclo.enviado_em,
       criado_em: ciclo.criado_em,
     },
+    situacao: montarSituacao(
+      ciclo,
+      souAvaliador,
+      pode,
+      acoes,
+      resultado !== null
+    ),
     estrutura,
     respostas,
     resultado: resultado
@@ -433,16 +589,7 @@ export async function obterDetalhe(
         }
       : null,
     decisao,
-    acoes: {
-      responder:
-        souAvaliador &&
-        (ciclo.status === "aberto" || ciclo.status === "em_avaliacao") &&
-        ciclo.avaliacao_estado !== "enviada",
-      decidir: pode.decidir && ciclo.status === "consolidado",
-      cancelar:
-        pode.configurar &&
-        (ciclo.status === "aberto" || ciclo.status === "em_avaliacao"),
-    },
+    acoes,
   };
 }
 

@@ -1,7 +1,11 @@
 import { PoolClient } from "pg";
 import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
-import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
+import {
+  ErroHttpCampo,
+  ErroHttpConfirmavel,
+  violacaoUnica,
+} from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import {
   ColaboradorOpcao,
@@ -17,20 +21,30 @@ import { validarTotpDoUsuario } from "../identidade/servico";
 import { calcularFolha, EntradaMotor, ErroMotor, VariavelMotor } from "./calculo";
 import {
   AbrirCompetencia,
+  CODIGO_ADICIONAL_NOTURNO,
   CODIGO_DESCONTO_BENEFICIO,
   CODIGO_FALTAS,
+  CODIGO_HE_50,
+  CODIGO_HE_100,
   CODIGOS_AUTOMATICOS,
+  CODIGOS_DO_MOTOR,
+  competenciaCorrente,
+  competenciaEhRetroativa,
+  EncerramentoRubrica,
   esquemaEntradaCasoTeste,
   esquemaSaidaCasoTeste,
   EstadoCompetencia,
   formatarCompetencia,
   LancarVariavel,
+  NovaRubrica,
   NovaTabelaInss,
   NovaTabelaIrrf,
   NovaVersaoRubrica,
   NovosParametrosFolha,
   ROTULOS_ESTADO_COMPETENCIA,
+  ROTULOS_NATUREZA,
   ROTULOS_TABELA_LEGAL,
+  ROTULOS_TIPO_CALCULO,
   TipoTabelaLegal,
 } from "./esquemas";
 import {
@@ -45,10 +59,15 @@ import {
   CasoTeste,
   CatalogoRubrica,
   CompetenciaResumo,
+  contarIntercorrenciasAbertasDaCompetencia,
+  contarLancamentosRecalculaveis,
+  desativarRubrica,
   encerrarVersaoLegal,
   encerrarVersaoRubrica,
+  encerrarVersaoRubricaEm,
   excluirVariavel,
   excluirVariaveisDeBeneficio,
+  excluirVariaveisDePonto,
   aprovarCompetenciaNoBanco,
   fecharCompetencia as fecharCompetenciaNoBanco,
   registrarCalculadaPor,
@@ -61,9 +80,11 @@ import {
   inserirVariavel,
   inserirVersaoInss,
   inserirVersaoIrrf,
+  inserirRubrica,
   inserirVersaoParametros,
   inserirVersaoRubrica,
   ItemFolha,
+  listarApuracaoDePontoDaCompetencia,
   listarCasosTesteAtivos,
   listarCatalogoRubricas,
   listarColaboradoresParaCalculo,
@@ -92,6 +113,7 @@ import {
 
 const TABELA_COMPETENCIA = "rh_folha.competencia_folha";
 const TABELA_VARIAVEL = "rh_folha.variavel_lancada";
+const TABELA_RUBRICA = "rh_folha.rubrica";
 const TABELA_RUBRICA_VERSAO = "rh_folha.rubrica_versao";
 const TABELAS_AUDIT: Record<TipoTabelaLegal, string> = {
   inss: "rh_folha.tabela_inss_versao",
@@ -142,10 +164,33 @@ export async function montarVisaoFolha(
   return { pode, competencias };
 }
 
+/**
+ * Abre a competência mensal. TRAVA RETROATIVA (item G3 do plano da onda G):
+ * para frente é livre — a diretoria aprovou explicitamente abrir dezembro em
+ * julho —, para trás não abre. O limite é o mês corrente em America/Sao_Paulo.
+ *
+ * A trava vive aqui, e não no banco: "mês corrente" não é IMMUTABLE (não cabe
+ * em CHECK) e um trigger de INSERT quebraria as competências históricas já
+ * gravadas (a demo tem 02, 04, 05 e 06/2026) e o semeador, que as carrega de
+ * propósito. Competência retroativa já existente continua funcionando normal —
+ * o que fica proibido é ABRIR uma nova para trás.
+ *
+ * Evolução: se o DP precisar de exceção (competência de mês passado por
+ * migração de sistema), o caminho é uma permissão própria + justificativa
+ * auditada, nunca afrouxar esta regra para todo mundo.
+ */
 export async function abrirCompetencia(
   sessao: PayloadSessao,
   dados: AbrirCompetencia
 ): Promise<CompetenciaResumo> {
+  if (competenciaEhRetroativa(dados.ano, dados.mes)) {
+    const atual = competenciaCorrente();
+    throw new ErroHttpCampo(
+      409,
+      `A competência ${formatarCompetencia(dados.ano, dados.mes)} é anterior ao mês corrente (${formatarCompetencia(atual.ano, atual.mes)}). Folha retroativa não abre: correção de mês já encerrado é folha complementar. Abrir para frente é permitido.`,
+      "mes"
+    );
+  }
   const id = await comTransacao(sessao.usuario_id, async (cliente) => {
     let competenciaId: number;
     try {
@@ -196,6 +241,12 @@ export interface RubricaLancavel {
   natureza: string;
   /** O que o formulário precisa pedir: referência (horas/dias), valor ou nada. */
   precisa: "referencia" | "valor" | "nenhum";
+  /**
+   * Verba genérica de escape (provento/desconto manual). Vem por ÚLTIMO na
+   * lista e a tela avisa que é exceção — diretriz da diretoria de eliminar os
+   * proventos manuais (migração 0028).
+   */
+  excecao: boolean;
 }
 
 export interface FolhaComItens extends FolhaResumo {
@@ -221,42 +272,25 @@ export interface VisaoCompetencia {
 function classificarLancavel(
   rubrica: RubricaVigente
 ): RubricaLancavel | null {
+  const comum = {
+    rubrica_id: rubrica.rubrica_id,
+    codigo: rubrica.codigo,
+    nome: rubrica.nome,
+    natureza: rubrica.natureza,
+    excecao: rubrica.excecao,
+  };
   if (rubrica.codigo === CODIGO_FALTAS) {
-    return {
-      rubrica_id: rubrica.rubrica_id,
-      codigo: rubrica.codigo,
-      nome: rubrica.nome,
-      natureza: rubrica.natureza,
-      precisa: "referencia",
-    };
+    return { ...comum, precisa: "referencia" };
   }
   if (CODIGOS_AUTOMATICOS.includes(rubrica.codigo)) return null;
   if (rubrica.tipo_calculo === "horas_adicional") {
-    return {
-      rubrica_id: rubrica.rubrica_id,
-      codigo: rubrica.codigo,
-      nome: rubrica.nome,
-      natureza: rubrica.natureza,
-      precisa: "referencia",
-    };
+    return { ...comum, precisa: "referencia" };
   }
   if (rubrica.tipo_calculo === "valor_informado") {
-    return {
-      rubrica_id: rubrica.rubrica_id,
-      codigo: rubrica.codigo,
-      nome: rubrica.nome,
-      natureza: rubrica.natureza,
-      precisa: "valor",
-    };
+    return { ...comum, precisa: "valor" };
   }
   if (rubrica.tipo_calculo === "percentual_salario") {
-    return {
-      rubrica_id: rubrica.rubrica_id,
-      codigo: rubrica.codigo,
-      nome: rubrica.nome,
-      natureza: rubrica.natureza,
-      precisa: "nenhum",
-    };
+    return { ...comum, precisa: "nenhum" };
   }
   return null;
 }
@@ -538,6 +572,294 @@ export async function importarDescontosBeneficios(
   return { ...resultado, variaveis: await listarVariaveis(competenciaId) };
 }
 
+// ------------------------------------------------------------------ importação do ponto (F5)
+
+export interface ResultadoImportacaoPonto {
+  importadas: number;
+  removidas: number;
+  pessoas: number;
+  sem_apuracao: boolean;
+  intercorrencias_abertas: number;
+  totais_horas: {
+    he_50: number;
+    he_100: number;
+    adicional_noturno: number;
+    faltas_dias: number;
+  };
+  variaveis: VariavelResumo[];
+}
+
+/** Minutos → horas com 2 casas, o formato de `referencia` (NUMERIC(10,2)). */
+function minutosParaHoras(minutos: number): number {
+  return Math.round((minutos / 60) * 100) / 100;
+}
+
+/**
+ * Traz a apuração de ponto da MESMA competência para dentro da folha como
+ * variáveis lançadas com origem 'ponto'.
+ *
+ * O que entra, e por quê:
+ *   • HE 50% e HE 100% (1101/1102) — em HORAS, o que a rubrica
+ *     `horas_adicional` espera; o fator (1,5 / 2,0) é da rubrica, não daqui.
+ *   • Adicional noturno (1103, migration 0032) — em HORAS, fator 0,20.
+ *   • Faltas (1201) — em DIAS: minutos de falta ÷ carga diária da jornada
+ *     PINADA na apuração. O motor deriva o DSR (1202) sozinho a partir daí.
+ *
+ * O que NÃO entra:
+ *   • DSR como variável — 1202 é rubrica automática; lançar nela é erro do
+ *     motor. O `dsr_desconto_minutos` da apuração (mais exato, semana a
+ *     semana) vai para o diff da auditoria como conferência, para o dia em que
+ *     a folha ganhar o DSR exato (F2) e a rubrica sair dos automáticos.
+ *   • Atraso — o motor de ponto já o converte em minuto de falta ou em débito
+ *     de banco de horas, conforme a regra; lançar de novo pagaria em dobro.
+ *   • Saldo do banco de horas — banco é COMPENSAÇÃO, o oposto de pagar. Só
+ *     vira dinheiro na rescisão ou por decisão explícita de pagar o saldo, e
+ *     aí é lançamento manual com justificativa.
+ *
+ * REIMPORTAÇÃO É IDEMPOTENTE, no mesmo desenho de `importarDescontosBeneficios`:
+ * apaga o lote anterior de origem 'ponto' e regrava do zero. Só o lote da
+ * própria origem sai — o que o DP lançou à mão continua lá.
+ *
+ * SÓ COM A COMPETÊNCIA ABERTA: `exigirCompetenciaAberta` é a mesma trava do
+ * lançamento manual. Depois de calculada, mudar insumo sem recalcular
+ * produziria holerite que não fecha com a memória.
+ */
+export async function importarVariaveisDoPonto(
+  sessao: PayloadSessao,
+  competenciaId: number,
+  opcoes?: { confirmar_intercorrencias_abertas?: boolean }
+): Promise<ResultadoImportacaoPonto> {
+  const resultado = await comTransacao(sessao.usuario_id, async (cliente) => {
+    const competencia = await exigirCompetenciaAberta(cliente, competenciaId);
+    const rubricas = await listarRubricasVigentes(cliente);
+    const porCodigo = new Map(rubricas.map((item) => [item.codigo, item]));
+    const exigir = (codigo: string): RubricaVigente => {
+      const rubrica = porCodigo.get(codigo);
+      if (!rubrica) {
+        throw new ErroHttp(
+          409,
+          `Rubrica ${codigo} sem versão vigente — corrija em Parâmetros antes de importar o ponto.`
+        );
+      }
+      return rubrica;
+    };
+    // Falha ANTES de apagar o lote anterior: importação que derruba o que já
+    // existia e não grava nada no lugar seria pior que não importar.
+    const mapaLancamento: { codigo: string; rubrica: RubricaVigente }[] = [
+      { codigo: CODIGO_HE_50, rubrica: exigir(CODIGO_HE_50) },
+      { codigo: CODIGO_HE_100, rubrica: exigir(CODIGO_HE_100) },
+      {
+        codigo: CODIGO_ADICIONAL_NOTURNO,
+        rubrica: exigir(CODIGO_ADICIONAL_NOTURNO),
+      },
+      { codigo: CODIGO_FALTAS, rubrica: exigir(CODIGO_FALTAS) },
+    ];
+    const rubricaDe = new Map(
+      mapaLancamento.map((item) => [item.codigo, item.rubrica])
+    );
+
+    const apuracoes = await listarApuracaoDePontoDaCompetencia(
+      cliente,
+      competencia.ano,
+      competencia.mes
+    );
+    if (apuracoes.length === 0) {
+      throw new ErroHttp(
+        409,
+        `Nenhuma apuração de ponto para ${formatarCompetencia(competencia.ano, competencia.mes)}. Apure o ponto da competência em Ponto (DP) antes de importar.`
+      );
+    }
+
+    const removidas = await excluirVariaveisDePonto(cliente, competenciaId);
+
+    let importadas = 0;
+    const pessoasTocadas = new Set<number>();
+    // O TOTAL É O DO QUE FOI GRAVADO, não o da soma dos minutos: `referencia` é
+    // arredondada pessoa a pessoa (NUMERIC(10,2)), então arredondar a soma dos
+    // minutos no fim dá outro número — 346,93 contra os 346,91 que o DP encontra
+    // somando a coluna Referência da tela. Acumulo em CENTÉSIMO INTEIRO porque
+    // somar float de hora devolveria 346.90999999999997.
+    const lancadoCentesimos = new Map<string, number>();
+    const lancadoDe = (codigo: string) =>
+      (lancadoCentesimos.get(codigo) ?? 0) / 100;
+    // DSR apurado no ponto: não vira variável (1202 é automática), só entra no
+    // diff como conferência — por isso continua em minutos.
+    let dsrMinutos = 0;
+
+    const lancar = async (
+      colaboradorId: number,
+      codigo: string,
+      referencia: number
+    ) => {
+      // `referencia` tem CHECK > 0 no banco: zero simplesmente não vira linha.
+      if (referencia <= 0) return;
+      await inserirVariavel(cliente, {
+        competencia_id: competenciaId,
+        colaborador_id: colaboradorId,
+        rubrica_id: rubricaDe.get(codigo)!.rubrica_id,
+        referencia,
+        valor_centavos: null,
+        origem: "ponto",
+        lancado_por: sessao.usuario_id,
+      });
+      importadas += 1;
+      pessoasTocadas.add(colaboradorId);
+      lancadoCentesimos.set(
+        codigo,
+        (lancadoCentesimos.get(codigo) ?? 0) + Math.round(referencia * 100)
+      );
+    };
+
+    for (const apuracao of apuracoes) {
+      await lancar(
+        apuracao.colaborador_id,
+        CODIGO_HE_50,
+        minutosParaHoras(apuracao.he_50_minutos)
+      );
+      await lancar(
+        apuracao.colaborador_id,
+        CODIGO_HE_100,
+        minutosParaHoras(apuracao.he_100_minutos)
+      );
+      await lancar(
+        apuracao.colaborador_id,
+        CODIGO_ADICIONAL_NOTURNO,
+        minutosParaHoras(apuracao.adicional_noturno_minutos)
+      );
+      // Falta em DIAS: a rubrica 1201 desconta salário ÷ 30 por dia. A carga
+      // diária vem da jornada pinada na apuração — 8h48 no administrativo,
+      // 7h20 na loja: dividir por um número fixo daria falta errada em metade
+      // do quadro. Guarda contra jornada com carga zero (escala livre).
+      const faltasDias =
+        apuracao.carga_diaria_minutos > 0
+          ? Math.round(
+              (apuracao.faltas_minutos / apuracao.carga_diaria_minutos) * 100
+            ) / 100
+          : 0;
+      await lancar(apuracao.colaborador_id, CODIGO_FALTAS, faltasDias);
+
+      dsrMinutos += apuracao.dsr_desconto_minutos;
+    }
+
+    // FILA DE PONTO ABERTA BARRA A IMPORTAÇÃO — a menos que o DP confirme.
+    //
+    // Antes isto era só um número devolvido na resposta: a importação seguia
+    // calada e a folha pagava insumo que ainda vai mudar. Importar por cima de
+    // fila aberta obriga a refazer a competência quando o DP tratar a fila.
+    //
+    // O QUE A FILA CONTA — e não é uma coisa só. A conta antiga descrevia toda
+    // intercorrência aberta como "dia que o motor não soube fechar, sem falta
+    // nem hora extra lançada". Isso é verdade para `entrada_sem_saida` e para o
+    // intervalo sem retorno, que deixam o dia PENDENTE; é falso para o resto,
+    // que sai de dia FECHADO e já lançado: `sem_marcacao` nasce junto com a
+    // FALTA INTEGRAL, `fora_da_tolerancia` nasce junto com o ATRASO, e o
+    // intervalo do art. 71 nasce em dia que trabalhou (e que costuma estar
+    // lançando HORA EXTRA). Em 07/2026 a fila contada tinha 11 linhas: 4
+    // `entrada_sem_saida` (essas sim, pendentes, sem lançar nada), 1
+    // `sem_marcacao` de 440 min de falta, 2 `fora_da_tolerancia` de 33 e 63 min
+    // de atraso e 4 de intervalo do art. 71, um deles num dia de 565 min
+    // trabalhados contra 440 previstos. A frase antiga era falsa em 7 das 11.
+    //
+    // O motivo do bloqueio é o denominador comum dos dois grupos — tratar a
+    // fila MUDA o número que a folha vai importar —, e é isso, e só isso, que a
+    // mensagem pode afirmar.
+    //
+    // Não é um bloqueio absoluto, porque competência de folha tem prazo legal e
+    // a fila pode ser de casos que o DP já decidiu deixar para depois: o
+    // caminho existe, mas passa por uma confirmação EXPLÍCITA que fica gravada
+    // na trilha com o número de pendências que havia na hora.
+    const intercorrencias = await contarIntercorrenciasAbertasDaCompetencia(
+      cliente,
+      competencia.ano,
+      competencia.mes
+    );
+    if (intercorrencias > 0 && !opcoes?.confirmar_intercorrencias_abertas) {
+      // ErroHttpConfirmavel, e não ErroHttp: este é o ÚNICO 409 desta rota que
+      // reenviar com confirmação resolve. Os outros (competência não aberta,
+      // sem apuração, rubrica sem versão vigente) voltam como 409 comum, e a
+      // tela não pode oferecer "importar assim mesmo" para eles — insistir só
+      // traria o mesmo erro de volta.
+      throw new ErroHttpConfirmavel(
+        409,
+        `O ponto de ${formatarCompetencia(competencia.ano, competencia.mes)} tem ` +
+          `${intercorrencias} intercorrência(s) ABERTA(S) — dias cujo número AINDA ` +
+          `PODE MUDAR quando o DP tratar a fila: uns estão pendentes e não lançaram ` +
+          `nada (falta batida), outros já lançaram falta, atraso ou hora extra que o ` +
+          `tratamento pode alterar. Trate a fila em Ponto (DP) e reapure, ou confirme ` +
+          `a importação assumindo que os números vão mudar.`,
+        "intercorrencias_abertas"
+      );
+    }
+
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "importacao_ponto",
+      tabela: TABELA_VARIAVEL,
+      registroId: `competencia:${competenciaId}`,
+      diff: {
+        Competência: {
+          de: null,
+          para: formatarCompetencia(competencia.ano, competencia.mes),
+        },
+        "Lote anterior removido": {
+          de: null,
+          para: `${removidas} variável(is) de origem Ponto`,
+        },
+        "Apurações lidas": {
+          de: null,
+          para: `${apuracoes.length} colaborador(es) com ponto apurado`,
+        },
+        "Variáveis lançadas": {
+          de: null,
+          para: `${importadas} em ${pessoasTocadas.size} colaborador(es)`,
+        },
+        "HE 50%": { de: null, para: `${lancadoDe(CODIGO_HE_50)} h` },
+        "HE 100%": {
+          de: null,
+          para: `${lancadoDe(CODIGO_HE_100)} h`,
+        },
+        "Adicional noturno": {
+          de: null,
+          para: `${lancadoDe(CODIGO_ADICIONAL_NOTURNO)} h`,
+        },
+        Faltas: {
+          de: null,
+          para: `${lancadoDe(CODIGO_FALTAS)} dia(s)`,
+        },
+        "DSR do ponto (conferência)": {
+          de: null,
+          // Não vira variável: 1202 é automática e o motor deriva o DSR das
+          // faltas. Fica no diff para o DP comparar os dois números.
+          para: `${minutosParaHoras(dsrMinutos)} h apuradas — o DSR da folha sai da rubrica automática 1202`,
+        },
+        "Intercorrências de ponto abertas": {
+          de: null,
+          para:
+            intercorrencias > 0
+              ? `${intercorrencias} — importado MESMO ASSIM, por confirmação explícita de quem operou`
+              : "0",
+        },
+      },
+    });
+
+    return {
+      importadas,
+      removidas,
+      pessoas: pessoasTocadas.size,
+      sem_apuracao: false,
+      intercorrencias_abertas: intercorrencias,
+      totais_horas: {
+        he_50: lancadoDe(CODIGO_HE_50),
+        he_100: lancadoDe(CODIGO_HE_100),
+        adicional_noturno: lancadoDe(CODIGO_ADICIONAL_NOTURNO),
+        faltas_dias: lancadoDe(CODIGO_FALTAS),
+      },
+    };
+  });
+  return { ...resultado, variaveis: await listarVariaveis(competenciaId) };
+}
+
 // ------------------------------------------------------------------ cálculo (aberta|conferencia → calculo → conferencia)
 
 export interface ResultadoCalculoCompetencia {
@@ -613,6 +935,7 @@ export async function calcularCompetencia(
       const entrada: EntradaMotor = {
         salario_base_centavos: colaborador.salario_centavos,
         dependentes_irrf: colaborador.dependentes_irrf,
+        carga_semanal_minutos: colaborador.carga_semanal_minutos,
         variaveis: variaveisPorColaborador.get(colaborador.colaborador_id) ?? [],
         rubricas,
         tabela_inss: tabelas.inss,
@@ -844,6 +1167,9 @@ function rodarCaso(
     const resultado = calcularFolha({
       salario_base_centavos: Math.round(entradaLida.data.salario * 100),
       dependentes_irrf: entradaLida.data.dependentes,
+      // Caso sem carga declarada = caso sem jornada: cai no divisor de
+      // referência, que é o que todos os casos anteriores à 0038 assumem.
+      carga_semanal_minutos: entradaLida.data.carga_semanal_minutos ?? null,
       variaveis: entradaLida.data.variaveis.map((variavel) => ({
         codigo: variavel.rubrica,
         referencia: variavel.referencia ?? null,
@@ -956,6 +1282,150 @@ export async function montarVisaoParametros(): Promise<VisaoParametros> {
     situacaoConferenciaTabelas(),
   ]);
   return { rubricas, inss, irrf, gerais, conferencia };
+}
+
+/**
+ * Cria uma RUBRICA NOVA (identidade + primeira versão vigente), na mesma
+ * transação — rubrica sem versão não é lançável nem calculável. Item G4:
+ * antes só existia "nova versão de rubrica existente"; o catálogo só crescia
+ * por migração. Código é único: colisão vira 409 legível no campo.
+ *
+ * Evolução: marcar/desmarcar `excecao` ainda é operação de migração — a tela
+ * cria, versiona e encerra (ver `encerrarRubrica`), mas não muda a identidade.
+ */
+export async function criarRubrica(
+  sessao: PayloadSessao,
+  dados: NovaRubrica
+): Promise<{ rubrica_id: number }> {
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    let rubricaId: number;
+    try {
+      rubricaId = await inserirRubrica(cliente, {
+        codigo: dados.codigo,
+        nome: dados.nome,
+        natureza: dados.natureza,
+      });
+    } catch (erro) {
+      if (violacaoUnica(erro)) {
+        throw new ErroHttpCampo(
+          409,
+          `Já existe uma rubrica com o código ${dados.codigo}. Escolha outro código — o catálogo usa 1xxx para remuneração, 2xxx para descontos legais e de benefício, 3xxx para informativas e 9xxx para as verbas manuais genéricas.`,
+          "codigo"
+        );
+      }
+      throw erro;
+    }
+    const versaoId = await inserirVersaoRubrica(cliente, rubricaId, {
+      incide_inss: dados.incide_inss,
+      incide_irrf: dados.incide_irrf,
+      incide_fgts: dados.incide_fgts,
+      tipo_calculo: dados.tipo_calculo,
+      parametro: dados.parametro ?? null,
+      inicio_vigencia: dados.inicio_vigencia,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_RUBRICA,
+      registroId: String(rubricaId),
+      diff: {
+        Rubrica: { de: null, para: `${dados.codigo} — ${dados.nome}` },
+        Natureza: { de: null, para: ROTULOS_NATUREZA[dados.natureza] },
+        "Incidências": {
+          de: null,
+          para: `INSS ${dados.incide_inss ? "sim" : "não"}, IRRF ${dados.incide_irrf ? "sim" : "não"}, FGTS ${dados.incide_fgts ? "sim" : "não"}`,
+        },
+        "Tipo de cálculo": {
+          de: null,
+          para: ROTULOS_TIPO_CALCULO[dados.tipo_calculo],
+        },
+        "Parâmetro": {
+          de: null,
+          para:
+            dados.parametro === null || dados.parametro === undefined
+              ? "—"
+              : String(dados.parametro),
+        },
+        "Início de vigência": { de: null, para: dados.inicio_vigencia },
+        "Versão criada": { de: null, para: String(versaoId) },
+      },
+    });
+    return { rubrica_id: rubricaId };
+  });
+}
+
+/**
+ * ENCERRA a rubrica por vigência (item G4). Era o buraco do catálogo: a tela
+ * criava rubrica e não tinha como tirar nenhuma — e o banco não deixa apagar
+ * (trigger rh.bloquear_versao_encerrada). Rubrica criada por engano ficava para
+ * sempre no seletor de lançamento da competência.
+ *
+ * Encerrar NÃO apaga nada: a versão ativa ganha `fim_vigencia` e vira
+ * 'encerrada' (imutável a partir daí) e a identidade sai do catálogo lançável
+ * (`ativo = FALSE`). Holerite antigo aponta para a VERSÃO, que continua de pé.
+ *
+ * Duas recusas:
+ *   • código que o sistema procura pelo nome (motor e importação do ponto) —
+ *     encerrar derrubaria o cálculo da competência inteira;
+ *   • lançamento vivo em competência que ainda pode ser recalculada — o motor
+ *     estoura "Rubrica X sem versão vigente" e a folha não fecha. O DP tira o
+ *     lançamento primeiro; o histórico já fechado não atrapalha.
+ */
+export async function encerrarRubrica(
+  sessao: PayloadSessao,
+  rubricaId: number,
+  dados: EncerramentoRubrica
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const rubrica = await buscarRubricaParaAtualizar(cliente, rubricaId);
+    if (!rubrica) {
+      throw new ErroHttp(404, "Rubrica não encontrada.");
+    }
+    if (CODIGOS_DO_MOTOR.includes(rubrica.codigo)) {
+      throw new ErroHttp(
+        409,
+        `A rubrica ${rubrica.codigo} — ${rubrica.nome} é procurada pelo código pelo motor de cálculo ou pela importação do ponto. Encerrá-la pararia o fechamento da folha.`
+      );
+    }
+    const ativa = await buscarVersaoAtivaRubricaParaAtualizar(cliente, rubricaId);
+    if (!ativa) {
+      throw new ErroHttp(
+        409,
+        `A rubrica ${rubrica.codigo} — ${rubrica.nome} já está sem versão vigente.`
+      );
+    }
+    if (dados.fim_vigencia < ativa.inicio_vigencia) {
+      throw new ErroHttpCampo(
+        400,
+        `O fim de vigência não pode ser anterior ao início da versão vigente (${ativa.inicio_vigencia}).`,
+        "fim_vigencia"
+      );
+    }
+    const emUso = await contarLancamentosRecalculaveis(cliente, rubricaId);
+    if (emUso.lancamentos > 0) {
+      throw new ErroHttp(
+        409,
+        `A rubrica ${rubrica.codigo} — ${rubrica.nome} tem ${emUso.lancamentos} lançamento(s) em competência não fechada (${emUso.competencias.join(", ")}). Remova os lançamentos antes de encerrar — sem versão vigente o cálculo dessa competência não roda.`
+      );
+    }
+    await encerrarVersaoRubricaEm(cliente, ativa.id, dados.fim_vigencia);
+    await desativarRubrica(cliente, rubricaId);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "encerramento",
+      tabela: TABELA_RUBRICA,
+      registroId: String(rubricaId),
+      diff: {
+        Rubrica: { de: null, para: `${rubrica.codigo} — ${rubrica.nome}` },
+        Situação: { de: "No catálogo lançável", para: "Encerrada" },
+        "Fim de vigência": { de: null, para: dados.fim_vigencia },
+        "Versão encerrada": { de: null, para: String(ativa.id) },
+        Motivo: { de: null, para: dados.motivo },
+      },
+    });
+  });
 }
 
 export async function criarVersaoRubrica(
@@ -1119,11 +1589,19 @@ export function criarVersaoParametros(
       inserirVersaoParametros(cliente, {
         salario_minimo: dados.salario_minimo,
         aliquota_fgts: dados.aliquota_fgts,
+        divisor_mensal_horas: dados.divisor_mensal_horas,
+        carga_semanal_referencia_minutos:
+          dados.carga_semanal_referencia_minutos,
+        divisor_mensal_dias: dados.divisor_mensal_dias,
         inicio_vigencia: dados.inicio_vigencia,
       }),
     {
       "Salário mínimo": dados.salario_minimo.toFixed(2),
       "Alíquota FGTS": `${dados.aliquota_fgts}%`,
+      "Divisor mensal de horas": `${dados.divisor_mensal_horas} h para ${
+        dados.carga_semanal_referencia_minutos / 60
+      } h semanais`,
+      "Divisor mensal de dias": String(dados.divisor_mensal_dias),
     }
   );
 }

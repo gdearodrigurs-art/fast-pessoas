@@ -397,10 +397,32 @@ export interface MarcoExperiencia {
 }
 
 /**
- * Contrato de experiência chegando ao fim. Prefere o prazo gravado em
+ * Contrato de experiência com DECISÃO PENDENTE. Prefere o prazo gravado em
  * rh.processo_admissao (0010) e, quando o processo não existe (base legada
  * migrada sem admissão no sistema), DERIVA de data_admissao + 44/89 dias — a
  * mesma régua de `calcularPrazosExperiencia`. A tela diz de onde veio a data.
+ *
+ * O critério NÃO é só a data. O alerta existe para cobrar a decisão de
+ * efetivar/desligar antes do marco (CLT 445/451), então ele acompanha o CICLO
+ * de avaliação daquele marco, e não apenas o calendário:
+ *   - marco já DECIDIDO sai da lista, mesmo dentro da janela — cobrar decisão
+ *     que já saiu é alarme falso (era o caso dos três "dia 45 · 17 dias em
+ *     atraso" da demo, todos com o ciclo do marco 45 decidido);
+ *   - marco com ciclo AINDA ABERTO entra, mesmo fora da janela — quem tem ciclo
+ *     aberto tem o que fazer hoje, e era exatamente esse o marco que sumia do
+ *     portal de quem avalia contrato de experiência recém-aberto.
+ * A janela (antecedência/atraso) continua valendo para quem não tem ciclo
+ * nenhum: aí não há o que consultar além da data.
+ *
+ * E quem NÃO tem contrato de experiência não tem marco nenhum. O processo de
+ * admissão grava isso em `contrato_experiencia` (0010), e é esse o campo que o
+ * resto do sistema respeita — a abertura dos ciclos de experiência filtra por
+ * `WHERE p.contrato_experiencia` (avaliacao/repositorio.ts). Derivar 45/90 da
+ * data de admissão quando o processo diz NÃO colocava no bloco "Contrato de
+ * experiência (45/90)" gente que nunca terá um: era o caso do aprendiz da demo
+ * (contrato a termo, sem período de experiência), o único alerta que não tinha
+ * ciclo para onde apontar. A derivação continua existindo, mas só para quem não
+ * tem processo no sistema — base legada, onde não há o que respeitar.
  */
 export async function listarMarcosExperiencia(
   gestorColaboradorId: number,
@@ -422,7 +444,8 @@ export async function listarMarcosExperiencia(
          FROM (${EQUIPE_VIGENTE}) eq
          JOIN rh.colaborador c ON c.id = eq.id
          LEFT JOIN LATERAL (
-           SELECT p.id, p.prazo_experiencia_1, p.prazo_experiencia_2
+           SELECT p.id, p.prazo_experiencia_1, p.prazo_experiencia_2,
+                  p.contrato_experiencia
              FROM rh.processo_admissao p
             WHERE p.colaborador_id = c.id
               AND p.estado <> 'cancelado'
@@ -431,6 +454,9 @@ export async function listarMarcosExperiencia(
          ) pa ON TRUE
         WHERE c.status <> 'desligado'
           AND c.tipo_vinculo IN ('clt','aprendiz','temporario')
+          -- Processo que diz "sem contrato de experiência" encerra o assunto.
+          -- Sem processo, cai na derivação por data de admissão (base legada).
+          AND COALESCE(pa.contrato_experiencia, TRUE)
      ),
      marcos AS (
        SELECT b.id, b.nome_completo, 45 AS marco,
@@ -448,8 +474,23 @@ export async function listarMarcosExperiencia(
             (m.data_marco - ${HOJE_SP})::int AS dias_para_marco,
             m.do_processo
        FROM marcos m
-      WHERE (m.data_marco - ${HOJE_SP}) <= $2::int
-        AND (m.data_marco - ${HOJE_SP}) >= ($3::int * -1)
+       -- Estado do ciclo DAQUELE marco. 'cancelado' não conta como decisão:
+       -- ciclo anulado deixa a decisão pendente de novo (é por isso que o
+       -- índice único de 0011 trata 'decidido' e 'cancelado' juntos como
+       -- final, mas só o primeiro encerra o assunto).
+       LEFT JOIN LATERAL (
+         SELECT bool_or(ca.status = 'decidido') AS decidido,
+                bool_or(ca.status NOT IN ('decidido','cancelado')) AS em_aberto
+           FROM rh.ciclo_avaliacao ca
+          WHERE ca.colaborador_id = m.id
+            AND ca.tipo = 'experiencia_' || m.marco
+       ) ci ON TRUE
+      WHERE COALESCE(ci.decidido, FALSE) = FALSE
+        AND (
+          COALESCE(ci.em_aberto, FALSE)
+          OR ((m.data_marco - ${HOJE_SP}) <= $2::int
+              AND (m.data_marco - ${HOJE_SP}) >= ($3::int * -1))
+        )
       ORDER BY m.data_marco, m.nome_completo`,
     [gestorColaboradorId, antecedenciaDias, atrasoDias]
   );

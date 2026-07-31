@@ -70,23 +70,51 @@ export async function destruirSessao(): Promise<void> {
 }
 
 /**
- * Guarda-chuva de TODAS as rotas de negócio: sessão válida + chave de
- * permissão conferida no banco (sistema.tem_permissao). Lança ErroHttp
- * 401/403 — a rota converte em resposta.
+ * As DUAS checagens que valem para toda rota de negócio, antes de qualquer
+ * chave: sessão existe e 2FA concluído. Função pura, sem cookie e sem banco —
+ * é o pedaço da guarda que dá para provar num teste direto, sem HTTP.
+ *
+ * Existe extraída porque é defesa em PROFUNDIDADE, e defesa em profundidade
+ * copiada é defesa que uma cópia esquece. O proxy (src/proxy.ts) já barra a
+ * sessão pendente na borda; esta é a segunda tranca, do lado da aplicação,
+ * para o dia em que alguém mexer no proxy.
  */
-export async function exigirPermissao(chave: string): Promise<PayloadSessao> {
-  const sessao = await lerSessao();
+export function exigirSessaoValida(
+  sessao: PayloadSessao | null
+): PayloadSessao {
   if (!sessao) {
     throw new ErroHttp(401, "Não autenticado");
   }
-  // Defesa em profundidade: sessão pendente de 2FA não acessa rota de
-  // negócio nenhuma, mesmo se o proxy deixar passar.
   if (sessao.pendente_2fa) {
     throw new ErroHttp(
       403,
       "Configure a autenticação em duas etapas para continuar"
     );
   }
+  return sessao;
+}
+
+/**
+ * Guarda das rotas SEM chave fixa — aquelas em que o alcance não vem de uma
+ * permissão, e sim do escopo por sessão/papel que o repositório aplica
+ * (ex.: /api/colaboradores: funcionário vê a própria ficha, gestor vê a
+ * equipe vigente). Continua sendo rota de negócio: passa pelas mesmas duas
+ * checagens que `exigirPermissao`, e só dispensa a terceira.
+ *
+ * É o substituto de `lerSessao()` + `if (!sessao)` solto na rota: aquele
+ * atalho pulava o 2FA e deixava a rota dependendo só do proxy.
+ */
+export async function exigirSessao(): Promise<PayloadSessao> {
+  return exigirSessaoValida(await lerSessao());
+}
+
+/**
+ * Guarda-chuva de TODAS as rotas de negócio: sessão válida + chave de
+ * permissão conferida no banco (sistema.tem_permissao). Lança ErroHttp
+ * 401/403 — a rota converte em resposta.
+ */
+export async function exigirPermissao(chave: string): Promise<PayloadSessao> {
+  const sessao = exigirSessaoValida(await lerSessao());
   const linhas = await consultar<{ autorizado: boolean }>(
     "SELECT sistema.tem_permissao($1, $2) AS autorizado",
     [sessao.usuario_id, chave]
@@ -108,16 +136,7 @@ export async function exigirPermissao(chave: string): Promise<PayloadSessao> {
 export async function exigirAlgumaPermissao(
   chaves: readonly string[]
 ): Promise<{ sessao: PayloadSessao; concedidas: Set<string> }> {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    throw new ErroHttp(401, "Não autenticado");
-  }
-  if (sessao.pendente_2fa) {
-    throw new ErroHttp(
-      403,
-      "Configure a autenticação em duas etapas para continuar"
-    );
-  }
+  const sessao = exigirSessaoValida(await lerSessao());
   const linhas = await consultar<{ chave: string; autorizado: boolean }>(
     `SELECT chave, sistema.tem_permissao($1, chave) AS autorizado
        FROM unnest($2::text[]) AS chave`,

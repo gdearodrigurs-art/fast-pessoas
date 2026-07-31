@@ -60,7 +60,34 @@ const TABELA_PROGRAMACAO = "rh.programacao_ferias";
 const TABELA_DEMANDA = "rh.demanda";
 const CHAVE_TIPO_DEMANDA = "programacao_ferias";
 // 30 dias de direito por período: default saldo_dias da tabela (migração 0007).
-/** Limite concessivo = fim do aquisitivo + 11 meses (painel do art. 137). */
+
+/**
+ * ESTE É O NÚMERO DE NEGÓCIO QUE AINDA ESTÁ CHUMBADO NO MÓDULO DE FÉRIAS, e a
+ * varredura de 2026-07 o deixa DECLARADO em vez de disfarçado.
+ *
+ * O que ele faz: `fim do aquisitivo + N meses` é a data gravada em
+ * rh.periodo_aquisitivo.limite_concessivo, e é ela — e só ela — que faz o
+ * painel dizer "VENCIDA — dobro (art. 137)". Ou seja, é o limite que decide se
+ * o sistema afirma que a empresa deve férias em dobro. Pela régua da própria
+ * casa (limite é do usuário, não do código), isto deveria ser parâmetro
+ * versionado com vigência, como os divisores da folha (0038) e os parâmetros
+ * da jornada (0043).
+ *
+ * Por que 11 e não 12: o art. 134 manda CONCEDER nos 12 meses seguintes ao
+ * aquisitivo, e conceder é o gozo inteiro caber dentro da janela — com 30 dias
+ * de gozo, a última data de INÍCIO fica ~1 mês antes do fim dos 12. É uma
+ * INTERPRETAÇÃO, não o texto da lei, e ela vem casada com DIAS_GOZO_MAXIMO:
+ * quem goza 10 dias poderia começar mais tarde e aqui não pode.
+ *
+ * Duas dívidas honestas que ficam registradas:
+ *  1. o comentário da migration 0007 diz "limite_concessivo = fim + 12 meses",
+ *     e o código sempre gravou 11 — a documentação e o dado divergem desde a
+ *     origem; quem vale é este arquivo, e é o que está nas linhas do banco;
+ *  2. trocar o número exige BACKFILL: limite_concessivo é materializado na
+ *     criação do período, então mudar só a conta deixaria linhas antigas com
+ *     uma régua e linhas novas com outra. É por isso que a correção certa é
+ *     migration + parâmetro + reconciliação, e não editar este 11.
+ */
 const MESES_LIMITE_CONCESSIVO = 11;
 
 // ------------------------------------------------------------------ datas (UTC no banco, SP na régua)

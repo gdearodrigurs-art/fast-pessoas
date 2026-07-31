@@ -141,9 +141,10 @@ export default function PaginaConfigurar2fa() {
 
         {etapa !== "carregando" && obrigatorio && etapa !== "ativo" && (
           <p className={estilos.avisoObrigatorio}>
-            O seu papel exige autenticação em duas etapas (obrigatória para
-            RH, DP, Diretoria e Administração). O acesso ao sistema será
-            liberado assim que você concluir esta configuração.
+            O seu perfil de acesso tem ao menos uma permissão que exige
+            autenticação em duas etapas — dado sensível de pessoa, alcance de
+            empresa inteira ou administração do sistema. O acesso será liberado
+            assim que você concluir esta configuração.
           </p>
         )}
 
@@ -215,8 +216,8 @@ export default function PaginaConfigurar2fa() {
                 <hr className={estilos.divisor} />
                 {obrigatorio ? (
                   <p className={estilos.aviso}>
-                    O seu papel exige autenticação em duas etapas — ela não
-                    pode ser desativada.
+                    O seu perfil de acesso exige autenticação em duas etapas —
+                    ela não pode ser desativada.
                   </p>
                 ) : (
                   <button

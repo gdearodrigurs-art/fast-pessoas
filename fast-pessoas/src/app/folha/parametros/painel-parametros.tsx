@@ -4,13 +4,16 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { acaoCabecalho, Cabecalho } from "@/app/cabecalho";
 import {
+  CODIGOS_DO_MOTOR,
   formatarMoedaReais,
+  NATUREZAS_RUBRICA,
   NaturezaRubrica,
   ROTULOS_NATUREZA,
   ROTULOS_TABELA_LEGAL,
   ROTULOS_TIPO_CALCULO,
   TipoCalculo,
   TIPOS_CALCULO,
+  TIPOS_CALCULO_LANCAVEIS,
   TipoTabelaLegal,
 } from "@/dominios/folha/esquemas";
 import estilos from "../folha.module.css";
@@ -36,6 +39,8 @@ interface Rubrica {
   nome: string;
   natureza: NaturezaRubrica;
   ativo: boolean;
+  /** Verba manual genérica (9001/9002) — exceção, fica por último. */
+  excecao: boolean;
   versoes: VersaoRubrica[];
 }
 
@@ -64,6 +69,9 @@ interface VersaoGerais {
   id: number;
   salario_minimo: number;
   aliquota_fgts: number;
+  divisor_mensal_horas: number;
+  carga_semanal_referencia_minutos: number;
+  divisor_mensal_dias: number;
   status: StatusVersao;
   inicio_vigencia: string;
   fim_vigencia: string | null;
@@ -392,11 +400,12 @@ function SecaoConferencia({
 
 async function enviarJson(
   caminho: string,
-  corpo: unknown
+  corpo: unknown,
+  metodo: "POST" | "PATCH" = "POST"
 ): Promise<{ ok: boolean; erro: string | null }> {
   try {
     const resposta = await fetch(caminho, {
-      method: "POST",
+      method: metodo,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(corpo),
     });
@@ -418,6 +427,8 @@ function SecaoRubricas({
   aoMudar: () => void;
 }) {
   const [editando, setEditando] = useState<number | null>(null);
+  const [encerrando, setEncerrando] = useState<number | null>(null);
+  const [criando, setCriando] = useState(false);
   const [incideInss, setIncideInss] = useState(true);
   const [incideIrrf, setIncideIrrf] = useState(true);
   const [incideFgts, setIncideFgts] = useState(true);
@@ -429,6 +440,8 @@ function SecaoRubricas({
 
   function comecarEdicao(rubrica: Rubrica) {
     const ativa = rubrica.versoes.find((item) => item.status === "ativa");
+    setCriando(false);
+    setEncerrando(null);
     setEditando(rubrica.id);
     setIncideInss(ativa?.incide_inss ?? true);
     setIncideIrrf(ativa?.incide_irrf ?? true);
@@ -469,6 +482,34 @@ function SecaoRubricas({
   return (
     <section className={estilos.cartao}>
       <h2>Catálogo de rubricas</h2>
+      <p className={estilos.notaRodape}>
+        As verbas manuais genéricas (9001/9002) ficam por último de propósito:
+        são <strong>exceção</strong>. Verba que se repete todo mês merece
+        rubrica própria, com incidência declarada de INSS, IRRF e FGTS.
+      </p>
+      {!criando && editando === null && (
+        <div className={estilos.barraAcoes}>
+          <button
+            className={estilos.botao}
+            type="button"
+            onClick={() => {
+              setCriando(true);
+              setEditando(null);
+            }}
+          >
+            Nova rubrica
+          </button>
+        </div>
+      )}
+      {criando && (
+        <FormularioNovaRubrica
+          aoCancelar={() => setCriando(false)}
+          aoCriar={() => {
+            setCriando(false);
+            aoMudar();
+          }}
+        />
+      )}
       <div className={estilos.tabelaEnvolucro}>
         <table className={estilos.tabela}>
           <thead>
@@ -493,6 +534,15 @@ function SecaoRubricas({
                     {rubrica.nome}
                     {!rubrica.ativo && (
                       <span className={estilos.etiqueta}> inativa</span>
+                    )}
+                    {rubrica.excecao && (
+                      <>
+                        <br />
+                        <span className={estilos.notaRodape}>
+                          exceção — verba manual genérica, use só quando não
+                          houver rubrica própria
+                        </span>
+                      </>
                     )}
                   </td>
                   <td>{ROTULOS_NATUREZA[rubrica.natureza]}</td>
@@ -524,6 +574,22 @@ function SecaoRubricas({
                     >
                       Nova versão
                     </button>
+                    {/* Encerrar só faz sentido em rubrica que ainda vigora e
+                        que o sistema não procura pelo código: encerrar 1101 ou
+                        2001 pararia o cálculo da folha inteira. */}
+                    {ativa && !CODIGOS_DO_MOTOR.includes(rubrica.codigo) && (
+                      <button
+                        className={estilos.botaoLinha}
+                        type="button"
+                        onClick={() => {
+                          setCriando(false);
+                          setEditando(null);
+                          setEncerrando(rubrica.id);
+                        }}
+                      >
+                        Encerrar
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -628,7 +694,311 @@ function SecaoRubricas({
           )}
         </form>
       )}
+
+      {encerrando !== null && (
+        <FormularioEncerrarRubrica
+          rubrica={rubricas.find((rubrica) => rubrica.id === encerrando)!}
+          aoCancelar={() => setEncerrando(null)}
+          aoEncerrar={() => {
+            setEncerrando(null);
+            aoMudar();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+// ------------------------------------------------------------------ encerrar rubrica (G4)
+
+/**
+ * ENCERRAMENTO por vigência — o caminho de saída que faltava no catálogo.
+ * Rubrica criada por engano não some do banco (versão encerrada é imutável e o
+ * holerite antigo aponta para ela): ela ganha fim de vigência e sai do seletor
+ * de lançamento da competência. O motivo vai para a trilha.
+ */
+function FormularioEncerrarRubrica({
+  rubrica,
+  aoCancelar,
+  aoEncerrar,
+}: {
+  rubrica: Rubrica;
+  aoCancelar: () => void;
+  aoEncerrar: () => void;
+}) {
+  const ativa = rubrica.versoes.find((item) => item.status === "ativa");
+  const [fim, setFim] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setErroEnvio(null);
+    setEnviando(true);
+    const resultado = await enviarJson(
+      `/api/folha/parametros/rubricas/${rubrica.id}`,
+      { fim_vigencia: fim, motivo },
+      "PATCH"
+    );
+    setEnviando(false);
+    if (resultado.ok) aoEncerrar();
+    else setErroEnvio(resultado.erro);
+  }
+
+  return (
+    <form className={estilos.formulario} onSubmit={enviar}>
+      <h3 style={{ flexBasis: "100%" }}>
+        Encerrar {rubrica.codigo} — {rubrica.nome}
+      </h3>
+      <p className={estilos.notaRodape} style={{ flexBasis: "100%" }}>
+        A versão vigente
+        {ativa ? ` (desde ${formatarData(ativa.inicio_vigencia)})` : ""} recebe
+        fim de vigência e a rubrica sai da lista de lançamento. Nada é apagado:
+        os holerites já calculados continuam apontando para essa versão. Rubrica
+        com lançamento em competência não fechada não pode ser encerrada — tire
+        o lançamento antes.
+      </p>
+      <div className={estilos.campoGrupoCurto}>
+        <label className={estilos.rotulo} htmlFor="fim-rubrica">
+          Fim de vigência
+        </label>
+        <input
+          className={estilos.campo}
+          id="fim-rubrica"
+          type="date"
+          required
+          value={fim}
+          onChange={(e) => setFim(e.target.value)}
+        />
+      </div>
+      <div className={estilos.campoGrupo}>
+        <label className={estilos.rotulo} htmlFor="motivo-rubrica">
+          Motivo do encerramento
+        </label>
+        <input
+          className={estilos.campo}
+          id="motivo-rubrica"
+          type="text"
+          required
+          minLength={5}
+          maxLength={200}
+          placeholder="por que esta verba sai do catálogo"
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+        />
+      </div>
+      <button className={estilos.botao} type="submit" disabled={enviando}>
+        {enviando ? "Encerrando…" : "Encerrar rubrica"}
+      </button>
+      <button className={estilos.botaoLinha} type="button" onClick={aoCancelar}>
+        Cancelar
+      </button>
+      {erroEnvio && (
+        <p className={estilos.erro} style={{ flexBasis: "100%" }}>
+          {erroEnvio}
+        </p>
+      )}
+    </form>
+  );
+}
+
+// ------------------------------------------------------------------ nova rubrica (G4)
+
+/**
+ * Cria rubrica NOVA: identidade (código, nome, natureza) + a primeira versão
+ * vigente, numa chamada só. Antes disso o catálogo só crescia por migração.
+ * Só oferece os tipos de cálculo LANÇÁVEIS — os automáticos têm regra fixa no
+ * motor, amarrada ao código do catálogo.
+ */
+function FormularioNovaRubrica({
+  aoCancelar,
+  aoCriar,
+}: {
+  aoCancelar: () => void;
+  aoCriar: () => void;
+}) {
+  const [codigo, setCodigo] = useState("");
+  const [nome, setNome] = useState("");
+  const [natureza, setNatureza] = useState<NaturezaRubrica>("provento");
+  const [incideInss, setIncideInss] = useState(true);
+  const [incideIrrf, setIncideIrrf] = useState(true);
+  const [incideFgts, setIncideFgts] = useState(true);
+  const [tipoCalculo, setTipoCalculo] =
+    useState<(typeof TIPOS_CALCULO_LANCAVEIS)[number]>("valor_informado");
+  const [parametro, setParametro] = useState("");
+  const [inicio, setInicio] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+
+  const precisaParametro =
+    tipoCalculo === "percentual_salario" || tipoCalculo === "horas_adicional";
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setErroEnvio(null);
+    setEnviando(true);
+    const resultado = await enviarJson("/api/folha/parametros/rubricas", {
+      codigo: codigo.trim(),
+      nome: nome.trim(),
+      natureza,
+      incide_inss: incideInss,
+      incide_irrf: incideIrrf,
+      incide_fgts: incideFgts,
+      tipo_calculo: tipoCalculo,
+      parametro: precisaParametro && parametro !== "" ? Number(parametro) : null,
+      inicio_vigencia: inicio,
+    });
+    setEnviando(false);
+    if (resultado.ok) {
+      aoCriar();
+    } else {
+      setErroEnvio(resultado.erro);
+    }
+  }
+
+  return (
+    <form className={estilos.formulario} onSubmit={enviar}>
+      <h3 style={{ flexBasis: "100%" }}>Nova rubrica</h3>
+      <p className={estilos.notaRodape} style={{ flexBasis: "100%" }}>
+        Blocos em uso: 1xxx remuneração, 2xxx descontos legais e de benefício,
+        3xxx informativas, 9xxx manuais genéricas. As incidências valem a
+        partir da vigência informada e só mudam por versão nova — confira com o
+        DP antes de salvar.
+      </p>
+      <div className={estilos.campoGrupoCurto}>
+        <label className={estilos.rotulo} htmlFor="codigo-rubrica">
+          Código (4 dígitos)
+        </label>
+        <input
+          className={estilos.campo}
+          id="codigo-rubrica"
+          inputMode="numeric"
+          pattern="\d{4}"
+          maxLength={4}
+          required
+          value={codigo}
+          onChange={(e) => setCodigo(e.target.value)}
+        />
+      </div>
+      <div className={estilos.campoGrupo}>
+        <label className={estilos.rotulo} htmlFor="nome-rubrica">
+          Nome
+        </label>
+        <input
+          className={estilos.campo}
+          id="nome-rubrica"
+          type="text"
+          maxLength={80}
+          required
+          value={nome}
+          onChange={(e) => setNome(e.target.value)}
+        />
+      </div>
+      <div className={estilos.campoGrupoCurto}>
+        <label className={estilos.rotulo} htmlFor="natureza-rubrica">
+          Natureza
+        </label>
+        <select
+          className={estilos.campo}
+          id="natureza-rubrica"
+          value={natureza}
+          onChange={(e) => setNatureza(e.target.value as NaturezaRubrica)}
+        >
+          {NATUREZAS_RUBRICA.map((opcao) => (
+            <option key={opcao} value={opcao}>
+              {ROTULOS_NATUREZA[opcao]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <label className={estilos.caixaMarcar}>
+        <input
+          type="checkbox"
+          checked={incideInss}
+          onChange={(e) => setIncideInss(e.target.checked)}
+        />
+        Incide INSS
+      </label>
+      <label className={estilos.caixaMarcar}>
+        <input
+          type="checkbox"
+          checked={incideIrrf}
+          onChange={(e) => setIncideIrrf(e.target.checked)}
+        />
+        Incide IRRF
+      </label>
+      <label className={estilos.caixaMarcar}>
+        <input
+          type="checkbox"
+          checked={incideFgts}
+          onChange={(e) => setIncideFgts(e.target.checked)}
+        />
+        Incide FGTS
+      </label>
+      <div className={estilos.campoGrupo}>
+        <label className={estilos.rotulo} htmlFor="tipo-calculo-novo">
+          Tipo de cálculo
+        </label>
+        <select
+          className={estilos.campo}
+          id="tipo-calculo-novo"
+          value={tipoCalculo}
+          onChange={(e) =>
+            setTipoCalculo(
+              e.target.value as (typeof TIPOS_CALCULO_LANCAVEIS)[number]
+            )
+          }
+        >
+          {TIPOS_CALCULO_LANCAVEIS.map((tipo) => (
+            <option key={tipo} value={tipo}>
+              {ROTULOS_TIPO_CALCULO[tipo]}
+            </option>
+          ))}
+        </select>
+      </div>
+      {precisaParametro && (
+        <div className={estilos.campoGrupoCurto}>
+          <label className={estilos.rotulo} htmlFor="parametro-novo">
+            {tipoCalculo === "horas_adicional" ? "Fator (ex.: 1.5)" : "Percentual"}
+          </label>
+          <input
+            className={estilos.campo}
+            id="parametro-novo"
+            type="number"
+            min={0.0001}
+            step={0.0001}
+            required
+            value={parametro}
+            onChange={(e) => setParametro(e.target.value)}
+          />
+        </div>
+      )}
+      <div className={estilos.campoGrupoCurto}>
+        <label className={estilos.rotulo} htmlFor="inicio-nova-rubrica">
+          Início de vigência
+        </label>
+        <input
+          className={estilos.campo}
+          id="inicio-nova-rubrica"
+          type="date"
+          required
+          value={inicio}
+          onChange={(e) => setInicio(e.target.value)}
+        />
+      </div>
+      <button className={estilos.botao} type="submit" disabled={enviando}>
+        {enviando ? "Salvando…" : "Criar rubrica"}
+      </button>
+      <button className={estilos.botaoLinha} type="button" onClick={aoCancelar}>
+        Cancelar
+      </button>
+      {erroEnvio && (
+        <p className={estilos.erro} style={{ flexBasis: "100%" }}>
+          {erroEnvio}
+        </p>
+      )}
+    </form>
   );
 }
 
@@ -1085,10 +1455,44 @@ function SecaoParametrosGerais({
 }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [salarioMinimo, setSalarioMinimo] = useState("");
-  const [aliquotaFgts, setAliquotaFgts] = useState("8");
+  const [aliquotaFgts, setAliquotaFgts] = useState("");
+  const vigente = versoes.find((versao) => versao.status === "ativa");
+  const [divisorHoras, setDivisorHoras] = useState("");
+  const [cargaReferencia, setCargaReferencia] = useState("");
+  const [divisorDias, setDivisorDias] = useState("");
   const [inicio, setInicio] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+
+  /**
+   * A versão ATIVA é o ponto de partida do formulário: divisor e alíquota quase
+   * nunca mudam, e digitar de novo é a chance de errar. Quando NÃO existe versão
+   * ativa os campos entram VAZIOS, de propósito.
+   *
+   * Já foi o contrário: os campos nasciam com 220 h, 44 h/semana, 30 dias e 8%
+   * escritos aqui. Sem parâmetro cadastrado a tela afirmava esses números como
+   * se fossem os do sistema, e bastava preencher salário mínimo e vigência para
+   * GRAVAR um divisor que ninguém escolheu — o mesmo 220 que a migration 0038
+   * tirou do motor da folha, entrando de volta pela porta da frente. O sistema
+   * não tem número para sugerir antes de o dono cadastrar o primeiro: ele diz
+   * que não tem.
+   *
+   * Semeia na ABERTURA, e não na montagem: `useState` só semeia uma vez, e esta
+   * seção não remonta depois de gravar — semeando na montagem, o formulário
+   * reaberto mostraria a versão anterior como se fosse a vigente.
+   */
+  function abrirFormulario() {
+    setSalarioMinimo("");
+    setAliquotaFgts(vigente ? String(vigente.aliquota_fgts) : "");
+    setDivisorHoras(vigente ? String(vigente.divisor_mensal_horas) : "");
+    setCargaReferencia(
+      vigente ? String(vigente.carga_semanal_referencia_minutos / 60) : ""
+    );
+    setDivisorDias(vigente ? String(vigente.divisor_mensal_dias) : "");
+    setInicio("");
+    setErroEnvio(null);
+    setMostrarForm(true);
+  }
 
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
@@ -1097,13 +1501,18 @@ function SecaoParametrosGerais({
     const resultado = await enviarJson("/api/folha/parametros/tabelas/gerais", {
       salario_minimo: Number(salarioMinimo),
       aliquota_fgts: Number(aliquotaFgts),
+      divisor_mensal_horas: Number(divisorHoras),
+      // A tela fala em HORAS semanais; o banco guarda MINUTOS, que é a unidade
+      // de carga em todo o sistema.
+      carga_semanal_referencia_minutos: Math.round(Number(cargaReferencia) * 60),
+      divisor_mensal_dias: Number(divisorDias),
       inicio_vigencia: inicio,
     });
     setEnviando(false);
     if (resultado.ok) {
       setMostrarForm(false);
       setSalarioMinimo("");
-      setAliquotaFgts("8");
+      setAliquotaFgts("");
       setInicio("");
       aoMudar();
     } else {
@@ -1113,7 +1522,17 @@ function SecaoParametrosGerais({
 
   return (
     <section className={estilos.cartao}>
-      <h2>Parâmetros gerais (salário mínimo, alíquota FGTS)</h2>
+      <h2>Parâmetros gerais (salário mínimo, alíquota FGTS, divisores)</h2>
+      {!vigente && (
+        <div className={estilos.avisoCritico}>
+          <strong>Não há versão ATIVA de parâmetros gerais.</strong> Enquanto não
+          houver, a folha não calcula: salário mínimo, alíquota do FGTS e os dois
+          divisores não existem no sistema. Cadastre a versão inicial abaixo — os
+          campos abrem em branco de propósito, porque o sistema não tem número
+          para sugerir. Cada um deles sai da convenção coletiva ou da lei que a
+          empresa aplica, e é o DP quem responde por ele.
+        </div>
+      )}
       <div className={estilos.tabelaEnvolucro}>
         <table className={estilos.tabela}>
           <thead>
@@ -1121,11 +1540,18 @@ function SecaoParametrosGerais({
               <th>Situação</th>
               <th className={estilos.numero}>Salário mínimo</th>
               <th className={estilos.numero}>Alíquota FGTS</th>
+              <th className={estilos.numero}>Divisor de horas</th>
+              <th className={estilos.numero}>Divisor de dias</th>
               <th>Vigência</th>
               <th>Conferida pelo DP</th>
             </tr>
           </thead>
           <tbody>
+            {versoes.length === 0 && (
+              <tr>
+                <td colSpan={7}>Nenhuma versão de parâmetros cadastrada.</td>
+              </tr>
+            )}
             {versoes.map((versaoTabela) => (
               <tr key={versaoTabela.id}>
                 <td>
@@ -1137,6 +1563,13 @@ function SecaoParametrosGerais({
                   {formatarMoedaReais(versaoTabela.salario_minimo)}
                 </td>
                 <td className={estilos.numero}>{versaoTabela.aliquota_fgts}%</td>
+                <td className={estilos.numero}>
+                  {versaoTabela.divisor_mensal_horas} h para{" "}
+                  {versaoTabela.carga_semanal_referencia_minutos / 60} h/semana
+                </td>
+                <td className={estilos.numero}>
+                  {versaoTabela.divisor_mensal_dias}
+                </td>
                 <td>
                   {formatarData(versaoTabela.inicio_vigencia)}
                   {versaoTabela.fim_vigencia
@@ -1149,19 +1582,46 @@ function SecaoParametrosGerais({
           </tbody>
         </table>
       </div>
+      {/* O exemplo numérico da nota sai da versão ATIVA, nunca de número escrito
+          aqui: nota de rodapé que afirma "220 h para 44 h semanais" continua
+          afirmando isso depois de o dono trocar o divisor. */}
+      <p className={estilos.notaRodape}>
+        O divisor de horas vale para a carga semanal escrita ao lado dele. O
+        divisor de quem cumpre outra jornada sai da proporção entre as duas:
+        divisor × carga semanal dela ÷ carga de referência.{" "}
+        {vigente ? (
+          <>
+            Hoje vigora {vigente.divisor_mensal_horas} h para{" "}
+            {vigente.carga_semanal_referencia_minutos / 60} h semanais, de modo
+            que uma jornada com metade dessa carga fica com metade do divisor.
+          </>
+        ) : (
+          <>Não há versão ativa, então não há divisor vigente para exibir.</>
+        )}{" "}
+        Quem não tem escala cadastrada fica com o divisor de referência. O
+        divisor de dias é o salário-dia do mensalista (falta e DSR sobre falta) e
+        não depende da jornada de ninguém.
+      </p>
       {!mostrarForm && (
         <div className={estilos.barraAcoes}>
           <button
             className={estilos.botaoLinha}
             type="button"
-            onClick={() => setMostrarForm(true)}
+            onClick={abrirFormulario}
           >
-            Nova versão dos parâmetros
+            {vigente
+              ? "Nova versão dos parâmetros"
+              : "Cadastrar a versão inicial dos parâmetros"}
           </button>
         </div>
       )}
       {mostrarForm && (
         <form className={estilos.formulario} onSubmit={enviar}>
+          <p className={estilos.notaRodape}>
+            {vigente
+              ? `Alíquota e divisores vieram da versão ativa desde ${formatarData(vigente.inicio_vigencia)} — confira antes de gravar.`
+              : "Nada foi pré-preenchido: não existe versão ativa de onde copiar. Todo número aqui é escolha sua."}
+          </p>
           <div className={estilos.campoGrupoCurto}>
             <label className={estilos.rotulo} htmlFor="salario-minimo">
               Salário mínimo (R$)
@@ -1190,6 +1650,54 @@ function SecaoParametrosGerais({
               required
               value={aliquotaFgts}
               onChange={(e) => setAliquotaFgts(e.target.value)}
+            />
+          </div>
+          <div className={estilos.campoGrupoCurto}>
+            <label className={estilos.rotulo} htmlFor="divisor-horas">
+              Divisor mensal de horas
+            </label>
+            <input
+              className={estilos.campo}
+              id="divisor-horas"
+              type="number"
+              min={0.01}
+              max={744}
+              step={0.01}
+              required
+              value={divisorHoras}
+              onChange={(e) => setDivisorHoras(e.target.value)}
+            />
+          </div>
+          <div className={estilos.campoGrupoCurto}>
+            <label className={estilos.rotulo} htmlFor="carga-referencia">
+              …para a carga semanal de (h)
+            </label>
+            <input
+              className={estilos.campo}
+              id="carga-referencia"
+              type="number"
+              min={0.1}
+              max={168}
+              step={0.1}
+              required
+              value={cargaReferencia}
+              onChange={(e) => setCargaReferencia(e.target.value)}
+            />
+          </div>
+          <div className={estilos.campoGrupoCurto}>
+            <label className={estilos.rotulo} htmlFor="divisor-dias">
+              Divisor mensal de dias
+            </label>
+            <input
+              className={estilos.campo}
+              id="divisor-dias"
+              type="number"
+              min={0.01}
+              max={31}
+              step={0.01}
+              required
+              value={divisorDias}
+              onChange={(e) => setDivisorDias(e.target.value)}
             />
           </div>
           <div className={estilos.campoGrupoCurto}>

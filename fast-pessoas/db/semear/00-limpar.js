@@ -38,6 +38,23 @@ const ORDEM_LIMPEZA = [
   'rh_folha.variavel_lancada',
   'rh_folha.competencia_folha',
 
+  // ---- ponto e banco de horas (0027) — tudo aqui é dado de demonstração,
+  // criado por 15-ponto.js. O que é CATÁLOGO da migration e NÃO sai:
+  // rh.jornada_versao (as 3 jornadas), rh.regra_banco_horas_versao (a regra
+  // padrão da empresa) e rh.feriado nacional. Ordem filho → pai: movimento e
+  // apuração apontam para colaborador e para a apuração; marcação aponta para
+  // o lote; escala aponta para jornada e colaborador.
+  'rh.banco_horas_movimento',
+  'rh.apuracao_ponto',
+  'rh.intercorrencia_ponto',
+  'rh.marcacao',
+  'rh.lote_importacao_ponto',
+  'rh.escala_colaborador',
+  // PARCIAL (ver CONDICAO_PARCIAL): a regra padrão da empresa é catálogo e
+  // fica; só as versões com escopo saem. Precisa vir DEPOIS de apuracao_ponto
+  // (que a referencia) e ANTES de cargo/estabelecimento/colaborador.
+  'rh.regra_banco_horas_versao',
+
   // ---- clima (respostas; as perguntas do CHECK-IN são catálogo)
   'rh_clima.checkin_resposta',
 
@@ -82,6 +99,8 @@ const ORDEM_LIMPEZA = [
   'rh.processo_admissao',
 
   // ---- SST (cat tem auto-referência: DELETE sem WHERE resolve de uma vez)
+  // A avaliação psicossocial da NR-1 (0029) referencia rh.aso: cai ANTES dele.
+  'rh.avaliacao_psicossocial',
   'rh.cat',
   'rh.epi_entrega',
   'rh.epi_item',
@@ -130,8 +149,25 @@ const ORDEM_LIMPEZA = [
   'rh.cargo_versao',
   'rh.cargo',
   'rh.estabelecimento_versao',
+  // PARCIAL: feriado de UNIDADE aponta para o estabelecimento e sai; o
+  // nacional é catálogo da 0027 e fica.
+  'rh.feriado',
   'rh.estabelecimento',
 ];
+
+/**
+ * Tabelas MISTAS — parte é catálogo semeado por migration, parte é dado de
+ * demonstração. Entram na ORDEM_LIMPEZA na posição correta das FKs, mas com
+ * um recorte: só o que a demo criou sai.
+ *
+ * As condições são literais deste arquivo (nunca vêm de fora): a validação de
+ * PADRAO_TABELA continua cobrindo o nome da tabela.
+ */
+const CONDICAO_PARCIAL = {
+  'rh.regra_banco_horas_versao':
+    'estabelecimento_id IS NOT NULL OR cargo_id IS NOT NULL OR colaborador_id IS NOT NULL',
+  'rh.feriado': 'estabelecimento_id IS NOT NULL',
+};
 
 // Triggers a desligar: append-only (audit.bloquear_mutacao) e congelamento de
 // vigência/versão encerrada bloqueiam DELETE. Desligamos os triggers de
@@ -142,17 +178,24 @@ async function semear(cliente) {
   const removidos = {};
 
   await comTriggersDesligados(cliente, TABELAS_COM_TRIGGER, async () => {
-    // Um único statement com todos os DELETE: o banco é remoto e 55 idas e
-    // voltas custariam mais que a limpeza inteira. Sem parâmetros, o pg usa o
-    // protocolo simples e devolve um resultado por comando, na ordem enviada.
-    const resultados = await cliente.query(
-      ORDEM_LIMPEZA.map((tabela) => `DELETE FROM ${tabela}`).join('; ')
-    );
-    const lista = Array.isArray(resultados) ? resultados : [resultados];
-    ORDEM_LIMPEZA.forEach((tabela, indice) => {
-      const quantidade = lista[indice]?.rowCount ?? 0;
-      if (quantidade > 0) removidos[tabela] = quantidade;
-    });
+    // UM DELETE POR IDA AO BANCO, na ordem filho → pai.
+    //
+    // Já foi um statement só (55 DELETE juntos), para economizar round-trip num
+    // banco remoto. Não dá mais: com o ponto semeado a limpeza passa de 10 mil
+    // marcações e o lote inteiro estourava o `statement_timeout` de 2 min do
+    // servidor — o timeout é POR STATEMENT, então o que era uma economia virou
+    // um teto. Separado, cada tabela tem o orçamento inteiro para si e a
+    // mensagem de erro aponta a tabela exata. O custo é ~55 × a latência da
+    // conexão, ordens de grandeza abaixo do que a semeadura toda leva.
+    for (const tabela of ORDEM_LIMPEZA) {
+      const condicao = CONDICAO_PARCIAL[tabela];
+      const sql = condicao
+        ? `DELETE FROM ${tabela} WHERE ${condicao}`
+        : `DELETE FROM ${tabela}`;
+      // eslint-disable-next-line no-await-in-loop -- ordem filho → pai é a regra
+      const resultado = await cliente.query(sql);
+      if (resultado.rowCount > 0) removidos[tabela] = resultado.rowCount;
+    }
 
     // Usuários: some com todo mundo, MENOS o usuário real (id 2).
     const usuarios = await cliente.query(

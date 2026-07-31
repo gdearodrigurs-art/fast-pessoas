@@ -633,8 +633,9 @@ export interface ContagemEnps extends Record<string, unknown> {
 
 /**
  * eNPS da última pesquisa ENCERRADA com pergunta 0–10. O cálculo em si e o
- * mínimo de amostra vêm do domínio de pesquisas (calcularEnps / MINIMO_AMOSTRA)
- * — aqui só a contagem, para não existirem duas definições de eNPS no sistema.
+ * cálculo vem do domínio de pesquisas (calcularEnps) e o mínimo de amostra vem
+ * do parâmetro de privacidade (lerMinimoPorRecorte, migrations 0044/0045) —
+ * aqui só a contagem, para não existirem duas definições de eNPS no sistema.
  */
 export async function contagemEnpsUltimaEncerrada(): Promise<ContagemEnps | null> {
   const linhas = await consultar<ContagemEnps>(

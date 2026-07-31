@@ -1,66 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { Cabecalho, acaoCabecalho } from "@/app/cabecalho";
 import Link from "next/link";
 import estilos from "./page.module.css";
+import { ArvoreVertical } from "./arvore-vertical";
+import {
+  CORES_UNIDADE,
+  COR_SEM_UNIDADE,
+  dataBr,
+  rotuloLiderados,
+  type No,
+  type Organograma,
+} from "./tipos";
 
-// Tipos do contrato da rota (espelham src/dominios/organograma/esquemas.ts).
-// Nenhum campo de remuneração existe aqui — nem salário de pessoa, nem faixa
-// de vaga. O organograma é estrutura.
-
-interface NoBase {
-  chave: string;
-  nivel: number;
-  estabelecimento_id: number | null;
-  unidade: string | null;
-  cargo_id: number | null;
-  cargo_nome: string | null;
-  destacado: boolean;
-}
-
-interface NoPessoa extends NoBase {
-  tipo: "pessoa";
-  colaborador_id: number;
-  nome: string;
-  status: string;
-  diretos: number;
-  total_subarvore: number;
-  gestor_fora_do_quadro: boolean;
-  fora_da_hierarquia: boolean;
-  filhos: No[];
-}
-
-interface NoVaga extends NoBase {
-  tipo: "vaga";
-  vaga_id: number;
-  titulo: string;
-  status: string;
-  prazo_alvo: string;
-}
-
-type No = NoPessoa | NoVaga;
-
-interface Opcao {
-  id: number;
-  nome: string;
-}
-
-interface Organograma {
-  alcance: "todos" | "equipe" | "proprio";
-  raizes: NoPessoa[];
-  vagas_sem_no: NoVaga[];
-  headcount: {
-    realizado: number;
-    aprovado: number;
-    vagas_em_aberto: number;
-    lacuna: number;
-  } | null;
-  unidades: Opcao[];
-  cargos: Opcao[];
-  destacados: number;
-  avisos: string[];
-}
+// Duas visões sobre a MESMA árvore e o MESMO estado de colapso:
+//   - vertical (arvore-vertical.tsx): de cima para baixo, conectores em CSS —
+//     é o formato que a diretoria pediu; padrão em tela larga;
+//   - lista indentada (aqui embaixo): fallback de tela estreita, onde 62
+//     cartões lado a lado não cabem, e modo texto para quem preferir.
+// Quem escolhe é o CSS (media query + classe `modoLista`), não o JavaScript.
 
 const ROTULO_ALCANCE: Record<Organograma["alcance"], string> = {
   todos: "Você está vendo a estrutura completa da empresa.",
@@ -69,24 +35,14 @@ const ROTULO_ALCANCE: Record<Organograma["alcance"], string> = {
     "Você está vendo a sua linha de reporte: de você até a diretoria. Colegas de outras áreas não aparecem.",
 };
 
-// Cor por unidade. Paleta fixa (nada de gerar cor por hash — ilegível): a
-// posição na lista de unidades ativas decide, então a cor é estável entre
-// recargas enquanto o cadastro não mudar.
-const CORES_UNIDADE = [
-  "#d21217",
-  "#1f6f8b",
-  "#6b4fa0",
-  "#2e7d4f",
-  "#b06a00",
-  "#7a5c3e",
-  "#4a4f9c",
-  "#a03c6e",
-];
-const COR_SEM_UNIDADE = "#8c8781";
+// Zoom da árvore vertical: escala aplicada por `zoom` no CSS. Os limites são
+// o que ainda se lê (0,5 já é cartão minúsculo) e o que ainda cabe (1,4).
+const ESCALA_MINIMA = 0.5;
+const ESCALA_MAXIMA = 1.4;
+const PASSO_ESCALA = 0.1;
 
-function dataBr(iso: string): string {
-  const [ano, mes, dia] = iso.split("-");
-  return dia && mes && ano ? `${dia}/${mes}/${ano}` : iso;
+function limitarEscala(valor: number): number {
+  return Math.min(ESCALA_MAXIMA, Math.max(ESCALA_MINIMA, Math.round(valor * 10) / 10));
 }
 
 async function lerErro(resposta: Response): Promise<string> {
@@ -126,6 +82,14 @@ export function ArvoreOrganograma() {
   const [buscaCampo, setBuscaCampo] = useState("");
   const [busca, setBusca] = useState("");
   const [recolhidos, setRecolhidos] = useState<Set<string>>(new Set());
+  const [escala, setEscala] = useState(1);
+  const [modoLista, setModoLista] = useState(false);
+  const rolagemRef = useRef<HTMLDivElement>(null);
+  // Contador de "reenquadre pedido". Recolher/expandir TUDO refaz o desenho
+  // inteiro e precisa reenquadrar, mas o estado que muda (`recolhidos`) é o
+  // mesmo de recolher UM ramo — que não deve mexer na rolagem. O contador
+  // separa as duas intenções sem inspecionar o conjunto.
+  const [reenquadres, setReenquadres] = useState(0);
 
   // Busca com respiro: 2 caracteres é o mínimo aceito pelo esquema da rota.
   useEffect(() => {
@@ -176,6 +140,14 @@ export function ArvoreOrganograma() {
     return mapa;
   }, [dados]);
 
+  const corDe = useCallback(
+    (estabelecimentoId: number | null) =>
+      estabelecimentoId === null
+        ? COR_SEM_UNIDADE
+        : corPorUnidade.get(estabelecimentoId) ?? COR_SEM_UNIDADE,
+    [corPorUnidade]
+  );
+
   const linhas = useMemo(() => {
     if (!dados) return [];
     const saida: { no: No; temFilhos: boolean; recolhido: boolean }[] = [];
@@ -203,7 +175,37 @@ export function ArvoreOrganograma() {
     chavesComFilhos(dados.raizes, chaves);
     // A raiz fica aberta: organograma todo fechado não serve para nada.
     setRecolhidos(new Set(chaves.filter((chave) => !raizes.has(chave))));
+    setReenquadres((atual) => atual + 1);
   };
+
+  const expandirTudo = () => {
+    setRecolhidos(new Set());
+    setReenquadres((atual) => atual + 1);
+  };
+
+  /**
+   * Enquadra a RAIZ no contêiner de rolagem.
+   *
+   * Todo `.nivel` é flex com `justify-content: center`, então a raiz fica no
+   * centro horizontal do desenho — mas o contêiner nasce em `scrollLeft = 0`,
+   * na ponta ESQUERDA. Com o quadro inteiro (64 cartões de 214px) são ~13 mil
+   * px de conteúdo numa janela de ~1 mil: quem abria a tela via cinco cartões
+   * do meio da hierarquia e nenhum sinal de que o topo da empresa estava a 6
+   * mil px à direita. Nem o zoom mínimo resolvia. Centralizar o contêiner é,
+   * por construção do CSS, enquadrar a raiz.
+   */
+  const enquadrarRaiz = useCallback(() => {
+    const rolagem = rolagemRef.current;
+    if (!rolagem) return;
+    rolagem.scrollLeft = (rolagem.scrollWidth - rolagem.clientWidth) / 2;
+  }, []);
+
+  // Dado novo (carga, filtro, busca), mudança de escala, volta da lista para a
+  // árvore e recolher/expandir em massa refazem o desenho todo — cada um deles
+  // reenquadra. Recolher UM ramo não entra: quem mexe num ramo perderia o lugar.
+  useEffect(() => {
+    enquadrarRaiz();
+  }, [enquadrarRaiz, dados, escala, modoLista, reenquadres]);
 
   const temFiltro = Boolean(unidade || cargo || busca);
 
@@ -340,7 +342,7 @@ export function ArvoreOrganograma() {
               </button>
               <button
                 className={estilos.botaoSecundario}
-                onClick={() => setRecolhidos(new Set())}
+                onClick={expandirTudo}
                 type="button"
               >
                 Expandir
@@ -380,13 +382,85 @@ export function ArvoreOrganograma() {
           )}
 
           {linhas.length > 0 && (
-            <ul className={estilos.arvore}>
+            <div className={modoLista ? estilos.modoLista : undefined}>
+              {/* Controles da visão em árvore. Ficam FORA do contêiner de
+                  rolagem: rolar a árvore para os lados não os leva junto, e o
+                  `position: sticky` os mantém no topo enquanto se desce. */}
+              <div className={estilos.barraVisual}>
+                <div className={estilos.grupoZoom}>
+                  <span className={estilos.rotulo}>Zoom</span>
+                  <button
+                    aria-label="Diminuir o zoom da árvore"
+                    className={estilos.botaoZoom}
+                    disabled={escala <= ESCALA_MINIMA}
+                    onClick={() =>
+                      setEscala((atual) => limitarEscala(atual - PASSO_ESCALA))
+                    }
+                    type="button"
+                  >
+                    −
+                  </button>
+                  <span className={estilos.valorZoom}>
+                    {Math.round(escala * 100)}%
+                  </span>
+                  <button
+                    aria-label="Aumentar o zoom da árvore"
+                    className={estilos.botaoZoom}
+                    disabled={escala >= ESCALA_MAXIMA}
+                    onClick={() =>
+                      setEscala((atual) => limitarEscala(atual + PASSO_ESCALA))
+                    }
+                    type="button"
+                  >
+                    +
+                  </button>
+                  <button
+                    className={estilos.botaoSecundario}
+                    onClick={() => setEscala(1)}
+                    type="button"
+                  >
+                    Ajustar em 100%
+                  </button>
+                  <button
+                    className={estilos.botaoSecundario}
+                    onClick={enquadrarRaiz}
+                    type="button"
+                  >
+                    Voltar à raiz
+                  </button>
+                </div>
+                <button
+                  className={estilos.botaoSecundario}
+                  onClick={() => setModoLista((atual) => !atual)}
+                  type="button"
+                >
+                  {modoLista ? "Ver em árvore" : "Ver como lista"}
+                </button>
+                <span className={estilos.dicaBarra}>
+                  A árvore abre enquadrada na raiz; arraste para os lados para
+                  percorrer. Recolha um ramo pelo rodapé do cartão.
+                </span>
+              </div>
+
+              <div className={estilos.visaoArvore}>
+                <div className={estilos.rolagem} ref={rolagemRef}>
+                  <div
+                    className={estilos.arvoreVertical}
+                    style={{ "--escala": escala } as CSSProperties}
+                  >
+                    <ArvoreVertical
+                      alternar={alternar}
+                      corDe={corDe}
+                      raizes={dados?.raizes ?? []}
+                      recolhidos={recolhidos}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <ul className={`${estilos.arvore} ${estilos.visaoLista}`}>
               {linhas.map(({ no, temFilhos, recolhido }) => {
-                const cor =
-                  no.estabelecimento_id === null
-                    ? COR_SEM_UNIDADE
-                    : corPorUnidade.get(no.estabelecimento_id) ??
-                      COR_SEM_UNIDADE;
+                const cor = corDe(no.estabelecimento_id);
                 return (
                   <li
                     className={`${estilos.linha} ${
@@ -436,7 +510,7 @@ export function ArvoreOrganograma() {
                             className={estilos.contagem}
                             title="liderados diretos / total da subárvore"
                           >
-                            {no.diretos} direto(s) · {no.total_subarvore} total
+                            {rotuloLiderados(no)}
                           </span>
                         )}
                         {no.fora_da_hierarquia && (
@@ -470,7 +544,8 @@ export function ArvoreOrganograma() {
                   </li>
                 );
               })}
-            </ul>
+              </ul>
+            </div>
           )}
 
           {dados && dados.vagas_sem_no.length > 0 && (

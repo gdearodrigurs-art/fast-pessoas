@@ -4,10 +4,10 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
+import { chaveSensivel } from "../usuarios/esquemas";
 import {
   Credenciais,
   Desativacao2fa,
-  Papel,
   PayloadSessao,
   TrocaSenha,
 } from "./esquemas";
@@ -16,32 +16,39 @@ import {
   atualizarTotpSecret,
   buscarPorEmail,
   buscarPorId,
+  listarChavesDoUsuario,
   registrarAcao,
   UsuarioIdentidade,
 } from "./repositorio";
 
-// 2FA obrigatório para todo papel que vê dado de PESSOA além do próprio.
-// `recrutador` e `lider_td` entraram na migration 0019 e foram incluídos aqui:
-//  - recrutador  → dado pessoal de candidato (nome, contato, currículo) e
-//                  parecer de seleção, inclusive de reprovado (rs.parecer.ver);
-//  - lider_td    → ficha e headcount do quadro (rh.colaborador.ver) e resultado
-//                  consolidado de avaliação (avaliacao.resultado.ver, chave
-//                  restrita com trilha de leitura).
-// Conta comprometida em qualquer um dos dois = vazamento de dado de pessoas.
-// `funcionario` e `gestor` seguem fora: veem o próprio registro e o dos
-// liderados diretos, com 2FA opcional (decisão anterior do projeto, mantida).
-const PAPEIS_COM_2FA = new Set([
-  "rh",
-  "recrutador",
-  "lider_td",
-  "dp",
-  "diretoria",
-  "admin",
-]);
-
 // Hash sacrificial: iguala o tempo de resposta quando o e-mail não existe,
 // para não denunciar quais contas estão cadastradas.
 const HASH_FANTASMA = hashSync(globalThis.crypto.randomUUID(), 12);
+
+/**
+ * Quem precisa de segundo fator? Quem tiver, no perfil que o administrador
+ * compôs em /perfis, ao menos UMA chave que exija 2FA.
+ *
+ * Até a migration 0040 isto era uma lista de NOMES DE PAPEL no código
+ * (`PAPEIS_COM_2FA`), e por isso ampliar um perfil pela tela — dar alcance de
+ * empresa inteira ao slot `funcionario`, por exemplo — deixava a segunda etapa
+ * de autenticação para trás: 70 fichas atrás de uma senha só. Agora a
+ * exigência viaja junto com a chave, e não com o nome de quem a recebeu:
+ * compor uma chave dessas sobre QUALQUER papel, inclusive um criado amanhã,
+ * passa a exigir 2FA sem ninguém atualizar lista nenhuma.
+ *
+ * Duas fontes em OU, de propósito — a rede só pode FECHAR, nunca abrir:
+ *  - `permissao.exige_2fa`, declarado na migration junto com a chave (dado
+ *    sensível, alcance de empresa inteira ou administração do acesso);
+ *  - `chaveSensivel()`, a mesma lista que já marca o selo de sensível na tela
+ *    /perfis e gera a trilha de leitura.
+ * Esquecer o flag numa chave sensível nova não abre a porta; e uma chave
+ * marcada só no banco também não depende do TypeScript para valer.
+ */
+async function usuarioExige2fa(usuarioId: number): Promise<boolean> {
+  const chaves = await listarChavesDoUsuario(usuarioId);
+  return chaves.some((linha) => linha.exige_2fa || chaveSensivel(linha.chave));
+}
 
 export type ResultadoAutenticacao =
   | { ok: true; sessao: PayloadSessao; precisa_configurar_2fa: boolean }
@@ -90,7 +97,7 @@ export async function autenticar(
   }
 
   let precisaConfigurar2fa = false;
-  if (PAPEIS_COM_2FA.has(usuario.papel)) {
+  if (await usuarioExige2fa(usuario.id)) {
     if (usuario.totp_secret) {
       if (!credenciais.codigo_totp) {
         return { ok: false, motivo: "totp_obrigatorio" };
@@ -189,10 +196,6 @@ export async function validarTotpDoUsuario(
 const EMISSOR_TOTP = "Fast Pessoas";
 const ROTULO_2FA = "Autenticação em duas etapas";
 
-export function papelExige2fa(papel: Papel): boolean {
-  return PAPEIS_COM_2FA.has(papel);
-}
-
 async function exigirUsuarioAtivo(
   sessao: PayloadSessao
 ): Promise<UsuarioIdentidade> {
@@ -214,7 +217,7 @@ export async function consultarSituacao2fa(
   const usuario = await exigirUsuarioAtivo(sessao);
   return {
     configurado: Boolean(usuario.totp_secret),
-    obrigatorio: papelExige2fa(usuario.papel),
+    obrigatorio: await usuarioExige2fa(usuario.id),
   };
 }
 
@@ -286,17 +289,20 @@ export async function confirmarAtivacao2fa(
 
 /**
  * Desativa o 2FA exigindo prova dupla: senha atual + código TOTP válido.
- * Papéis com 2FA obrigatório (rh/dp/diretoria/admin) não podem desativar.
+ * Quem compõe alguma chave que exige 2FA não pode desativar — a trava segue a
+ * mesma régua da entrada (usuarioExige2fa), para não haver porta dos fundos:
+ * seria inútil passar a exigir segundo fator no login se o próprio usuário
+ * pudesse desligá-lo depois de entrar.
  */
 export async function desativar2fa(
   sessao: PayloadSessao,
   dados: Desativacao2fa
 ): Promise<void> {
   const usuario = await exigirUsuarioAtivo(sessao);
-  if (papelExige2fa(usuario.papel)) {
+  if (await usuarioExige2fa(usuario.id)) {
     throw new ErroHttp(
       403,
-      "O seu papel exige autenticação em duas etapas — ela não pode ser desativada."
+      "O seu perfil de acesso exige autenticação em duas etapas — ela não pode ser desativada."
     );
   }
   if (!usuario.totp_secret) {

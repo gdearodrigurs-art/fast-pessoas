@@ -5,6 +5,8 @@ import {
   FiltroColaboradores,
   Genero,
   GENEROS,
+  MINIMO_POR_RECORTE_MIN,
+  MINIMO_POR_RECORTE_PADRAO,
   StatusAcao,
   StatusColaborador,
   TipoOcorrencia,
@@ -1881,4 +1883,67 @@ export async function contarQuadro(): Promise<{
     ativos: Number(linhas[0].ativos),
     afastados: Number(linhas[0].afastados),
   };
+}
+
+// ------------------------------------------------------------------ parâmetro de privacidade (0044)
+
+/**
+ * O k vigente da supressão de recorte pequeno. Linha única por construção
+ * (CHECK id = 1); se ela sumir, o fallback é o padrão de fábrica — relatório
+ * agregado nunca deve degradar para "sem supressão" por falta de configuração.
+ */
+export async function lerMinimoPorRecorte(): Promise<number> {
+  const linhas = await consultar<{ minimo_por_recorte: number }>(
+    "SELECT minimo_por_recorte FROM sistema.parametro_privacidade WHERE id = 1"
+  );
+  const valor = Number(linhas[0]?.minimo_por_recorte);
+  return Number.isInteger(valor) && valor >= MINIMO_POR_RECORTE_MIN
+    ? valor
+    : MINIMO_POR_RECORTE_PADRAO;
+}
+
+export interface ParametroPrivacidadeVigente {
+  minimo_por_recorte: number;
+  atualizado_em: string;
+  atualizado_por_nome: string | null;
+}
+
+export async function lerParametroPrivacidade(): Promise<ParametroPrivacidadeVigente> {
+  const linhas = await consultar<{
+    minimo_por_recorte: number;
+    atualizado_em: string;
+    atualizado_por_nome: string | null;
+  }>(
+    `SELECT p.minimo_por_recorte,
+            -- ISO explícito: o driver devolveria Date e a rota serializaria em
+            -- formato de locale do servidor.
+            to_char(p.atualizado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+              AS atualizado_em,
+            u.nome AS atualizado_por_nome
+       FROM sistema.parametro_privacidade p
+       LEFT JOIN sistema.usuario u ON u.id = p.atualizado_por
+      WHERE p.id = 1`
+  );
+  const linha = linhas[0];
+  return {
+    minimo_por_recorte: Number(linha?.minimo_por_recorte ?? MINIMO_POR_RECORTE_PADRAO),
+    atualizado_em: String(linha?.atualizado_em ?? ""),
+    atualizado_por_nome: linha?.atualizado_por_nome ?? null,
+  };
+}
+
+/** Grava dentro da transação de quem chama — a trilha vai junto ou não vai. */
+export async function gravarMinimoPorRecorte(
+  cliente: PoolClient,
+  usuarioId: number,
+  valor: number
+): Promise<number> {
+  const { rows } = await cliente.query<{ minimo_por_recorte: number }>(
+    `UPDATE sistema.parametro_privacidade
+        SET minimo_por_recorte = $1, atualizado_em = now(), atualizado_por = $2
+      WHERE id = 1
+      RETURNING minimo_por_recorte`,
+    [valor, usuarioId]
+  );
+  return Number(rows[0].minimo_por_recorte);
 }

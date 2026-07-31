@@ -4,7 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho, acaoCabecalho } from "@/app/cabecalho";
 import {
-  AVISO_ANONIMATO,
+  avisoAnonimato,
   ROTULOS_ESCALA_1_5,
   TipoPergunta,
 } from "@/dominios/pesquisas/esquemas";
@@ -34,6 +34,8 @@ interface Formulario {
   colaborador_vinculado: boolean;
   unidade: string | null;
   dentro_do_periodo: boolean;
+  /** Piso de anonimato vigente — o aviso promete ESTE número, não um fixo. */
+  minimo_amostra: number;
 }
 
 function formatarData(dataIso: string): string {
@@ -149,7 +151,7 @@ export function FormularioResposta({ id }: { id: number }) {
           <>
             {formulario.pesquisa.anonima ? (
               <p className={estilos.avisoAnonimato}>
-                {AVISO_ANONIMATO}
+                {avisoAnonimato(formulario.minimo_amostra)}
                 {formulario.unidade
                   ? ` Unidade registrada com a resposta: ${formulario.unidade}.`
                   : ""}

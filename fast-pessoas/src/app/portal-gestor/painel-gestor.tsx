@@ -4,7 +4,41 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Cabecalho, acaoCabecalho } from "@/app/cabecalho";
 import { ROTULOS_NIVEL_ALERTA, NivelAlerta } from "@/dominios/ferias/esquemas";
+import {
+  formatarMinutos,
+  ROTULOS_TIPO_INTERCORRENCIA,
+} from "@/dominios/ponto/esquemas";
 import estilos from "./page.module.css";
+
+/** Contrato de GET /api/ponto/resumo/equipe (domínio de ponto). */
+interface LinhaPontoEquipe {
+  colaborador_id: number;
+  nome: string;
+  matricula: string;
+  saldo_banco_minutos: number;
+  total_he_ultimo_mes_minutos: number;
+  media_he_por_dia_util_minutos_ultimo_mes: number;
+  ultima_apuracao: { competencia: string } | null;
+  intercorrencias_abertas: number;
+  limite_positivo_minutos: number | null;
+  acima_do_limite: boolean;
+}
+
+interface PontoEquipe {
+  disponivel: boolean;
+  explicacao?: string;
+  liderados?: LinhaPontoEquipe[];
+  saldo_total_minutos?: number;
+  acima_do_limite?: number;
+  intercorrencias?: {
+    id: number;
+    colaborador_id: number;
+    colaborador_nome: string;
+    data: string;
+    tipo: keyof typeof ROTULOS_TIPO_INTERCORRENCIA;
+    detalhe: string;
+  }[];
+}
 
 // Tipos do payload de /api/portais/gestor. Repetidos aqui de propósito (é a
 // convenção das outras telas): o cliente conhece o contrato da rota, não o
@@ -162,6 +196,41 @@ const ROTULOS_SITUACAO: Record<ItemAvaliacao["situacao"], string> = {
   enviada: "Enviada",
 };
 
+/** 45 ou 90 do tipo do ciclo; null quando o ciclo não é de experiência. */
+function marcoDoCiclo(tipo: ItemAvaliacao["tipo"]): 45 | 90 | null {
+  if (tipo === "experiencia_45") return 45;
+  if (tipo === "experiencia_90") return 90;
+  return null;
+}
+
+/**
+ * Ciclo de experiência ABERTO da pessoa do alerta — o destino do link.
+ *
+ * Casar pelo marco exato (`experiencia_45` para o alerta de dia 45) não fecha
+ * NUNCA: quando o marco 45 entra na janela do alerta, o ciclo daquele marco já
+ * foi decidido, e o que continua aberto é o do marco seguinte. O alerta é do
+ * CONTRATO de experiência, não de um marco isolado — vale qualquer ciclo de
+ * experiência da mesma pessoa, com preferência pelo do marco anunciado quando
+ * ele existe, e o mais urgente como desempate. A tela diz de qual marco é o
+ * ciclo para onde está mandando.
+ */
+function cicloDaExperiencia(
+  abertas: ItemAvaliacao[] | undefined,
+  colaboradorId: number,
+  marco: 45 | 90
+): ItemAvaliacao | undefined {
+  const daPessoa = (abertas ?? [])
+    .filter(
+      (aberta) =>
+        aberta.colaborador_id === colaboradorId &&
+        marcoDoCiclo(aberta.tipo) !== null
+    )
+    .sort((a, b) => a.dias_para_prazo - b.dias_para_prazo);
+  return (
+    daPessoa.find((aberta) => marcoDoCiclo(aberta.tipo) === marco) ?? daPessoa[0]
+  );
+}
+
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
   return `${dia}/${mes}/${ano}`;
@@ -216,6 +285,7 @@ function Bloco({
 
 export function PainelGestor() {
   const [portal, setPortal] = useState<Portal | null>(null);
+  const [ponto, setPonto] = useState<PontoEquipe | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [gestorId, setGestorId] = useState<number | null>(null);
 
@@ -242,6 +312,30 @@ export function PainelGestor() {
       ativo = false;
     };
   }, [gestorId]);
+
+  // Banco de horas do time vem do domínio DONO do dado, com a chave dele
+  // (ponto.ver.equipe). Segue o gestor escolhido no seletor; falhar aqui só
+  // esconde o bloco, não derruba o portal.
+  useEffect(() => {
+    const alvo = gestorId ?? portal?.gestor.colaborador_id ?? null;
+    if (alvo === null) return;
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/ponto/resumo/equipe?gestor_id=${alvo}`,
+          { cache: "no-store" }
+        );
+        if (!ativo || !resposta.ok) return;
+        setPonto((await resposta.json()) as PontoEquipe);
+      } catch {
+        /* portal segue sem o bloco de ponto */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [gestorId, portal?.gestor.colaborador_id]);
 
   return (
     <div className={estilos.pagina}>
@@ -396,6 +490,112 @@ export function PainelGestor() {
                 saúde — não aparecem aqui nem para o gestor.
               </p>
             </Bloco>
+
+            {/* ------------------------------------ 1b. banco de horas do time
+                Pedido textual da diretoria: saldo por liderado e QUEM ESTÁ
+                ESTOURANDO hora extra. O "estourando" não é número fixo na
+                tela — vem da regra de banco de horas resolvida para cada
+                pessoa (empresa → unidade → cargo → pessoa). */}
+            {ponto !== null && (
+              <Bloco
+                titulo="Banco de horas do time"
+                href="/ponto"
+                hrefRotulo="Abrir ponto"
+              >
+                {!ponto.disponivel ? (
+                  <p className={estilos.bloqueado}>{ponto.explicacao}</p>
+                ) : (ponto.liderados?.length ?? 0) === 0 ? (
+                  <p className={estilos.vazio}>
+                    Nenhum liderado com relação vigente.
+                  </p>
+                ) : (
+                  <>
+                    <p className={estilos.detalhe}>
+                      Saldo somado do time:{" "}
+                      <strong>
+                        {formatarMinutos(ponto.saldo_total_minutos ?? 0)}
+                      </strong>{" "}
+                      · {ponto.acima_do_limite ?? 0} acima do limite da própria
+                      regra
+                    </p>
+                    <ul className={estilos.lista}>
+                      {(ponto.liderados ?? []).map((linha) => (
+                        <li key={linha.colaborador_id}>
+                          {/* O saldo fora da etiqueta de propósito: a etiqueta
+                              é caixa-alta e transformaria "0h55" em "0H55". */}
+                          <span
+                            className={classeEtiqueta(
+                              linha.acima_do_limite ? "critico" : "informativo"
+                            )}
+                          >
+                            {linha.acima_do_limite ? "estourando" : "no limite"}
+                          </span>
+                          <strong>
+                            {formatarMinutos(linha.saldo_banco_minutos)}
+                          </strong>{" "}
+                          <Link
+                            className={estilos.nomeLink}
+                            href={`/ponto/espelho/${linha.colaborador_id}`}
+                          >
+                            {linha.nome}
+                          </Link>
+                          <span className={estilos.detalhe}>
+                            HE no último mês{" "}
+                            {formatarMinutos(linha.total_he_ultimo_mes_minutos)}{" "}
+                            · média por dia{" "}
+                            {formatarMinutos(
+                              linha.media_he_por_dia_util_minutos_ultimo_mes
+                            )}
+                            {linha.ultima_apuracao
+                              ? ` · ${linha.ultima_apuracao.competencia}`
+                              : " · sem apuração"}
+                            {linha.acima_do_limite &&
+                            linha.limite_positivo_minutos !== null
+                              ? ` · ESTOURANDO o limite de ${formatarMinutos(linha.limite_positivo_minutos)}`
+                              : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+
+                    <h3 className={estilos.subtituloBloco}>
+                      Intercorrências e ajustes pendentes (
+                      {ponto.intercorrencias?.length ?? 0})
+                    </h3>
+                    {(ponto.intercorrencias?.length ?? 0) === 0 ? (
+                      <p className={estilos.vazio}>
+                        Nenhuma pendência de ponto na equipe.
+                      </p>
+                    ) : (
+                      <ul className={estilos.lista}>
+                        {(ponto.intercorrencias ?? []).map((item) => (
+                          <li key={item.id}>
+                            <span className={classeEtiqueta("atencao")}>
+                              {formatarData(item.data)}
+                            </span>
+                            <Link
+                              className={estilos.nomeLink}
+                              href={`/ponto/espelho/${item.colaborador_id}?ano=${item.data.slice(0, 4)}&mes=${Number(item.data.slice(5, 7))}`}
+                            >
+                              {item.colaborador_nome}
+                            </Link>
+                            <span className={estilos.detalhe}>
+                              {ROTULOS_TIPO_INTERCORRENCIA[item.tipo]} —{" "}
+                              {item.detalhe}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className={estilos.notaRodape}>
+                      Horas, não reais: o valor pago da hora extra é da folha.
+                      Corrigir marcação é ato do DP (marcação nova com
+                      justificativa) — o gestor vê e cobra.
+                    </p>
+                  </>
+                )}
+              </Bloco>
+            )}
 
             {/* -------------------------------------------------- 2. férias */}
             <Bloco titulo="Férias da equipe" href="/ferias" hrefRotulo="Abrir férias">
@@ -700,13 +900,30 @@ export function PainelGestor() {
               ) : (
                 <>
                   <div className={estilos.numeros}>
-                    <div
-                      className={
-                        (portal.turnover.percentual ?? 0) >= 20
-                          ? `${estilos.numero} ${estilos.numeroAtencao}`
-                          : estilos.numero
-                      }
-                    >
+                    {/*
+                      AQUI HAVIA `(portal.turnover.percentual ?? 0) >= 20`
+                      pintando o número de "atenção". Vinte por cento não veio
+                      de lugar nenhum: não é lei, não é meta cadastrada, não
+                      está escrito em nenhum documento do projeto — foi
+                      escolhido por quem escreveu a tela. E a tela AFIRMAVA com
+                      cor: "o turnover da sua equipe está ruim". O gestor não
+                      tinha como discordar nem como mudar.
+
+                      Turnover bom depende do setor, do porte e do momento da
+                      empresa; 20% é excelente num call center e catastrófico
+                      numa engenharia. Um limite desses é exatamente o que a
+                      regra do dono manda ser do usuário.
+
+                      A correção honesta dentro desta tela é NÃO afirmar. O
+                      número, a janela, a memória de cálculo e o headcount
+                      médio continuam todos à vista, e quem lê julga. Pintar de
+                      novo só quando existir meta cadastrada para o indicador —
+                      e hoje "turnover" NÃO está no registry de indicadores
+                      (src/dominios/indicadores/valores.ts), então nem meta tem
+                      contra o que comparar. Está denunciado no relatório da
+                      varredura.
+                    */}
+                    <div className={estilos.numero}>
                       <strong>
                         {portal.turnover.percentual === null
                           ? "—"
@@ -779,7 +996,7 @@ export function PainelGestor() {
                   </h3>
                   {portal.alertas.experiencia === null ? (
                     <p className={estilos.bloqueado}>
-                      Requer a chave de admissões.
+                      Requer a chave de admissões (ou ser o gestor da equipe).
                     </p>
                   ) : portal.alertas.experiencia.length === 0 ? (
                     <p className={estilos.vazio}>
@@ -787,14 +1004,27 @@ export function PainelGestor() {
                     </p>
                   ) : (
                     <ul className={estilos.lista}>
-                      {portal.alertas.experiencia.map((item) => (
+                      {portal.alertas.experiencia.map((item) => {
+                        // G2: o alerta do marco 45/90 leva ao CICLO de
+                        // experiência aberto da pessoa (é o que o gestor vem
+                        // fazer); só cai na ficha quando não há ciclo aberto.
+                        const ciclo = cicloDaExperiencia(
+                          portal.avaliacoes?.abertas,
+                          item.colaborador_id,
+                          item.marco
+                        );
+                        return (
                         <li key={`${item.colaborador_id}-${item.marco}`}>
                           <span className={classeEtiqueta(item.gravidade)}>
                             dia {item.marco}
                           </span>
                           <Link
                             className={estilos.nomeLink}
-                            href={`/colaboradores/${item.colaborador_id}`}
+                            href={
+                              ciclo
+                                ? `/avaliacoes/${ciclo.ciclo_id}`
+                                : `/colaboradores/${item.colaborador_id}`
+                            }
                           >
                             {item.nome_completo}
                           </Link>
@@ -802,9 +1032,13 @@ export function PainelGestor() {
                             {formatarData(item.data_marco)} ·{" "}
                             {prazoTexto(item.dias_para_marco)}
                             {item.do_processo ? "" : " · data derivada da admissão"}
+                            {ciclo
+                              ? ` · responder a avaliação de ${marcoDoCiclo(ciclo.tipo)} dias`
+                              : ""}
                           </span>
                         </li>
-                      ))}
+                        );
+                      })}
                     </ul>
                   )}
                 </div>

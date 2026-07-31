@@ -9,12 +9,22 @@ export default async function PaginaRelatorios() {
     redirect("/entrar");
   }
   // Gate de renderização; cada rota de /api/relatorios reconfere relatorio.ver.
-  const linhas = await consultar<{ pode_ver: boolean }>(
-    "SELECT sistema.tem_permissao($1, 'relatorio.ver') AS pode_ver",
+  const linhas = await consultar<{
+    pode_ver: boolean;
+    pode_administrar_privacidade: boolean;
+  }>(
+    `SELECT sistema.tem_permissao($1, 'relatorio.ver')            AS pode_ver,
+            sistema.tem_permissao($1, 'privacidade.administrar')  AS pode_administrar_privacidade`,
     [sessao.usuario_id]
   );
   if (!linhas[0]?.pode_ver) {
     redirect("/");
   }
-  return <PainelRelatorios />;
+  return (
+    <PainelRelatorios
+      podeAdministrarPrivacidade={
+        linhas[0]?.pode_administrar_privacidade ?? false
+      }
+    />
+  );
 }

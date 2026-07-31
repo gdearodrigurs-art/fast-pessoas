@@ -4,7 +4,6 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
-  MINIMO_AMOSTRA,
   ROTULOS_STATUS_PESQUISA,
   ROTULOS_TIPO_PERGUNTA,
   ROTULOS_TIPO_PESQUISA,
@@ -47,6 +46,8 @@ interface Visao {
   pesquisas: PesquisaItem[];
   minhas_abertas: AbertaItem[];
   colaborador_vinculado: boolean;
+  /** Piso de anonimato vigente, vindo do servidor (0044/0045). */
+  minimo_amostra: number;
   pode: {
     administrar: boolean;
     responder: boolean;
@@ -244,7 +245,7 @@ export function PainelPesquisas({
         <p className={estilos.subtitulo}>
           Pesquisa anual, pulse survey e eNPS com plano de ação. Módulo separado
           do check-in diário: aqui a resposta é anônima e só aparece em recortes
-          com {MINIMO_AMOSTRA} respostas ou mais.
+          com {visao?.minimo_amostra ?? "…"} respostas ou mais.
         </p>
 
         {erro && <p className={estilos.erro}>{erro}</p>}

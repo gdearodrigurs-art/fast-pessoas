@@ -72,12 +72,13 @@ export interface PermissoesPortal {
   ver_aso: boolean;
   /** admissao.ver — marcos 45/90 do contrato de experiência. */
   ver_experiencia: boolean;
-  /** Escopo "todos" (rh/dp/diretoria/T&D): habilita o seletor de gestor. */
+  /** Alcance de empresa inteira (rh.colaborador.ver.todos): habilita o seletor. */
   escolher_gestor: boolean;
 }
 
 const CHAVES = [
   "rh.colaborador.ver",
+  "rh.colaborador.ver.todos",
   "ferias.aprovar",
   "ferias.administrar",
   "avaliacao.responder",
@@ -252,9 +253,10 @@ export async function montarPortalGestor(
   if (!chaves.has("rh.colaborador.ver")) {
     throw new ErroHttp(403, "Sem permissão para ver equipes.");
   }
-  // Mesma régua de colaboradores/servico.resolverEscopo: quem tem a chave e
-  // NÃO é papel gestor alcança todo mundo — e só esse escolhe gestor.
-  const escolherGestor = sessao.papel !== "gestor";
+  // Mesma régua de colaboradores/servico.resolverEscopo: quem alcança a empresa
+  // inteira escolhe o gestor; quem alcança só a própria equipe abre o próprio
+  // portal. O alcance é a CHAVE, não o nome do papel — ver migration 0039.
+  const escolherGestor = chaves.has("rh.colaborador.ver.todos");
   const meuColaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
   const opcoes = escolherGestor ? await listarGestoresComEquipe() : null;
 
@@ -334,7 +336,14 @@ function montarPermissoes(
     // relacao_gestor vigente no serviço — nunca conteúdo clínico". Fora desse
     // caso (portal de terceiro), exige a chave do módulo.
     ver_aso: chaves.has("sst.ver") || proprio,
-    ver_experiencia: chaves.has("admissao.ver"),
+    // Mesma régua do ASO, e por motivo mais forte: a decisão de efetivar ou
+    // desligar antes do marco (CLT 445/451) é do GESTOR, não do RH. Exigir
+    // `admissao.ver` deixava sem alerta justamente quem tem o prazo correndo —
+    // inclusive a diretora de pessoas, avaliadora de ciclos de experiência
+    // abertos. `proprio` significa "é o gestor desta equipe" e
+    // listarMarcosExperiencia já é escopada por EQUIPE_VIGENTE: nome e data do
+    // marco da própria equipe, nada de terceiro.
+    ver_experiencia: chaves.has("admissao.ver") || proprio,
     escolher_gestor: escolherGestor,
   };
 }

@@ -47,6 +47,15 @@ interface RelatorioComposicaoFamiliar {
   total_dependentes: number;
 }
 
+interface ParametroPrivacidade {
+  minimo_por_recorte: number;
+  atualizado_em: string;
+  atualizado_por_nome: string | null;
+  minimo: number;
+  maximo: number;
+  padrao: number;
+}
+
 interface LinhaContagem {
   rotulo: string;
   quantidade: number;
@@ -201,7 +210,119 @@ function TabelaRecortes({
   );
 }
 
-export function PainelRelatorios() {
+/**
+ * O piso de anonimato (k) deixou de ser constante no código (migration 0044).
+ * Este bloco é a tela dele: só aparece para quem tem `privacidade.administrar`,
+ * e ao salvar recarrega diversidade e composição familiar — a mudança tem que
+ * ser visível no mesmo lugar em que ela age, senão o administrador não tem como
+ * saber o que acabou de esconder ou revelar.
+ *
+ * A LISTA DO QUE O PISO GOVERNA É PARTE DA TELA, não decoração. Até a 0045 ele
+ * alcançava só três lugares, e quem digitava 20 aqui saía acreditando ter
+ * mudado a política inteira enquanto a pesquisa de clima e a pesquisa anual
+ * seguiam publicando com 5. Quem administrar um controle precisa ver o alcance
+ * dele; se um dia entrar uma tela nova sob o mesmo k, ela entra nesta lista.
+ */
+function BlocoPisoAnonimato({
+  aoSalvar,
+}: {
+  aoSalvar: (novoK: number) => void;
+}) {
+  const [parametro, setParametro] = useState<ParametroPrivacidade | null>(null);
+  const [valor, setValor] = useState<string>("");
+  const [salvando, setSalvando] = useState(false);
+  const [erroLocal, setErroLocal] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const resposta = await fetch("/api/relatorios/privacidade");
+      if (!resposta.ok) return;
+      const dados = (await resposta.json()) as ParametroPrivacidade;
+      setParametro(dados);
+      setValor(String(dados.minimo_por_recorte));
+    })();
+  }, []);
+
+  if (!parametro) return null;
+
+  async function salvar() {
+    setSalvando(true);
+    setErroLocal(null);
+    setAviso(null);
+    try {
+      const resposta = await fetch("/api/relatorios/privacidade", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minimo_por_recorte: Number(valor) }),
+      });
+      if (!resposta.ok) {
+        setErroLocal(await lerErro(resposta));
+        return;
+      }
+      const dados = (await resposta.json()) as ParametroPrivacidade;
+      setParametro(dados);
+      setValor(String(dados.minimo_por_recorte));
+      setAviso(`Piso salvo em ${dados.minimo_por_recorte}.`);
+      aoSalvar(dados.minimo_por_recorte);
+    } catch {
+      setErroLocal("Falha de conexão. Recarregue a página.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div className={estilos.parametroPrivacidade}>
+      <label htmlFor="piso-anonimato">
+        Piso de anonimato (k) — recorte com menos que isto não é publicado
+      </label>
+      <div className={estilos.parametroLinha}>
+        <input
+          id="piso-anonimato"
+          type="number"
+          min={parametro.minimo}
+          max={parametro.maximo}
+          step={1}
+          value={valor}
+          onChange={(evento) => setValor(evento.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => void salvar()}
+          disabled={
+            salvando || valor === String(parametro.minimo_por_recorte) || valor === ""
+          }
+        >
+          {salvando ? "Salvando…" : "Salvar piso"}
+        </button>
+        <span className={estilos.nota}>
+          entre {parametro.minimo} e {parametro.maximo}; padrão {parametro.padrao}
+          {parametro.atualizado_por_nome
+            ? ` · última alteração por ${parametro.atualizado_por_nome}`
+            : ""}
+        </span>
+      </div>
+      <p className={estilos.nota}>
+        Este piso vale para tudo que publica recorte de pessoas: diversidade e
+        composição familiar aqui; o card de diversidade e o eNPS do painel
+        executivo; o agregado por unidade do check-in diário de clima; e todo
+        recorte de resultado da pesquisa de clima — inclusive o aviso de
+        anonimato que o respondente lê antes de responder. Um piso só, porque
+        todos respondem à mesma pergunta: quantas pessoas precisam estar por
+        trás de um número para ele poder ser publicado.
+      </p>
+      {erroLocal && <p className={estilos.erro}>{erroLocal}</p>}
+      {aviso && <p className={estilos.nota}>{aviso}</p>}
+    </div>
+  );
+}
+
+export function PainelRelatorios({
+  podeAdministrarPrivacidade,
+}: {
+  podeAdministrarPrivacidade: boolean;
+}) {
   const [aba, setAba] = useState<Aba>("aniversariantes");
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(false);
@@ -440,10 +561,20 @@ export function PainelRelatorios() {
             <h2>Diversidade do quadro</h2>
             <p className={estilos.nota}>
               Gênero é autodeclarado e usado somente aqui, em agregado. Recorte
-              com menos de {diversidade?.minimo_por_recorte ?? 5} pessoas não é
-              publicado — em um quadro deste tamanho, publicar identificaria a
+              com menos de {diversidade?.minimo_por_recorte ?? "k"} pessoas não
+              é publicado — em um quadro deste tamanho, publicar identificaria a
               pessoa.
             </p>
+            {podeAdministrarPrivacidade && (
+              <BlocoPisoAnonimato
+                aoSalvar={() => {
+                  // O k mudou: as duas telas que ele governa têm de ser
+                  // recalculadas, não reaproveitadas do estado antigo.
+                  setDiversidade(null);
+                  setFamilia(null);
+                }}
+              />
+            )}
             {!diversidade ? (
               <p className={estilos.vazio}>Carregando…</p>
             ) : (

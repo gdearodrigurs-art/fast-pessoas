@@ -1,6 +1,7 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
 import {
+  ClassificacaoRisco,
   ResultadoAso,
   StatusCat,
   TipoAso,
@@ -235,6 +236,176 @@ export async function contarAtivosComAsoValido(): Promise<{
       WHERE c.status = 'ativo'`
   );
   return linhas[0] ?? { ativos: 0, com_aso_valido: 0 };
+}
+
+// ------------------------------------------------------------------ NR-1 / avaliação psicossocial
+
+/** ASO existente — usado para validar o vínculo da avaliação (mesmo titular). */
+export async function buscarAso(id: number): Promise<{
+  id: number;
+  colaborador_id: number;
+  data_exame: string;
+  validade: string | null;
+} | null> {
+  const linhas = await consultar<{
+    id: string;
+    colaborador_id: string;
+    data_exame: string;
+    validade: string | null;
+  }>(
+    `SELECT id, colaborador_id, data_exame::text AS data_exame,
+            validade::text AS validade
+       FROM rh.aso WHERE id = $1`,
+    [id]
+  );
+  if (linhas.length === 0) return null;
+  return {
+    id: Number(linhas[0].id),
+    colaborador_id: Number(linhas[0].colaborador_id),
+    data_exame: linhas[0].data_exame,
+    validade: linhas[0].validade,
+  };
+}
+
+/** Linha crua — observacoes_cifradas NUNCA sai daqui sem passar pelo serviço. */
+export interface PsicossocialLinha {
+  id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data_avaliacao: string;
+  validade: string | null;
+  classificacao_risco: ClassificacaoRisco;
+  observacoes_cifradas: string | null;
+  documento_id: number | null;
+  documento_titulo: string | null;
+  aso_id: number | null;
+  empresa_executora: string | null;
+  registrado_por_nome: string;
+  criado_em: string;
+}
+
+export async function listarPsicossociais(): Promise<PsicossocialLinha[]> {
+  const linhas = await consultar<{
+    id: string;
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    data_avaliacao: string;
+    validade: string | null;
+    classificacao_risco: ClassificacaoRisco;
+    observacoes_cifradas: string | null;
+    documento_id: string | null;
+    documento_titulo: string | null;
+    aso_id: string | null;
+    empresa_executora: string | null;
+    registrado_por_nome: string;
+    criado_em: string;
+  }>(
+    `SELECT p.id, p.colaborador_id, c.nome_completo AS colaborador_nome,
+            c.matricula, p.data_avaliacao::text AS data_avaliacao,
+            p.validade::text AS validade, p.classificacao_risco,
+            p.observacoes_cifradas, p.documento_id, d.titulo AS documento_titulo,
+            p.aso_id, p.empresa_executora, u.nome AS registrado_por_nome,
+            p.criado_em::text AS criado_em
+       FROM rh.avaliacao_psicossocial p
+       JOIN rh.colaborador c ON c.id = p.colaborador_id
+       JOIN sistema.usuario u ON u.id = p.registrado_por
+       LEFT JOIN rh.documento d ON d.id = p.documento_id
+      ORDER BY p.data_avaliacao DESC, p.id DESC`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    colaborador_id: Number(linha.colaborador_id),
+    documento_id:
+      linha.documento_id === null ? null : Number(linha.documento_id),
+    aso_id: linha.aso_id === null ? null : Number(linha.aso_id),
+  }));
+}
+
+export async function inserirPsicossocial(
+  cliente: PoolClient,
+  dados: {
+    colaborador_id: number;
+    data_avaliacao: string;
+    validade: string | null;
+    classificacao_risco: ClassificacaoRisco;
+    observacoes_cifradas: string | null;
+    documento_id: number | null;
+    aso_id: number | null;
+    empresa_executora: string | null;
+    registrado_por: number;
+  }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.avaliacao_psicossocial
+       (colaborador_id, data_avaliacao, validade, classificacao_risco,
+        observacoes_cifradas, documento_id, aso_id, empresa_executora,
+        registrado_por)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id`,
+    [
+      dados.colaborador_id,
+      dados.data_avaliacao,
+      dados.validade,
+      dados.classificacao_risco,
+      dados.observacoes_cifradas,
+      dados.documento_id,
+      dados.aso_id,
+      dados.empresa_executora,
+      dados.registrado_por,
+    ]
+  );
+  return Number(rows[0].id);
+}
+
+/**
+ * Última validade de avaliação psicossocial por colaborador não desligado —
+ * espelho exato do controle do ASO (afastados seguem monitorados).
+ */
+export async function listarValidadePsicossocialPorColaborador(): Promise<
+  ValidadePorColaborador[]
+> {
+  const linhas = await consultar<{
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    validade: string | null;
+  }>(
+    `SELECT c.id AS colaborador_id, c.nome_completo AS colaborador_nome,
+            c.matricula, max(p.validade)::text AS validade
+       FROM rh.colaborador c
+       LEFT JOIN rh.avaliacao_psicossocial p
+         ON p.colaborador_id = c.id AND p.validade IS NOT NULL
+      WHERE c.status <> 'desligado'
+      GROUP BY c.id, c.nome_completo, c.matricula
+      ORDER BY max(p.validade) ASC NULLS FIRST, c.nome_completo`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    colaborador_id: Number(linha.colaborador_id),
+  }));
+}
+
+/** Agregados do indicador — contagens, nunca conteúdo clínico. */
+export async function contarAtivosComPsicossocialValida(): Promise<{
+  ativos: number;
+  com_avaliacao_valida: number;
+}> {
+  const linhas = await consultar<{
+    ativos: number;
+    com_avaliacao_valida: number;
+  }>(
+    `SELECT count(*)::int AS ativos,
+            count(*) FILTER (WHERE EXISTS (
+              SELECT 1 FROM rh.avaliacao_psicossocial p
+               WHERE p.colaborador_id = c.id AND p.validade >= CURRENT_DATE
+            ))::int AS com_avaliacao_valida
+       FROM rh.colaborador c
+      WHERE c.status = 'ativo'`
+  );
+  return linhas[0] ?? { ativos: 0, com_avaliacao_valida: 0 };
 }
 
 // ------------------------------------------------------------------ EPI — catálogo

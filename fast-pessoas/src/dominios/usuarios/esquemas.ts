@@ -101,7 +101,16 @@ const GRUPOS_POR_PREFIXO: ReadonlyArray<readonly [string, string]> = [
   ["rh.auditar", "Administração do sistema"],
   ["usuario.", "Administração do sistema"],
   ["perfil.", "Administração do sistema"],
+  ["privacidade.", "Administração do sistema"],
   ["demanda.", "Demandas"],
+  // Estes três chegaram por migration (0021, 0026 e 0027) e ficaram sem mapa:
+  // as dez chaves de ponto, promoção/transferência e painel executivo caíam
+  // todas em "Outros", no fim da tela. Apareciam — o fallback funciona —, mas
+  // num balaio sem nome, que é o pior lugar para o administrador encontrar
+  // "quem pode ver o espelho de ponto da empresa inteira".
+  ["ponto.", "Ponto e banco de horas"],
+  ["movimentacao.", "Promoção e transferência"],
+  ["painel.", "Metas e indicadores"],
   ["clima.", "Clima"],
   ["pesquisa.", "Clima"],
   ["indicador.", "Metas e indicadores"],
@@ -124,12 +133,14 @@ const GRUPOS_POR_PREFIXO: ReadonlyArray<readonly [string, string]> = [
 export const ORDEM_GRUPOS: readonly string[] = [
   "Pessoas e ficha",
   "Cargos e estrutura",
+  "Promoção e transferência",
   "Demandas",
   "Férias",
   "Afastamentos",
   "Admissão",
   "Desligamento",
   "Benefícios",
+  "Ponto e banco de horas",
   "Folha de pagamento",
   "Saúde e segurança",
   "Recrutamento e seleção",
@@ -148,9 +159,60 @@ export function grupoDaChave(chave: string): string {
 }
 
 /**
- * Chaves que abrem dado sensível (remuneração, saúde, sigilo). A tela marca
- * cada uma com um selo para o administrador ver o peso do que concede — toda
- * leitura autorizada por elas grava em audit.leitura_sensivel.
+ * Chaves que o administrador precisa ver com PESO na tela /perfis: a caixa de
+ * cada uma recebe o selo de sensível.
+ *
+ * Duas portas de entrada nesta lista, e basta uma:
+ *   (a) autoriza leitura de dado pessoal identificável — remuneração, saúde,
+ *       sigilo, contato de titular externo, categoria especial (gênero
+ *       autodeclarado, dependente). Na prática: a leitura grava
+ *       audit.leitura_sensivel com esta chave em `chave_permissao`;
+ *   (b) dá alcance de EMPRESA INTEIRA sobre dado de pessoa. Linha a linha pode
+ *       não ser sensível; o volume é. Ver a ficha de UMA pessoa e ver a de 70 de
+ *       uma vez são concessões de peso diferente, e a tela tem que dizer isso.
+ *
+ * Alcance de EQUIPE fica de fora de propósito — é a fronteira que a migration
+ * 0039 desenhou (`rh.colaborador.ver` sozinha alcança si e liderados; o alcance
+ * amplo tem chave própria).
+ *
+ * LEITURA DA PORTA (b), fixada aqui porque a redação larga ("alcance de empresa
+ * inteira sobre dado de pessoa") já foi lida de dois jeitos: (b) vale quando o
+ * alcance amplo é sobre o MESMO tipo de dado que seria sensível pessoa a pessoa
+ * — ficha, documento, ponto, afastamento, saúde, remuneração. Não vale para
+ * fato trabalhista comum visto em lote (quem tem demanda aberta, quem está em
+ * processo de admissão, quem programou férias): senão metade do catálogo entra
+ * e o selo deixa de significar coisa alguma justamente por estar em tudo.
+ *
+ * COMO ESTA LISTA FOI CONFERIDA (refeita do zero em 2026-07-31, porque a
+ * conferência anterior — "das 17 chaves, exatamente 3 faltavam, nenhuma outra"
+ * — não era exaustiva: ela não enumerou os PONTOS DE TRILHA, enumerou as chaves
+ * que já estavam na lista). O método reproduzível é:
+ *   1. `grep -rn "chavePermissao:" src/ --include=*.ts` devolve TODOS os pontos
+ *      que gravam audit.leitura_sensivel; resolver as constantes (CHAVE_*) e as
+ *      chaves dinâmicas (ponto/servico.ts:2015 recebe a chave por parâmetro);
+ *      toda chave que aparecer ali é porta (a) até prova em contrário.
+ *   2. Ler as 81 linhas de `sistema.permissao` e, para cada uma que prometa
+ *      alcance amplo, abrir o payload que a rota devolve — a descrição da chave
+ *      não basta: `sst.ver` diz "sem conteúdo clínico" e devolve CAT com o
+ *      rótulo "Doença ocupacional" e descrição livre do acidente.
+ *   3. Antes de acrescentar qualquer chave, medir quantas contas passam a
+ *      exigir 2FA (a rede é de mão única: só fecha).
+ *
+ * Resultado da conferência de 2026-07-31: DUAS chaves faltavam (`sst.ver` e
+ * `folha.operar`, ambas abaixo), UMA foi avaliada e recusada com a conta feita
+ * (`ponto.ver.equipe`, na nota do fim), e nenhuma outra das 81 passa nas
+ * portas. As candidatas de alcance amplo sobre fato trabalhista comum —
+ * `desligamento.ver`, `demanda.ver.todas`, `admissao.ver`, `ferias.administrar`
+ * — ficam fora pela leitura de (b) acima: o que nelas é sensível de verdade
+ * (motivo do desligamento, respostas de entrevista, salário proposto) já tem
+ * chave própria, e essas chaves já estão nesta lista.
+ *
+ * CUIDADO AO MEXER — isto não é só cosmético desde a migration 0040:
+ * src/dominios/identidade/servico.ts soma `chaveSensivel()` em OU com
+ * `sistema.permissao.exige_2fa` para decidir quem precisa de segundo fator.
+ * Acrescentar chave aqui PASSA A EXIGIR 2FA de todo papel que a tenha. A rede é
+ * de mão única (só fecha), mas a conta de quem ela fecha é real: antes de
+ * incluir, rode o SELECT que lista os papéis que ganham a exigência.
  */
 const CHAVES_SENSIVEIS = new Set<string>([
   "rh.colaborador.sensivel.ver",
@@ -167,6 +229,101 @@ const CHAVES_SENSIVEIS = new Set<string>([
   "avaliacao.resultado.ver",
   "folha.ver",
   "folha.aprovar",
+  // ---------------------------------------------------------------- (b) alcance amplo
+  // A ficha de todo o quadro de uma vez (0039). É a caixa que MAIS precisa do
+  // selo e era justamente a que não o tinha: a tela oferecia "ver a empresa
+  // inteira" com o mesmo peso visual de uma chave qualquer.
+  "rh.colaborador.ver.todos",
+  // O GED inteiro (0024): atestado, contrato, holerite de qualquer pessoa.
+  "documento.ver.todos",
+  // Reescreve a ficha cadastral de qualquer pessoa — para editar, abre.
+  "rh.colaborador.editar",
+  // Espelho de ponto de qualquer pessoa (0027). O serviço de ponto já trata
+  // essa leitura como sensível ("revela rotina, atrasos e saúde") e grava a
+  // trilha com esta chave; só o selo faltava.
+  "ponto.administrar",
+  // ---------------------------------------------------------------- (a) já geram trilha
+  // Diversidade, performance e custo de pessoal (0026) — o serviço grava
+  // audit.leitura_sensivel em três pontos, inclusive sobre gênero autodeclarado.
+  "painel.executivo.ver",
+  // Diversidade (gênero autodeclarado) e composição familiar (dependentes):
+  // agregados, e ainda assim com trilha de leitura por decisão do domínio.
+  "relatorio.ver",
+  // Valor da oferta (é salário) e contato do candidato — titular externo, LGPD.
+  // As duas chaves abrem o mesmo payload no kanban da vaga, e a trilha registra
+  // ora uma ora outra conforme a que autorizou.
+  "rs.gerir",
+  "rs.ver",
+  // DEPENDENTE é dado de TERCEIRO — nome, nascimento, parentesco, CPF de quem
+  // nunca assinou nada com a empresa, e composição familiar por inferência.
+  // beneficios/servico.ts:1044 já gravava audit.leitura_sensivel com uma destas
+  // duas (conforme a que autorizou) ao ler dependente de quem não é o titular
+  // da sessão. Chave que gera trilha de leitura sensível e não aparecia como
+  // sensível era o sistema discordando de si mesmo. Só `dp` e `rh` as têm, e
+  // ambos já exigiam 2FA: nenhum login muda.
+  "adesao.gerir",
+  "beneficio.ver",
+  // "Ver afastamentos de TODOS os colaboradores" — porta (b). O detalhe clínico
+  // fica com afastamento.saude.ver, e sem ela até o TIPO vira rótulo genérico
+  // (afastamentos/esquemas.ts:29); o que sobra ainda é quem está afastado, desde
+  // quando e por quanto tempo, da empresa inteira. 90 dias de afastamento não
+  // precisam de CID para dizer o que dizem.
+  "afastamento.ver",
+  // ---------------------------------------------------------- achadas na reauditoria de 2026-07-31
+  // GÊMEA ESTRUTURAL DE afastamento.ver, e estava de fora. A descrição da chave
+  // no banco diz "sem conteúdo clínico", e é verdade que o detalhe cifrado do
+  // ASO fica com sst.saude.ver (na lista) — mas o que `sst.ver` devolve, da
+  // empresa inteira e com nome e matrícula, é:
+  //   GET /api/sst/cats          → CatVisao: tipo "Doença ocupacional" /
+  //     "Acidente típico" / "de trajeto", data, houve_afastamento e a DESCRIÇÃO
+  //     LIVRE do acidente (até 4.000 caracteres, sst/esquemas.ts:264);
+  //   GET /api/sst/psicossociais → PsicossocialCompleta: classificação de risco
+  //     psicossocial por pessoa (só as observações exigem sst.saude.ver).
+  // Acidente de trabalho e risco psicossocial nominais são saúde por qualquer
+  // leitura, e é o mesmo raciocínio que colocou afastamento.ver aqui. Deixar a
+  // gêmea fora era o sistema aplicar dois critérios ao mesmo tipo de dado.
+  // Medido antes: só `dp` e `rh` a possuem, ambos já exigiam 2FA — 0 contas
+  // mudam de fluxo de entrada.
+  "sst.ver",
+  // REMUNERAÇÃO DE PESSOA IDENTIFICADA, pela porta de escrita. `folha.ver` e
+  // `folha.aprovar` já estavam; `folha.operar` faltava, e o que ela devolve
+  // (repositorio.ts:273, VariavelResumo) é colaborador_nome + matricula +
+  // valor_centavos de toda a competência. É o mesmo precedente de
+  // rh.posicao.editar e rh.colaborador.editar, que estão aqui porque para
+  // escrever é preciso abrir. Medido antes: só `dp` a possui, já exigia 2FA —
+  // 0 contas mudam de fluxo de entrada.
+  "folha.operar",
+  // NÃO ENTRA: `movimentacao.solicitar`. Ela aparece como chave_permissao em dois
+  // pontos de trilha (demandas/servico.ts:410 e :880) e mesmo assim falha nas
+  // duas portas. Em :410 quem autoriza é a AUTORIA (`souSolicitante`, :398), não
+  // a chave — é o solicitante relendo o salário que ele mesmo digitou; a chave
+  // ali é o rótulo da trilha. Em :880 o dado é a faixa salarial do CARGO, banda
+  // de tabela, não remuneração de pessoa identificável (essa já tem
+  // rh.posicao.ver/editar, ambas na lista). E o alcance é de EQUIPE — liderados
+  // vigentes —, a fronteira que esta lista deixa de fora de propósito.
+  // Consequência medida antes de decidir: é a única candidata que vive também no
+  // papel `gestor` (6 contas, nenhuma com totp_secret). Incluí-la mandaria as
+  // seis para o enrolamento de 2FA. Se o dono quiser isso, o caminho é
+  // `sistema.permissao.exige_2fa` na chave — a 0040 separou "exige 2FA" de
+  // "sensível" justamente para elevar proteção sem mentir sobre o que a chave
+  // abre. Ver a migration 0044 para a conta completa.
+  //
+  // NÃO ENTRA, e esta é a omissão que a reauditoria de 2026-07-31 corrigiu no
+  // REGISTRO: `ponto.ver.equipe`. Ela é chave_permissao literal em
+  // audit.leitura_sensivel (ponto/servico.ts:2015, via ChaveAlcancePonto), e o
+  // próprio módulo descreve o que ela abre como "revela rotina, atrasos e
+  // saúde" (:1927). Pela letra da porta (a) ela entraria — e nunca tinha sido
+  // sequer citada aqui, nem para entrar nem para ficar fora. Fica fora pela
+  // MESMA razão de movimentacao.solicitar: o alcance é de EQUIPE (liderados
+  // vigentes), a fronteira que esta lista deixa de fora de propósito, enquanto
+  // a irmã de alcance amplo, `ponto.administrar`, já está na lista.
+  // Consequência medida antes de decidir, com a decisão real de
+  // usuarioExige2fa aplicada conta a conta: incluí-la levaria 6 contas do papel
+  // `gestor`, NENHUMA com totp_secret, para o enrolamento de 2FA —
+  // cristiane.carvalho, igor.guimaraes, leticia.falcao, marcio.macedo,
+  // rosana.gomes e a persona gestor@fastdemo.local, que a documentação da demo
+  // descreve como "só senha". Se o dono quiser gestor com segundo fator, o
+  // caminho continua sendo `sistema.permissao.exige_2fa` na chave.
 ]);
 
 export function chaveSensivel(chave: string): boolean {

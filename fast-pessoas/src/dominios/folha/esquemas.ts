@@ -46,6 +46,47 @@ export const esquemaAbrirCompetencia = z.object({
 
 export type AbrirCompetencia = z.infer<typeof esquemaAbrirCompetencia>;
 
+// ------------------------------------------------------------------ trava retroativa (G3)
+// Regra apresentada e aprovada na reunião de diretoria: "para frente, a
+// qualquer momento; para trás, não". O limite é o MÊS CORRENTE em
+// America/Sao_Paulo — o fuso de operação da empresa, não o do servidor.
+// Fica no domínio (e é aplicada no serviço) de propósito: um CHECK não pode
+// depender de now(), e um trigger de INSERT quebraria as competências
+// históricas que o semeador da demo carrega de propósito (ver 0028).
+
+/** Ano/mês corrente em America/Sao_Paulo — a "régua" da trava retroativa. */
+export function competenciaCorrente(agora: Date = new Date()): {
+  ano: number;
+  mes: number;
+} {
+  const [ano, mes] = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+  })
+    .format(agora)
+    .split("-")
+    .map(Number);
+  return { ano, mes };
+}
+
+/** Ordena competências como um número só (ano×12 + mês) para comparar. */
+function ordinalCompetencia(ano: number, mes: number): number {
+  return ano * 12 + mes;
+}
+
+/** True quando (ano, mês) é anterior ao mês corrente — abrir é proibido. */
+export function competenciaEhRetroativa(
+  ano: number,
+  mes: number,
+  agora: Date = new Date()
+): boolean {
+  const atual = competenciaCorrente(agora);
+  return (
+    ordinalCompetencia(ano, mes) < ordinalCompetencia(atual.ano, atual.mes)
+  );
+}
+
 // ------------------------------------------------------------------ rubricas
 
 export const NATUREZAS_RUBRICA = [
@@ -82,6 +123,9 @@ export const ROTULOS_TIPO_CALCULO: Record<TipoCalculo, string> = {
 
 // Códigos com regra FIXA no motor — identidade estável do catálogo (seed 0013).
 export const CODIGO_SALARIO_BASE = "1001";
+export const CODIGO_HE_50 = "1101";
+export const CODIGO_HE_100 = "1102";
+export const CODIGO_ADICIONAL_NOTURNO = "1103";
 export const CODIGO_FALTAS = "1201";
 export const CODIGO_DSR_FALTAS = "1202";
 export const CODIGO_INSS = "2001";
@@ -96,6 +140,22 @@ export const CODIGOS_AUTOMATICOS: readonly string[] = [
   CODIGO_INSS,
   CODIGO_IRRF,
   CODIGO_FGTS,
+];
+
+/**
+ * Rubricas que o sistema procura PELO CÓDIGO: as automáticas do motor mais as
+ * que a importação do ponto (HE 50/100, adicional noturno, faltas) e o desconto
+ * de benefício lançam sozinhas. Encerrar qualquer uma derruba o cálculo da
+ * competência inteira ou a importação — o encerramento recusa, e a tela nem
+ * oferece o botão.
+ */
+export const CODIGOS_DO_MOTOR: readonly string[] = [
+  ...CODIGOS_AUTOMATICOS,
+  CODIGO_HE_50,
+  CODIGO_HE_100,
+  CODIGO_ADICIONAL_NOTURNO,
+  CODIGO_FALTAS,
+  CODIGO_DESCONTO_BENEFICIO,
 ];
 
 const esquemaData = z
@@ -147,15 +207,94 @@ export const esquemaNovaVersaoRubrica = z
 
 export type NovaVersaoRubrica = z.infer<typeof esquemaNovaVersaoRubrica>;
 
+/**
+ * Tipos de cálculo que uma rubrica NOVA pode ter. Os automáticos
+ * ('automatico', 'salario_base') têm regra fixa no motor, amarrada ao código
+ * do catálogo (0013) — rubrica nova com esse tipo nunca seria calculada nem
+ * lançável, então a tela nem oferece.
+ */
+export const TIPOS_CALCULO_LANCAVEIS = [
+  "valor_informado",
+  "horas_adicional",
+  "percentual_salario",
+] as const;
+
+export const esquemaNovaRubrica = z
+  .object({
+    codigo: z
+      .string()
+      .trim()
+      .regex(/^\d{4}$/, "Código deve ter exatamente 4 dígitos (ex.: 1305)"),
+    nome: z
+      .string()
+      .trim()
+      .min(2, "Informe o nome da rubrica")
+      .max(80, "Nome acima do limite"),
+    natureza: z.enum(NATUREZAS_RUBRICA),
+    incide_inss: z.boolean(),
+    incide_irrf: z.boolean(),
+    incide_fgts: z.boolean(),
+    tipo_calculo: z.enum(TIPOS_CALCULO_LANCAVEIS),
+    parametro: z
+      .number()
+      .gt(0, "Parâmetro deve ser maior que zero")
+      .max(999_999, "Parâmetro acima do limite")
+      .transform((valor) => Math.round(valor * 10_000) / 10_000)
+      .nullable()
+      .optional(),
+    inicio_vigencia: esquemaData,
+  })
+  .superRefine((dados, contexto) => {
+    const exigeParametro =
+      dados.tipo_calculo === "percentual_salario" ||
+      dados.tipo_calculo === "horas_adicional";
+    if (exigeParametro && (dados.parametro === null || dados.parametro === undefined)) {
+      contexto.addIssue({
+        code: "custom",
+        path: ["parametro"],
+        message: "Este tipo de cálculo exige o parâmetro (fator ou percentual)",
+      });
+    }
+  });
+
+export type NovaRubrica = z.infer<typeof esquemaNovaRubrica>;
+
+/**
+ * ENCERRAMENTO de rubrica, por vigência — o único jeito de tirar do catálogo
+ * uma rubrica criada por engano. Não existe DELETE: `rubrica_versao` é imutável
+ * depois de encerrada (trigger rh.bloquear_versao_encerrada, 0002) e o item de
+ * folha já calculado aponta para a VERSÃO, que precisa continuar existindo para
+ * o holerite antigo continuar explicável. Encerrar dá fim de vigência à versão
+ * ativa e tira a rubrica da lista de lançamento — o passado fica de pé.
+ *
+ * O motivo é obrigatório: quem abrir a trilha daqui a um ano precisa ler por
+ * que a verba saiu do catálogo, não só que saiu.
+ */
+export const esquemaEncerrarRubrica = z.object({
+  fim_vigencia: esquemaData,
+  motivo: z
+    .string({ error: "Informe o motivo do encerramento" })
+    .trim()
+    .min(5, "Diga por que a rubrica está sendo encerrada")
+    .max(200, "Motivo acima do limite"),
+});
+
+export type EncerramentoRubrica = z.infer<typeof esquemaEncerrarRubrica>;
+
 // ------------------------------------------------------------------ variáveis
 
-export const ORIGENS_VARIAVEL = ["manual", "beneficio"] as const;
+// Origem é RASTREIO do insumo, não enfeite: é ela que permite reimportar sem
+// duplicar (o serviço apaga só o lote da própria origem) e é ela que diz na
+// tela se o número veio de um sistema ou da mão de alguém. 'ponto' entrou na
+// migration 0032, junto com a ligação apuração → folha.
+export const ORIGENS_VARIAVEL = ["manual", "beneficio", "ponto"] as const;
 
 export type OrigemVariavel = (typeof ORIGENS_VARIAVEL)[number];
 
 export const ROTULOS_ORIGEM_VARIAVEL: Record<OrigemVariavel, string> = {
   manual: "Manual",
   beneficio: "Benefício",
+  ponto: "Ponto (apuração)",
 };
 
 export const esquemaLancarVariavel = z
@@ -291,6 +430,22 @@ export const esquemaNovosParametrosFolha = z.object({
     message: "Salário mínimo deve ser maior que zero",
   }),
   aliquota_fgts: z.number().gt(0).max(100),
+  // Divisores da folha (0038). O horário anda em PAR com a carga semanal a que
+  // se refere: 220 h é o divisor DE 44 h semanais (2640 min), e o divisor de
+  // quem tem outra carga sai da proporção entre as duas.
+  divisor_mensal_horas: z
+    .number()
+    .gt(0, "Divisor mensal de horas deve ser maior que zero")
+    .max(744, "Divisor mensal de horas não cabe em um mês (máx. 744 h)"),
+  carga_semanal_referencia_minutos: z
+    .number()
+    .int("Carga semanal de referência em minutos inteiros")
+    .gt(0, "Carga semanal de referência deve ser maior que zero")
+    .max(10_080, "Carga semanal de referência não cabe em uma semana"),
+  divisor_mensal_dias: z
+    .number()
+    .gt(0, "Divisor mensal de dias deve ser maior que zero")
+    .max(31, "Divisor mensal de dias não passa de 31"),
   inicio_vigencia: esquemaData,
 });
 
@@ -302,6 +457,12 @@ export type NovosParametrosFolha = z.infer<typeof esquemaNovosParametrosFolha>;
 export const esquemaEntradaCasoTeste = z.object({
   salario: z.number().min(0).max(9_999_999),
   dependentes: z.number().int().min(0).max(99),
+  /**
+   * Carga semanal da jornada do caso, em minutos — é ela que dá o divisor da
+   * hora (0038). Ausente = caso sem jornada, que cai no divisor de referência
+   * dos parâmetros; é o que todos os casos anteriores à 0038 querem dizer.
+   */
+  carga_semanal_minutos: z.number().int().gt(0).max(10_080).optional(),
   variaveis: z
     .array(
       z.object({

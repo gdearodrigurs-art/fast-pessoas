@@ -368,6 +368,33 @@ export function DetalheAvaliacao({ id }: { id: number }) {
               )}
             </div>
 
+            {/* ---------------- estado explicado (G1a) ----------------
+                Sempre desenhado: quem não é o avaliador via, antes, uma
+                página sem formulário, sem resultado e sem explicação. */}
+            <section className={estilos.cartaoSituacao}>
+              <h2>{detalhe.situacao.titulo}</h2>
+              <p className={estilos.detalheSituacao}>
+                {detalhe.situacao.detalhe}
+              </p>
+              <p className={estilos.proximoPasso}>
+                <b>Próximo passo:</b> {detalhe.situacao.proximo_passo}
+              </p>
+              <p className={estilos.rotuloSituacao}>
+                O que você pode fazer aqui
+              </p>
+              <ul className={estilos.listaPosso}>
+                {detalhe.situacao.o_que_posso_fazer.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+              {!detalhe.pode.sou_avaliador && !detalhe.pode.resultado_ver && (
+                <p className={estilos.notaLGPD}>
+                  Notas por indicador e resultado consolidado são restritos
+                  (avaliacao.resultado.ver) — ausência, não máscara.
+                </p>
+              )}
+            </section>
+
             {/* ---------------- resultado consolidado (restrito) ---------------- */}
             {detalhe.resultado && (
               <section className={estilos.cartaoResultado}>
@@ -649,60 +676,75 @@ export function DetalheAvaliacao({ id }: { id: number }) {
                   {erroAcao && <p className={comum.erroAcao}>{erroAcao}</p>}
                 </>
               ) : (
-                detalhe.respostas &&
-                detalhe.respostas.length > 0 && (
-                  <>
-                    <h2 className={estilos.subtitulo} style={{ marginTop: 8 }}>
-                      Respostas do avaliador
-                    </h2>
-                    {detalhe.estrutura.pilares.map((pilar) => (
-                      <section className={estilos.cartaoPilar} key={pilar.id}>
-                        <div className={estilos.cabecalhoPilar}>
-                          <h3>{pilar.nome}</h3>
-                          <span className={estilos.pesoPilar}>
-                            peso {pilar.peso}%
-                          </span>
-                        </div>
-                        {pilar.indicadores.map((indicador) => {
-                          const resposta = detalhe.respostas?.find(
-                            (r) => r.indicador_id === indicador.id
-                          );
-                          return (
-                            <div
-                              className={estilos.linhaIndicador}
-                              key={indicador.id}
-                            >
-                              <div className={estilos.infoIndicador}>
-                                <div className={estilos.nomeIndicador}>
-                                  {indicador.nome}
-                                </div>
-                              </div>
-                              {resposta ? (
-                                resposta.nao_observado ? (
-                                  <span
-                                    className={`${comum.badge} ${comum.badgeWarning}`}
-                                  >
-                                    não observado
-                                  </span>
-                                ) : (
-                                  <span className={comum.valorBarra}>
-                                    {resposta.nota} / {NOTA_MAXIMA}
-                                  </span>
-                                )
-                              ) : (
-                                <span
-                                  className={`${comum.badge} ${comum.badgeNeutro}`}
-                                >
-                                  sem resposta
+                /* Leitura: SEMPRE desenha o que está sendo perguntado (com a
+                   régua de cada indicador). Antes só aparecia quando já havia
+                   resposta — daí a página vazia enquanto o avaliador não
+                   respondia. */
+                <>
+                  <h2 className={estilos.subtitulo} style={{ marginTop: 8 }}>
+                    {detalhe.respostas && detalhe.respostas.length > 0
+                      ? "Respostas do avaliador"
+                      : `O que está sendo avaliado — modelo v${ciclo.modelo_versao} congelado no ciclo`}
+                  </h2>
+                  {detalhe.estrutura.pilares.map((pilar) => (
+                    <section className={estilos.cartaoPilar} key={pilar.id}>
+                      <div className={estilos.cabecalhoPilar}>
+                        <h3>{pilar.nome}</h3>
+                        <span className={estilos.pesoPilar}>
+                          peso {pilar.peso}%
+                        </span>
+                      </div>
+                      {pilar.indicadores.map((indicador) => {
+                        const resposta = detalhe.respostas?.find(
+                          (r) => r.indicador_id === indicador.id
+                        );
+                        return (
+                          <div
+                            className={estilos.linhaIndicador}
+                            key={indicador.id}
+                          >
+                            <div className={estilos.infoIndicador}>
+                              <div className={estilos.nomeIndicador}>
+                                {indicador.nome}{" "}
+                                <span className={estilos.pesoIndicador}>
+                                  · peso {indicador.peso}
                                 </span>
-                              )}
+                              </div>
+                              <div className={estilos.descricaoIndicador}>
+                                {indicador.descricao}
+                              </div>
                             </div>
-                          );
-                        })}
-                      </section>
-                    ))}
-                  </>
-                )
+                            {detalhe.respostas === null ? (
+                              <span
+                                className={`${comum.badge} ${comum.badgeNeutro}`}
+                              >
+                                nota restrita
+                              </span>
+                            ) : resposta ? (
+                              resposta.nao_observado ? (
+                                <span
+                                  className={`${comum.badge} ${comum.badgeWarning}`}
+                                >
+                                  não observado
+                                </span>
+                              ) : (
+                                <span className={comum.valorBarra}>
+                                  {resposta.nota} / {NOTA_MAXIMA}
+                                </span>
+                              )
+                            ) : (
+                              <span
+                                className={`${comum.badge} ${comum.badgeNeutro}`}
+                              >
+                                sem resposta
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </section>
+                  ))}
+                </>
               ))}
 
             {/* Avaliador sem resultado.ver, pós-envio */}

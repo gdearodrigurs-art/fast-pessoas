@@ -1,3 +1,4 @@
+import { PoolClient } from "pg";
 import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { cifrar, decifrar } from "../../lib/cifra";
@@ -7,13 +8,17 @@ import { inserirEvento } from "../colaboradores/repositorio";
 import { inserirCiencia } from "../documentos/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import {
+  ClassificacaoRisco,
   EntregaEpi,
   formatarData,
   formatarDataHora,
   ItemEpi,
+  PsicossocialVinculada,
   RegistroAso,
   RegistroCat,
+  RegistroPsicossocial,
   ResultadoAso,
+  ROTULOS_CLASSIFICACAO_RISCO,
   ROTULOS_RESULTADO_ASO,
   ROTULOS_STATUS_CAT,
   ROTULOS_TIPO_ASO,
@@ -24,6 +29,7 @@ import {
 } from "./esquemas";
 import {
   buscarAfastamentoAcidente,
+  buscarAso,
   buscarCat,
   buscarColaborador,
   buscarDocumento,
@@ -32,11 +38,13 @@ import {
   cienciaExistente,
   colaboradorDoUsuario,
   contarAtivosComAsoValido,
+  contarAtivosComPsicossocialValida,
   EntregaEpiLinha,
   inserirAso,
   inserirCat,
   inserirEntregaEpi,
   inserirItemEpi,
+  inserirPsicossocial,
   ItemEpiLinha,
   listarAfastamentosAcidente,
   listarAsos,
@@ -44,14 +52,18 @@ import {
   listarEntregasDoColaborador,
   listarEntregasEpi,
   listarItensEpi,
+  listarPsicossociais,
   listarValidadePorColaborador,
+  listarValidadePsicossocialPorColaborador,
   marcarCienciaEntregaEpi,
   marcarDevolucaoEpi,
   registrarLeituraSensivel,
   temPermissao,
+  ValidadePorColaborador,
 } from "./repositorio";
 
 const TABELA_ASO = "rh.aso";
+const TABELA_PSICOSSOCIAL = "rh.avaliacao_psicossocial";
 const TABELA_EPI_ITEM = "rh.epi_item";
 const TABELA_EPI_ENTREGA = "rh.epi_entrega";
 const TABELA_CAT = "rh.cat";
@@ -59,6 +71,7 @@ const TABELA_CIENCIA = "rh.ciencia";
 const CHAVE_GERIR = "sst.gerir";
 const CHAVE_SAUDE_VER = "sst.saude.ver";
 const RECURSO_RESTRICOES = "rh.aso.restricoes";
+const RECURSO_PSICOSSOCIAL = "rh.avaliacao_psicossocial.observacoes";
 
 // ------------------------------------------------------------------ apoio de datas
 
@@ -211,6 +224,21 @@ export async function registrarAso(
     documentoTitulo = documento.titulo;
   }
 
+  // NR-1 acoplada: o laudo da avaliação (se houver) é conferido ANTES da
+  // transação, junto com o do ASO — a avaliação nasce na mesma transação.
+  let psicossocialDocumentoTitulo: string | null = null;
+  if (dados.psicossocial?.documento_id) {
+    const documento = await buscarDocumento(dados.psicossocial.documento_id);
+    if (!documento) {
+      throw new ErroHttpCampo(
+        400,
+        "Documento da avaliação psicossocial não encontrado no GED.",
+        "psicossocial.documento_id"
+      );
+    }
+    psicossocialDocumentoTitulo = documento.titulo;
+  }
+
   // Cifra ANTES da transação: o texto em claro não chega perto do banco.
   const cifrado = dados.restricoes ? cifrar(dados.restricoes) : null;
   const validade = dados.validade ?? null;
@@ -268,6 +296,18 @@ export async function registrarAso(
       },
       registrado_por: sessao.usuario_id,
     });
+    // "Todo mundo que fizer o ASO agora já entra nessa modalidade": quando a
+    // tela oferece e o operador aceita, a avaliação psicossocial nasce aqui,
+    // vinculada — mesma transação, tudo ou nada.
+    if (dados.psicossocial) {
+      await gravarPsicossocial(cliente, sessao, {
+        ...dados.psicossocial,
+        colaborador_id: dados.colaborador_id,
+        aso_id: asoId,
+        colaborador_rotulo: `${colaborador.nome_completo} (${colaborador.matricula})`,
+        documento_titulo: psicossocialDocumentoTitulo,
+      });
+    }
     return asoId;
   });
 
@@ -290,15 +330,21 @@ export interface PainelVencimentos {
   vence_30: ItemVencimento[];
   /** vence entre 31 e 60 dias */
   vence_60: ItemVencimento[];
-  /** colaboradores monitorados sem nenhum ASO com validade registrada */
+  /** monitorados sem nenhum registro (ASO ou avaliação) com validade */
   sem_validade: number;
   /** colaboradores não desligados monitorados */
   total_monitorado: number;
   em_dia: number;
 }
 
-export async function apurarVencimentosAso(): Promise<PainelVencimentos> {
-  const linhas = await listarValidadePorColaborador();
+/**
+ * Painel de vencimento a partir da última validade por colaborador. Usado
+ * pelo ASO e, com a MESMA régua, pela avaliação psicossocial (a NR-1 anda ao
+ * lado do ASO — controle equivalente, não um controle menor).
+ */
+function montarPainelVencimento(
+  linhas: ValidadePorColaborador[]
+): PainelVencimentos {
   const hoje = hojeSaoPaulo();
   const limite30 = somarDias(hoje, 30);
   const limite60 = somarDias(hoje, 60);
@@ -335,6 +381,10 @@ export async function apurarVencimentosAso(): Promise<PainelVencimentos> {
   return painel;
 }
 
+export async function apurarVencimentosAso(): Promise<PainelVencimentos> {
+  return montarPainelVencimento(await listarValidadePorColaborador());
+}
+
 /**
  * Indicador para o registry (src/dominios/indicadores/valores.ts):
  * % de colaboradores ATIVOS com ASO dentro da validade. Agregado puro —
@@ -344,6 +394,284 @@ export async function valorIndicadorAsosValidos(): Promise<number | null> {
   const { ativos, com_aso_valido } = await contarAtivosComAsoValido();
   if (ativos === 0) return null;
   return Math.round((com_aso_valido / ativos) * 1000) / 10;
+}
+
+// ------------------------------------------------------------------ NR-1 / avaliação psicossocial
+
+/**
+ * Item completo — SÓ para quem tem sst.saude.ver: classificação de risco e
+ * observações decifradas. Cada observação decifrada grava
+ * audit.leitura_sensivel.
+ */
+export interface PsicossocialCompleta {
+  id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data_avaliacao: string;
+  validade: string | null;
+  classificacao_risco: ClassificacaoRisco;
+  classificacao_rotulo: string;
+  observacoes: string | null;
+  documento_id: number | null;
+  documento_titulo: string | null;
+  aso_id: number | null;
+  empresa_executora: string | null;
+  registrado_por_nome: string;
+  criado_em: string;
+}
+
+/**
+ * Item básico — para quem vê SST sem a chave de saúde: datas, empresa
+ * executora e o vínculo com o ASO. Classificação, observações e o laudo
+ * (documento sensível) ficam AUSENTES do payload (ausência, não máscara).
+ */
+export interface PsicossocialBasica {
+  id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data_avaliacao: string;
+  validade: string | null;
+  aso_id: number | null;
+  empresa_executora: string | null;
+}
+
+export type ListaPsicossociais =
+  | { com_saude: true; avaliacoes: PsicossocialCompleta[] }
+  | { com_saude: false; avaliacoes: PsicossocialBasica[] };
+
+export async function listarPsicossociaisParaSessao(
+  sessao: PayloadSessao
+): Promise<ListaPsicossociais> {
+  const verSaude = await temPermissao(sessao.usuario_id, CHAVE_SAUDE_VER);
+  const linhas = await listarPsicossociais();
+
+  if (!verSaude) {
+    return {
+      com_saude: false,
+      avaliacoes: linhas.map((linha) => ({
+        id: linha.id,
+        colaborador_id: linha.colaborador_id,
+        colaborador_nome: linha.colaborador_nome,
+        matricula: linha.matricula,
+        data_avaliacao: linha.data_avaliacao,
+        validade: linha.validade,
+        aso_id: linha.aso_id,
+        empresa_executora: linha.empresa_executora,
+      })),
+    };
+  }
+
+  const avaliacoes: PsicossocialCompleta[] = linhas.map((linha) => {
+    let observacoes: string | null = null;
+    if (linha.observacoes_cifradas !== null) {
+      try {
+        observacoes = decifrar(linha.observacoes_cifradas);
+      } catch {
+        // Nunca derruba o painel: sinaliza sem expor o conteúdo cifrado.
+        observacoes = "[conteúdo ilegível — falha na decifração]";
+      }
+    }
+    return {
+      id: linha.id,
+      colaborador_id: linha.colaborador_id,
+      colaborador_nome: linha.colaborador_nome,
+      matricula: linha.matricula,
+      data_avaliacao: linha.data_avaliacao,
+      validade: linha.validade,
+      classificacao_risco: linha.classificacao_risco,
+      classificacao_rotulo:
+        ROTULOS_CLASSIFICACAO_RISCO[linha.classificacao_risco],
+      observacoes,
+      documento_id: linha.documento_id,
+      documento_titulo: linha.documento_titulo,
+      aso_id: linha.aso_id,
+      empresa_executora: linha.empresa_executora,
+      registrado_por_nome: linha.registrado_por_nome,
+      criado_em: linha.criado_em,
+    };
+  });
+
+  // Trilha de leitura: um registro por avaliação cuja observação foi decifrada.
+  const idsComObservacao = linhas
+    .filter((linha) => linha.observacoes_cifradas !== null)
+    .map((linha) => String(linha.id));
+  if (idsComObservacao.length > 0) {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      for (const registroId of idsComObservacao) {
+        await registrarLeituraSensivel(cliente, {
+          usuarioId: sessao.usuario_id,
+          chavePermissao: CHAVE_SAUDE_VER,
+          recurso: RECURSO_PSICOSSOCIAL,
+          registroId,
+        });
+      }
+    });
+  }
+
+  return { com_saude: true, avaliacoes };
+}
+
+/**
+ * Gravação da avaliação DENTRO de uma transação já aberta — usada tanto pelo
+ * registro avulso quanto pelo fluxo acoplado ao ASO. Cifra na aplicação,
+ * audita SEM conteúdo clínico em claro e projeta o fato na linha do tempo.
+ */
+async function gravarPsicossocial(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  dados: PsicossocialVinculada & {
+    colaborador_id: number;
+    aso_id: number | null;
+    colaborador_rotulo: string;
+    documento_titulo: string | null;
+  }
+): Promise<number> {
+  const validade = dados.validade ?? null;
+  const documentoId = dados.documento_id ?? null;
+  const empresa = dados.empresa_executora ?? null;
+  // Cifra do dado de saúde: o texto em claro nunca vai ao banco nem à trilha.
+  const cifrado = dados.observacoes ? cifrar(dados.observacoes) : null;
+
+  const avaliacaoId = await inserirPsicossocial(cliente, {
+    colaborador_id: dados.colaborador_id,
+    data_avaliacao: dados.data_avaliacao,
+    validade,
+    classificacao_risco: dados.classificacao_risco,
+    observacoes_cifradas: cifrado,
+    documento_id: documentoId,
+    aso_id: dados.aso_id,
+    empresa_executora: empresa,
+    registrado_por: sessao.usuario_id,
+  });
+  await registrarAlteracao(cliente, {
+    usuarioId: sessao.usuario_id,
+    papel: sessao.papel,
+    acao: "criacao",
+    tabela: TABELA_PSICOSSOCIAL,
+    registroId: String(avaliacaoId),
+    diff: {
+      Colaborador: { de: null, para: dados.colaborador_rotulo },
+      "Data da avaliação": {
+        de: null,
+        para: formatarData(dados.data_avaliacao),
+      },
+      Validade: {
+        de: null,
+        para: validade ? formatarData(validade) : "sem validade definida",
+      },
+      // Classificação e observações são dado de saúde: só marca, nunca o valor.
+      "Classificação de risco": { de: null, para: "registrada (dado de saúde)" },
+      "Observações": {
+        de: null,
+        para: cifrado ? "registradas (cifradas)" : "não informadas",
+      },
+      "Empresa executora": { de: null, para: empresa ?? "não informada" },
+      Documento: { de: null, para: dados.documento_titulo ?? "sem documento" },
+      "ASO de origem": {
+        de: null,
+        para: dados.aso_id === null ? "avulsa" : `#${dados.aso_id}`,
+      },
+    },
+  });
+  // Linha do tempo: fato genérico, SEM classificação e SEM observações.
+  await inserirEvento(cliente, {
+    colaborador_id: dados.colaborador_id,
+    tipo: "avaliacao_psicossocial_registrada",
+    ocorrido_em: `${dados.data_avaliacao}T00:00:00Z`,
+    origem_tabela: TABELA_PSICOSSOCIAL,
+    origem_id: avaliacaoId,
+    resumo: `Avaliação psicossocial (NR-1) registrada em ${formatarData(dados.data_avaliacao)}${
+      dados.aso_id === null ? "" : ` — vinculada ao ASO #${dados.aso_id}`
+    }`,
+    payload: {
+      data_avaliacao: dados.data_avaliacao,
+      validade,
+      aso_id: dados.aso_id,
+    },
+    registrado_por: sessao.usuario_id,
+  });
+  return avaliacaoId;
+}
+
+/** Registro avulso (aba NR-1) — pode ou não apontar para um ASO existente. */
+export async function registrarPsicossocial(
+  sessao: PayloadSessao,
+  dados: RegistroPsicossocial
+): Promise<{ id: number }> {
+  const colaborador = await buscarColaborador(dados.colaborador_id);
+  if (!colaborador) {
+    throw new ErroHttpCampo(400, "Colaborador não encontrado.", "colaborador_id");
+  }
+  let documentoTitulo: string | null = null;
+  if (dados.documento_id) {
+    const documento = await buscarDocumento(dados.documento_id);
+    if (!documento) {
+      throw new ErroHttpCampo(
+        400,
+        "Documento não encontrado no GED.",
+        "documento_id"
+      );
+    }
+    documentoTitulo = documento.titulo;
+  }
+  const asoId = dados.aso_id ?? null;
+  if (asoId !== null) {
+    const aso = await buscarAso(asoId);
+    if (!aso) {
+      throw new ErroHttpCampo(400, "ASO não encontrado.", "aso_id");
+    }
+    if (aso.colaborador_id !== dados.colaborador_id) {
+      throw new ErroHttpCampo(
+        400,
+        "O ASO informado é de outro colaborador.",
+        "aso_id"
+      );
+    }
+  }
+
+  try {
+    const id = await comTransacao(sessao.usuario_id, (cliente) =>
+      gravarPsicossocial(cliente, sessao, {
+        ...dados,
+        aso_id: asoId,
+        colaborador_rotulo: `${colaborador.nome_completo} (${colaborador.matricula})`,
+        documento_titulo: documentoTitulo,
+      })
+    );
+    return { id };
+  } catch (erro) {
+    if (violacaoUnica(erro) === "avaliacao_psicossocial_por_aso") {
+      throw new ErroHttpCampo(
+        409,
+        "Este ASO já tem avaliação psicossocial vinculada.",
+        "aso_id"
+      );
+    }
+    throw erro;
+  }
+}
+
+/** Painel de vencimento da NR-1 — mesma régua do ASO (vencidas/30/60). */
+export async function apurarVencimentosPsicossocial(): Promise<PainelVencimentos> {
+  return montarPainelVencimento(
+    await listarValidadePsicossocialPorColaborador()
+  );
+}
+
+/**
+ * A "segunda linha" pedida pela diretoria, ao lado de asos_validos:
+ * % de colaboradores ATIVOS com avaliação psicossocial dentro da validade.
+ * Agregado puro — nenhum conteúdo clínico. null = nenhum colaborador ativo.
+ */
+export async function valorIndicadorPsicossocialValida(): Promise<
+  number | null
+> {
+  const { ativos, com_avaliacao_valida } =
+    await contarAtivosComPsicossocialValida();
+  if (ativos === 0) return null;
+  return Math.round((com_avaliacao_valida / ativos) * 1000) / 10;
 }
 
 // ------------------------------------------------------------------ EPI — catálogo

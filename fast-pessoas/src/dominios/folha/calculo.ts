@@ -12,8 +12,12 @@
 // • Item com valor zero não é gravado.
 //
 // REGRAS DE NEGÓCIO F1 (a saída esperada da bateria depende delas):
-// • Hora normal = salário ÷ 220; HE = horas × fator × hora normal.
-// • Falta = dias × (salário ÷ 30).
+// • Hora normal = salário ÷ divisor mensal de horas; HE = horas × fator × hora
+//   normal. O divisor NÃO é do motor: vem dos parâmetros da folha e é
+//   proporcional à carga semanal da jornada de quem está sendo calculado
+//   (220 h para 44 h/semana, 180 para 36 h — ver a 0038).
+// • Falta = dias × (salário ÷ divisor mensal de dias), 30 por padrão. Este não
+//   depende de jornada: o salário mensal remunera o mês inteiro.
 // • DSR sobre faltas: 1 dia de DSR por dia de falta (simplificação F1 fixada
 //   na migração 0013 — a apuração exata semana a semana, Lei 605/49, chega em
 //   F2 com o espelho de ponto).
@@ -81,6 +85,12 @@ export interface TabelaIrrfMotor {
 export interface ParametrosFolhaMotor {
   id: number;
   aliquota_fgts: number; // percentual (8 = 8%)
+  /** Horas mensais da jornada de REFERÊNCIA (220 h para 44 h semanais). */
+  divisor_mensal_horas: number;
+  /** Carga semanal, em minutos, a que o divisor acima se refere (2640 = 44 h). */
+  carga_semanal_referencia_minutos: number;
+  /** Dias do mês para o salário-dia do mensalista (30). */
+  divisor_mensal_dias: number;
 }
 
 export interface VariavelMotor {
@@ -93,6 +103,12 @@ export interface VariavelMotor {
 export interface EntradaMotor {
   salario_base_centavos: number;
   dependentes_irrf: number;
+  /**
+   * Carga semanal, em MINUTOS, da jornada vigente do colaborador — é ela que
+   * dá o divisor horário dele. NULL = sem escala cadastrada: cai no divisor de
+   * referência dos parâmetros, e a memória do item registra que caiu.
+   */
+  carga_semanal_minutos: number | null;
   variaveis: VariavelMotor[];
   rubricas: RubricaMotor[];
   tabela_inss: TabelaInssMotor;
@@ -175,6 +191,56 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
     throw new ErroMotor("Salário base inválido (centavos inteiros ≥ 0)");
   }
 
+  // DIVISORES (0038) — nenhum deles é constante do motor.
+  //
+  // O horário é proporcional à carga da jornada de quem está sendo calculado:
+  // 220 h valem para 44 h semanais, então 36 h semanais valem 180. Com a carga
+  // igual à de referência a divisão é exata (220 × 2640 ÷ 2640 = 220) e o
+  // resultado é bit a bit o de antes da parametrização — quem tem 44 h não
+  // sente a mudança, e é essa a garantia.
+  const {
+    divisor_mensal_horas: divisorReferencia,
+    carga_semanal_referencia_minutos: cargaReferencia,
+    divisor_mensal_dias: divisorDias,
+  } = entrada.parametros;
+  if (!(divisorReferencia > 0) || !(cargaReferencia > 0) || !(divisorDias > 0)) {
+    throw new ErroMotor(
+      "Divisores da folha inválidos na versão vigente dos parâmetros — corrija em Parâmetros"
+    );
+  }
+  const cargaSemanal = entrada.carga_semanal_minutos;
+  const divisorHoras =
+    cargaSemanal === null
+      ? divisorReferencia
+      : (divisorReferencia * cargaSemanal) / cargaReferencia;
+  if (!(divisorHoras > 0)) {
+    throw new ErroMotor(
+      "Carga semanal da jornada inválida — o divisor da hora sairia zero ou negativo"
+    );
+  }
+  /** O que a memória de cálculo conta sobre a origem do divisor horário. */
+  const origemDivisorHoras =
+    cargaSemanal === null
+      ? {
+          divisor_horas: divisorHoras,
+          origem_divisor:
+            "sem jornada vigente — divisor de referência dos parâmetros da folha",
+          parametro_folha_versao_id: entrada.parametros.id,
+        }
+      : {
+          divisor_horas: divisorHoras,
+          origem_divisor:
+            `${divisorReferencia} h ÷ ${cargaReferencia} min de referência ` +
+            `× ${cargaSemanal} min da jornada do colaborador`,
+          carga_semanal_minutos: cargaSemanal,
+          parametro_folha_versao_id: entrada.parametros.id,
+        };
+  const origemDivisorDias = {
+    divisor_dias: divisorDias,
+    origem_divisor: "dias do mês nos parâmetros da folha (não depende da jornada)",
+    parametro_folha_versao_id: entrada.parametros.id,
+  };
+
   const itens: ItemMotor[] = [];
   const incluir = (
     rubrica: RubricaMotor,
@@ -233,7 +299,7 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
     }
 
     if (codigo === CODIGO_FALTAS) {
-      // Falta = dias × (salário ÷ 30) — rubrica automática COM lançamento.
+      // Falta = dias × salário-dia — rubrica automática COM lançamento.
       const dias = variaveis.reduce(
         (soma, item) => soma + (item.referencia ?? 0),
         0
@@ -242,11 +308,12 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
         throw new ErroMotor("Falta exige referência em dias maior que zero");
       }
       diasFalta = dias;
-      const valor = (salario * Math.round(dias * 100)) / (30 * 100);
+      const valor = (salario * Math.round(dias * 100)) / (divisorDias * 100);
       incluir(rubrica, valor, dias, salario, {
-        formula: "dias × (salário ÷ 30)",
+        formula: `dias × (salário ÷ ${divisorDias})`,
         dias,
-        salario_dia: reaisIntermediario(salario / 30),
+        salario_dia: reaisIntermediario(salario / divisorDias),
+        ...origemDivisorDias,
       });
       continue;
     }
@@ -268,15 +335,17 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
             `Rubrica ${codigo} sem fator na versão vigente — corrija em Parâmetros`
           );
         }
-        // horas × fator × (salário ÷ 220), tudo como razão inteira.
+        // horas × fator × (salário ÷ divisor horário); horas e fator entram
+        // como razão inteira, o divisor entra pronto (ver o bloco dos divisores).
         const valor =
           (salario * Math.round(horas * 100) * Math.round(fator * 10_000)) /
-          (220 * 100 * 10_000);
+          (divisorHoras * 100 * 10_000);
         incluir(rubrica, valor, horas, salario, {
-          formula: "horas × fator × (salário ÷ 220)",
+          formula: `horas × fator × (salário ÷ ${divisorHoras})`,
           horas,
           fator,
-          valor_hora: reaisIntermediario(salario / 220),
+          valor_hora: reaisIntermediario(salario / divisorHoras),
+          ...origemDivisorHoras,
         });
         break;
       }
@@ -324,12 +393,13 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
   // 3) DSR sobre faltas — 1 dia de DSR por dia de falta (F1) ---------------
   if (diasFalta > 0) {
     const rubricaDsr = rubricaObrigatoria(CODIGO_DSR_FALTAS);
-    const valor = (salario * Math.round(diasFalta * 100)) / (30 * 100);
+    const valor = (salario * Math.round(diasFalta * 100)) / (divisorDias * 100);
     incluir(rubricaDsr, valor, diasFalta, salario, {
-      formula: "dias de falta × (salário ÷ 30) — 1 dia de DSR por dia de falta",
+      formula: `dias de falta × (salário ÷ ${divisorDias}) — 1 dia de DSR por dia de falta`,
       regra_f1:
         "simplificação fixada na 0013; apuração exata semana a semana (Lei 605/49) é evolução F2",
       dias: diasFalta,
+      ...origemDivisorDias,
     });
   }
 

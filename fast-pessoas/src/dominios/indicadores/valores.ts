@@ -7,8 +7,16 @@ import {
   valorIndicadorAdesaoPesquisa,
   valorIndicadorEnps,
 } from "../pesquisas/servico";
+import {
+  detalheIndicadorSaldoBancoHoras,
+  valorIndicadorHorasExtras,
+  valorIndicadorSaldoBancoHoras,
+} from "../ponto/servico";
 import { valorIndicadorVagasNoPrazo } from "../recrutamento/servico";
-import { valorIndicadorAsosValidos } from "../sst/servico";
+import {
+  valorIndicadorAsosValidos,
+  valorIndicadorPsicossocialValida,
+} from "../sst/servico";
 import { ESCOPO_GLOBAL, formatarValorMeta } from "./esquemas";
 import { listarIndicadoresAtivos, listarMetasVigentes } from "./repositorio";
 
@@ -103,6 +111,28 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
             "promotores (9–10) menos detratores (0–6), em pontos, na última pesquisa encerrada",
     };
   },
+  horas_extras: async () => {
+    const valor = await valorIndicadorHorasExtras();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhuma competência de ponto apurada nos últimos 12 meses"
+          : "HE 50% + HE 100% ÷ horas trabalhadas nas apurações de ponto (12 meses)",
+    };
+  },
+  // Passivo, não percentual: anda ao lado de horas_extras porque um mês sem HE
+  // não significa banco zerado — o saldo é acumulado e sobrevive à competência.
+  saldo_banco_horas: async () => {
+    const valor = await valorIndicadorSaldoBancoHoras();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhum movimento de banco de horas"
+          : await detalheIndicadorSaldoBancoHoras(),
+    };
+  },
   asos_validos: async () => {
     const valor = await valorIndicadorAsosValidos();
     return {
@@ -111,6 +141,17 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
         valor === null
           ? "nenhum colaborador ativo"
           : "colaboradores ativos com ASO vigente",
+    };
+  },
+  // A "segunda linha" da diretoria: anda AO LADO de asos_validos, não no lugar.
+  psicossocial_valida: async () => {
+    const valor = await valorIndicadorPsicossocialValida();
+    return {
+      valor,
+      detalhe:
+        valor === null
+          ? "nenhum colaborador ativo"
+          : "colaboradores ativos com avaliação psicossocial (NR-1) vigente",
     };
   },
 };

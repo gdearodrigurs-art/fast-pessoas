@@ -161,16 +161,19 @@ Nada aqui é urgente hoje, mas **tudo é pré-requisito para sair da demo**.
 
 ## 4. Decisões ainda em aberto
 
-### 4.1 Salário do time: o líder direto vê?
+### 4.1 Salário do time — RESOLVIDO em 2026-07-31
 
-Na reunião (00:42:33) ela aprovou explicitamente:
+**A regra é a sub-árvore do organograma, recursiva.** Uma pessoa vê o salário de **todos abaixo dela no seu ramo, descendo até o fim** — e de mais ninguém.
 
-> **Você:** *"O gestor tem que conseguir ver o salário do time dela."* → **Diretora: "Sim. O gestor, sim."**
+> **Usuário (2026-07-31):** *"Uma pessoa vê o salário de todos abaixo dela. Gerente de loja vê o salário de
+> todos os vendedores da loja dele, mas não vê de outras lojas. E o gerente regional vê o salário de todos os
+> gerentes que ele controla + o salário de seus gerentes."*
 
-Mas a resposta posterior foi **"apenas gerente pra cima"**, o que tiraria o salário de um
-supervisor que lidera gente. Leitura provável: **o corte vale para quem NÃO é líder da pessoa**
-(a cadeia acima dela), e **o líder direto continua vendo a própria equipe**. Precisa de
-confirmação antes da Onda K.
+Cancela o corte **"apenas gerente pra cima"**, que quebrava o supervisor que lidera gente. Também não é
+"um nível abaixo": é a cadeia inteira para baixo, e **nada lateral**.
+
+**Implementação:** travessia RECURSIVA da liderança vigente (`WITH RECURSIVE`), não consulta de um nível.
+A hierarquia do organograma passa a ser a regra de acesso ao salário. Destrava a **Onda K**.
 
 ### 4.2 Lista completa de rubricas
 

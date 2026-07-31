@@ -10,19 +10,19 @@
 //  • CUSTO DE PESSOAL exige `folha.ver` ADEMAIS de `painel.executivo.ver`. Sem
 //    ela o payload leva `CardBloqueado` — um objeto que não tem campo de valor.
 //    Não é máscara, não é "R$ ***", não é total agregado: é ausência.
-//  • DIVERSIDADE sai com supressão de recorte pequeno (k = 5), a mesma regra da
-//    tela de relatórios, inclusive a guarda contra revelação por complemento.
+//  • DIVERSIDADE sai com supressão de recorte pequeno, a mesma regra da tela de
+//    relatórios, inclusive a guarda contra revelação por complemento. O k não é
+//    constante: vem de sistema.parametro_privacidade (migration 0044).
 //  • LEITURA SENSÍVEL deixa trilha: diversidade (dado autodeclarado), custo de
 //    pessoal (remuneração) e performance (resultado de avaliação) gravam em
 //    audit.leitura_sensivel com a chave que autorizou a leitura.
 
 import {
   FAIXAS_IDADE,
-  MINIMO_POR_RECORTE,
   ROTULOS_GENERO,
   type Genero,
 } from "../colaboradores/esquemas";
-import { MINIMO_AMOSTRA } from "../pesquisas/esquemas";
+import { lerMinimoPorRecorte } from "../colaboradores/repositorio";
 import { calcularEnps } from "../pesquisas/servico";
 import type { PayloadSessao } from "../identidade/esquemas";
 import {
@@ -207,22 +207,23 @@ function serie(
 /**
  * Mesma regra da tela de relatórios (`suprimirRecortesPequenos` em
  * colaboradores/servico.ts), reescrita aqui porque a original é privada do
- * domínio dono do dado. A constante é IMPORTADA de colaboradores/esquemas para
- * que o piso de anonimato tenha um único lugar de verdade: mexer em
- * MINIMO_POR_RECORTE muda as duas telas juntas.
+ * domínio dono do dado. O k é LIDO do mesmo parâmetro administrável
+ * (sistema.parametro_privacidade, migration 0044) para que o piso de anonimato
+ * tenha um único lugar de verdade: mudar o parâmetro muda as duas telas juntas.
  *
  * Recorte com 1..k-1 pessoas não é publicado. Guarda contra revelação por
  * complemento: se sobrar UM único recorte suprimido, o menor recorte publicado
  * também é suprimido — senão bastaria subtrair do total para reidentificar.
  */
 function suprimirRecortesPequenos(
-  recortes: { chave: string; rotulo: string; quantidade: number }[]
+  recortes: { chave: string; rotulo: string; quantidade: number }[],
+  minimoPorRecorte: number
 ): RecortePainel[] {
   const suprimidos = new Set(
     recortes
       .filter(
         (recorte) =>
-          recorte.quantidade > 0 && recorte.quantidade < MINIMO_POR_RECORTE
+          recorte.quantidade > 0 && recorte.quantidade < minimoPorRecorte
       )
       .map((recorte) => recorte.chave)
   );
@@ -587,13 +588,15 @@ async function montarDiversidade(
     registroId: "agregado",
   });
 
-  const [total, generos, idades, cobertura, serieBruta] = await Promise.all([
-    repositorio.headcountEm(hoje),
-    repositorio.contarPorGenero(hoje),
-    repositorio.contarPorIdade(hoje),
-    repositorio.coberturaNascimento(hoje),
-    repositorio.serieGenero(primeiroMes, hoje),
-  ]);
+  const [total, generos, idades, cobertura, serieBruta, minimoPorRecorte] =
+    await Promise.all([
+      repositorio.headcountEm(hoje),
+      repositorio.contarPorGenero(hoje),
+      repositorio.contarPorIdade(hoje),
+      repositorio.coberturaNascimento(hoje),
+      repositorio.serieGenero(primeiroMes, hoje),
+      lerMinimoPorRecorte(),
+    ]);
 
   const porGenero = suprimirRecortesPequenos(
     Object.keys(ROTULOS_GENERO).map((chave) => ({
@@ -601,7 +604,8 @@ async function montarDiversidade(
       rotulo: ROTULOS_GENERO[chave as Genero],
       quantidade:
         generos.find((linha) => linha.genero === chave)?.quantidade ?? 0,
-    }))
+    })),
+    minimoPorRecorte
   );
   const porFaixa = suprimirRecortesPequenos(
     FAIXAS_IDADE.map((faixa) => ({
@@ -610,7 +614,8 @@ async function montarDiversidade(
       quantidade: idades
         .filter((linha) => linha.idade >= faixa.min && linha.idade <= faixa.max)
         .reduce((soma, linha) => soma + linha.quantidade, 0),
-    }))
+    })),
+    minimoPorRecorte
   );
 
   // Ponto a ponto: mês com menos de k mulheres não publica percentual — a
@@ -618,7 +623,7 @@ async function montarDiversidade(
   const lista: PontoSerie[] = serieBruta.map((linha) => ({
     mes: linha.mes,
     valor:
-      linha.total > 0 && linha.mulheres >= MINIMO_POR_RECORTE
+      linha.total > 0 && linha.mulheres >= minimoPorRecorte
         ? arredondar((linha.mulheres / linha.total) * 100)
         : null,
     parcial: linha.mes === mesCorrente,
@@ -630,7 +635,7 @@ async function montarDiversidade(
     conta:
       `Composição do quadro ativo (${total} pessoa(s)) por gênero autodeclarado e ` +
       `por faixa de idade calculada na data. ` +
-      `Recorte com menos de ${MINIMO_POR_RECORTE} pessoas é SUPRIMIDO ` +
+      `Recorte com menos de ${minimoPorRecorte} pessoas é SUPRIMIDO ` +
       `(${suprimidosGenero} recorte(s) de gênero suprimido(s) hoje) — num quadro deste ` +
       `tamanho publicar "1 pessoa" identifica alguém. Se sobrasse um único ` +
       `recorte suprimido, o menor recorte publicado também seria suprimido, ` +
@@ -641,7 +646,7 @@ async function montarDiversidade(
     total_quadro: total,
     com_data_nascimento: cobertura.com_data,
     sem_data_nascimento: cobertura.sem_data,
-    minimo_por_recorte: MINIMO_POR_RECORTE,
+    minimo_por_recorte: minimoPorRecorte,
     por_genero: porGenero,
     por_faixa_idade: porFaixa,
     serie: serie(
@@ -659,14 +664,17 @@ async function montarClima(
   mesCorrente: string
 ): Promise<CardClima> {
   const inicioClima = somarDias(hoje, -DIAS_CLIMA);
-  const [checkin, enps, serieBruta] = await Promise.all([
+  // Mesmo piso do resto do sistema (0044/0045): o card do painel executivo não
+  // pode publicar o eNPS de uma amostra que a tela de pesquisas esconde.
+  const [checkin, enps, serieBruta, minimoAmostra] = await Promise.all([
     repositorio.checkinJanela(inicioClima, hoje),
     repositorio.contagemEnpsUltimaEncerrada(),
     repositorio.serieClima(primeiroMes, hoje),
+    lerMinimoPorRecorte(),
   ]);
 
   const media = numeroOuNulo(checkin.media);
-  const amostraOk = enps !== null && enps.respostas >= MINIMO_AMOSTRA;
+  const amostraOk = enps !== null && enps.respostas >= minimoAmostra;
   const pontosEnps =
     enps !== null && amostraOk
       ? calcularEnps(enps.promotores, enps.detratores, enps.respostas)
@@ -686,7 +694,7 @@ async function montarClima(
       (enps === null
         ? "Nenhuma pesquisa encerrada com pergunta de 0 a 10 — sem eNPS."
         : !amostraOk
-          ? `A última pesquisa encerrada tem menos de ${MINIMO_AMOSTRA} respostas de ` +
+          ? `A última pesquisa encerrada tem menos de ${minimoAmostra} respostas de ` +
             `eNPS: o valor não é publicado (nem as contagens).`
           : `eNPS = %promotores (notas 9–10) − %detratores (notas 0–6) sobre ` +
             `${enps.respostas} resposta(s): ${enps.promotores} − ${enps.detratores} ` +
@@ -705,7 +713,7 @@ async function montarClima(
             respostas: amostraOk ? enps.respostas : null,
             promotores: amostraOk ? enps.promotores : null,
             detratores: amostraOk ? enps.detratores : null,
-            minimo_amostra: MINIMO_AMOSTRA,
+            minimo_amostra: minimoAmostra,
           },
     serie: serie(
       "Média mensal do check-in",

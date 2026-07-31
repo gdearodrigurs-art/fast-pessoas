@@ -41,6 +41,67 @@ const esquemaData = z
     message: "Data inválida",
   });
 
+// ------------------------------------------------------------------ NR-1 / avaliação psicossocial
+// Fica ANTES do ASO no arquivo porque o esquema do ASO embute a avaliação
+// vinculada (o registro do exame já oferece a NR-1). O bloco completo do
+// domínio — classificações, rótulos e o registro avulso — segue abaixo, na
+// seção "NR-1".
+
+export const CLASSIFICACOES_RISCO = [
+  "baixo",
+  "moderado",
+  "alto",
+  "critico",
+] as const;
+
+export type ClassificacaoRisco = (typeof CLASSIFICACOES_RISCO)[number];
+
+export const ROTULOS_CLASSIFICACAO_RISCO: Record<ClassificacaoRisco, string> = {
+  baixo: "Risco baixo",
+  moderado: "Risco moderado",
+  alto: "Risco alto",
+  critico: "Risco crítico",
+};
+
+/** Núcleo da avaliação, sem colaborador e sem ASO (esses vêm do contexto). */
+const camposPsicossocial = {
+  data_avaliacao: esquemaData,
+  // data-limite informada pela empresa executora; ausente = sem renovação definida
+  validade: esquemaData.nullish(),
+  classificacao_risco: z.enum(CLASSIFICACOES_RISCO),
+  // dado de saúde — cifrado na aplicação antes de persistir
+  observacoes: z
+    .string()
+    .trim()
+    .max(2000, "Observações longas demais (máx. 2000 caracteres)")
+    .optional()
+    .transform((valor) => (valor ? valor : undefined)),
+  documento_id: z
+    .number("Documento inválido")
+    .int("Documento inválido")
+    .positive("Documento inválido")
+    .nullish(),
+  empresa_executora: z
+    .string()
+    .trim()
+    .max(200, "Nome da empresa longo demais (máx. 200 caracteres)")
+    .optional()
+    .transform((valor) => (valor ? valor : undefined)),
+};
+
+/** Avaliação registrada junto com o ASO — herda dele colaborador e vínculo. */
+export const esquemaPsicossocialVinculada = z
+  .object(camposPsicossocial)
+  .refine(
+    (dados) => !dados.validade || dados.validade > dados.data_avaliacao,
+    {
+      message: "A validade precisa ser posterior à avaliação",
+      path: ["validade"],
+    }
+  );
+
+export type PsicossocialVinculada = z.infer<typeof esquemaPsicossocialVinculada>;
+
 export const esquemaRegistroAso = z
   .object({
     colaborador_id: z
@@ -64,6 +125,10 @@ export const esquemaRegistroAso = z
       .int("Documento inválido")
       .positive("Documento inválido")
       .nullish(),
+    // NR-1 acoplada ao ASO ("todo mundo que fizer o ASO já entra nessa
+    // modalidade"): quando vem preenchida, a avaliação nasce na MESMA
+    // transação do ASO, já vinculada a ele. Ausente = ASO sozinho.
+    psicossocial: esquemaPsicossocialVinculada.optional(),
   })
   .refine(
     (dados) => !dados.validade || dados.validade > dados.data_exame,
@@ -78,6 +143,36 @@ export const esquemaRegistroAso = z
   );
 
 export type RegistroAso = z.infer<typeof esquemaRegistroAso>;
+
+// ------------------------------------------------------------------ NR-1 (registro avulso)
+
+/**
+ * Avaliação registrada pela aba própria de NR-1: mesma avaliação, mais o
+ * colaborador e (opcionalmente) o ASO ao qual ela se prende — o serviço
+ * confere que o ASO é do mesmo colaborador antes de gravar.
+ */
+export const esquemaRegistroPsicossocial = z
+  .object({
+    colaborador_id: z
+      .number("Escolha o colaborador")
+      .int("Colaborador inválido")
+      .positive("Colaborador inválido"),
+    ...camposPsicossocial,
+    aso_id: z
+      .number("ASO inválido")
+      .int("ASO inválido")
+      .positive("ASO inválido")
+      .nullish(),
+  })
+  .refine(
+    (dados) => !dados.validade || dados.validade > dados.data_avaliacao,
+    {
+      message: "A validade precisa ser posterior à avaliação",
+      path: ["validade"],
+    }
+  );
+
+export type RegistroPsicossocial = z.infer<typeof esquemaRegistroPsicossocial>;
 
 // ------------------------------------------------------------------ EPI
 

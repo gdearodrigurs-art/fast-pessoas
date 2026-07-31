@@ -2,6 +2,7 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
+import { lerMinimoPorRecorte } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import { FiltroIndividual, RespostaCheckin } from "./esquemas";
 import {
@@ -31,10 +32,26 @@ const DIAS_JANELA_AGREGADO = 30;
 /** Recorte "recente" comparado com o restante da janela, por unidade. */
 const DIAS_RECORTE_RECENTE = 7;
 /**
- * Piso de respondentes para uma unidade aparecer no agregado. Média de um
- * grupo pequeno demais deixa de ser agregado e vira dedução de quem respondeu.
+ * O PISO DE RESPONDENTES POR UNIDADE NÃO MORA MAIS AQUI.
+ *
+ * Até a migration 0045 este arquivo trazia `MINIMO_RESPONDENTES_UNIDADE = 5`.
+ * Era a mesma política de privacidade que a 0044 tinha acabado de tirar do
+ * fonte para sistema.parametro_privacidade.minimo_por_recorte — só que escrita
+ * de novo, aqui, onde o parâmetro não alcançava. Resultado medido antes da
+ * correção: com o parâmetro em 20 e em 2, /api/clima/agregado publicava
+ * EXATAMENTE os mesmos recortes. O dono acreditava ter mudado a política da
+ * empresa e tinha mudado metade dela — e a metade de fora era justamente a
+ * pesquisa de clima, onde a promessa de anonimato é o que faz a pessoa
+ * responder a verdade.
+ *
+ * MESMO parâmetro dos relatórios, e não um segundo campo, porque as duas
+ * pontas contam a MESMA coisa: PESSOAS por trás do número publicado. Aqui é
+ * COUNT(DISTINCT colaborador_id) por unidade (ver agregadoPorUnidade); lá é a
+ * quantidade de pessoas do recorte de diversidade. Piso separado só se
+ * justificaria se as unidades de contagem fossem diferentes — não é o caso.
+ *
+ * O valor vigente é lido a cada chamada em `obterAgregado`.
  */
-const MINIMO_RESPONDENTES_UNIDADE = 5;
 /** Queda (em pontos da escala 1–5) a partir da qual a unidade é destacada. */
 const QUEDA_RELEVANTE = 0.3;
 
@@ -183,19 +200,17 @@ export async function responderCheckin(
 export async function obterAgregado(): Promise<AgregadoClima> {
   const fim = dataReferenciaHoje();
   const inicio = diasAntes(fim, DIAS_JANELA_AGREGADO - 1);
+  // Lido a cada chamada, e não guardado em módulo: mudar o piso pela tela tem
+  // de valer na próxima abertura do painel, sem reiniciar o servidor.
+  const minimoRespondentes = await lerMinimoPorRecorte();
   const [geral, porDia, porPergunta, porUnidade] = await Promise.all([
     agregadoGeral(inicio, fim),
     agregadoPorDia(inicio, fim),
     agregadoPorPergunta(inicio, fim),
-    agregadoPorUnidade(
-      inicio,
-      fim,
-      DIAS_RECORTE_RECENTE,
-      MINIMO_RESPONDENTES_UNIDADE
-    ),
+    agregadoPorUnidade(inicio, fim, DIAS_RECORTE_RECENTE, minimoRespondentes),
   ]);
   // Agregado: média, contagens e nada mais — NUNCA autor. O corte por unidade
-  // respeita o piso de respondentes (ver MINIMO_RESPONDENTES_UNIDADE).
+  // respeita o piso de anonimato vigente (sistema.parametro_privacidade).
   return {
     periodo: { inicio, fim },
     geral,
@@ -214,7 +229,7 @@ export async function obterAgregado(): Promise<AgregadoClima> {
     }),
     recorte: {
       dias_recentes: DIAS_RECORTE_RECENTE,
-      minimo_respondentes: MINIMO_RESPONDENTES_UNIDADE,
+      minimo_respondentes: minimoRespondentes,
     },
   };
 }

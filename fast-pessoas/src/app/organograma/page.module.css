@@ -156,7 +156,305 @@
   margin-top: 2px;
 }
 
+/* --------------------------------------------------- chaveamento das visões
+   A MESMA árvore é desenhada duas vezes na marcação: vertical (padrão) e lista
+   indentada (fallback). Quem decide é o CSS, não o JavaScript — assim não há
+   medição de janela, não há salto na hidratação e a lista continua sendo o
+   caminho garantido em tela estreita, onde árvore de 62 pessoas não cabe.
+   `.modoLista` no contêiner força a lista também em tela larga (botão da
+   barra), para quem prefere ler a hierarquia em texto. */
+
+.visaoArvore {
+  display: block;
+}
+
+.visaoLista {
+  display: none;
+}
+
+.modoLista .visaoArvore {
+  display: none;
+}
+
+.modoLista .visaoLista {
+  display: block;
+}
+
+.modoLista .grupoZoom {
+  display: none;
+}
+
+/* Barra de controles da árvore: gruda no topo da janela para os botões de zoom
+   continuarem ao alcance enquanto se desce uma árvore alta. Fica FORA do
+   contêiner de rolagem horizontal — logo, rolar a árvore para os lados nunca
+   leva os controles junto. */
+.barraVisual {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 8px 0;
+  background: #fff;
+  border-bottom: 1px solid #f0eeeb;
+}
+
+.grupoZoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.botaoZoom {
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d8d4d0;
+  border-radius: 8px;
+  background: #fff;
+  color: #1c1b1a;
+  cursor: pointer;
+}
+
+.botaoZoom:hover:not(:disabled) {
+  border-color: #d21217;
+  color: #d21217;
+}
+
+.botaoZoom:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.valorZoom {
+  font-size: 0.8rem;
+  color: #6b6763;
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: center;
+}
+
+.dicaBarra {
+  font-size: 0.78rem;
+  color: #6b6763;
+  margin-left: auto;
+}
+
+/* Tela estreita: cai para a lista indentada. Vem DEPOIS das regras de display
+   acima de propósito — mesma especificidade, quem está por último vence. */
+@media (max-width: 900px) {
+  .visaoArvore,
+  .barraVisual {
+    display: none;
+  }
+
+  .visaoLista {
+    display: block;
+  }
+}
+
+/* ------------------------------------------------- árvore vertical (de cima
+   para baixo). Conectores 100% CSS, sem biblioteca e sem SVG:
+     - cada nível é um <ul> em flex-row; o <ul> ANINHADO desenha, no seu
+       ::before, o prumo que sai do cartão do pai;
+     - cada <li> desenha a metade da barra horizontal que lhe cabe (::before à
+       esquerda, ::after à direita) e o prumo que entra no próprio cartão;
+     - primeiro e último filho perdem a metade EXTERNA da barra, senão a linha
+       vaza para fora da fileira;
+     - filho único dispensa barra: só o prumo do <ul> pai.
+   Recolher é não renderizar o <ul> dos filhos — os conectores somem com ele. */
+
+.rolagem {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 0 12px;
+}
+
+.arvoreVertical {
+  --linha: #cfcac4;
+  /* `zoom` (e não `transform: scale`) porque zoom AFETA O LAYOUT: a barra de
+     rolagem do contêiner acompanha o tamanho real desenhado, em vez de sobrar
+     ou faltar espaço. O min-width compensa a escala para a árvore continuar
+     centralizada quando cabe inteira. Navegador sem `zoom` apenas desenha em
+     100% — degrada, não quebra. */
+  zoom: var(--escala, 1);
+  width: max-content;
+  min-width: calc(100% / var(--escala, 1));
+  padding: 4px 8px 8px;
+}
+
+.nivel {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  list-style: none;
+  margin: 0;
+  padding: 22px 0 0;
+  position: relative;
+}
+
+/* Prumo do cartão do pai até a barra horizontal dos filhos. */
+.nivelFilho::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 0;
+  height: 22px;
+  border-left: 2px solid var(--linha);
+}
+
+.nivelRaiz {
+  padding-top: 0;
+}
+
+.ramo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding: 22px 8px 0;
+}
+
+.ramo::before,
+.ramo::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  height: 22px;
+  width: 50%;
+  border-top: 2px solid var(--linha);
+}
+
+.ramo::before {
+  right: 50%;
+}
+
+/* O ::after também traz o prumo que desce da barra até o cartão. */
+.ramo::after {
+  left: 50%;
+  border-left: 2px solid var(--linha);
+}
+
+.ramo:first-child::before {
+  border-top: 0;
+}
+
+/* No último a metade direita some inteira; o prumo passa a vir do ::before. */
+.ramo:last-child::after {
+  border-top: 0;
+  border-left: 0;
+}
+
+.ramo:last-child::before {
+  border-right: 2px solid var(--linha);
+}
+
+.ramo:only-child::before,
+.ramo:only-child::after {
+  display: none;
+}
+
+/* Raízes não têm pai: nada de barra horizontal ligando diretorias entre si. */
+.nivelRaiz > .ramo::before,
+.nivelRaiz > .ramo::after {
+  display: none;
+}
+
+.nivelRaiz > .ramo {
+  padding-top: 0;
+}
+
+.cartaoNo {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 214px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-top: 4px solid #8c8781;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  text-align: center;
+}
+
+.cartaoVaga {
+  border-style: dashed;
+  background: repeating-linear-gradient(
+    45deg,
+    #fcfbfa,
+    #fcfbfa 8px,
+    #f5f3f1 8px,
+    #f5f3f1 16px
+  );
+}
+
+.cartaoDestacado {
+  background: #fff6d9;
+  box-shadow: 0 0 0 2px #e6c65c;
+}
+
+.cartaoNome {
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.25;
+  border-bottom: 1px solid transparent;
+}
+
+.cartaoNome:hover {
+  color: #d21217;
+  border-bottom-color: #d21217;
+}
+
+.cartaoNomeVaga {
+  font-weight: 600;
+  font-size: 0.92rem;
+  font-style: italic;
+  color: #6b6763;
+}
+
+.cartaoCargo {
+  font-size: 0.8rem;
+  color: #4a4643;
+  line-height: 1.25;
+}
+
+.cartaoSelos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.rodapeCartao {
+  font: inherit;
+  font-size: 0.76rem;
+  color: #6b6763;
+  cursor: pointer;
+  margin: 8px -12px -10px;
+  width: calc(100% + 24px);
+  padding: 5px 8px;
+  background: #faf9f8;
+  border: 0;
+  border-top: 1px solid #f0eeeb;
+  border-radius: 0 0 8px 8px;
+}
+
+.rodapeCartao:hover {
+  color: #d21217;
+  background: #fdf3f3;
+}
+
 /* ------------------------------------------------------------------ árvore
+   (lista indentada — fallback de tela estreita e modo texto)
    Sem biblioteca: cada linha é um <li> com padding-left proporcional ao nível
    e uma barra colorida à esquerda com a cor da unidade. O colapso é estado do
    React (a linha simplesmente não é renderizada) — nada de altura animada. */

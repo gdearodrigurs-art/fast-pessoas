@@ -152,6 +152,16 @@
   color: #6b6763;
 }
 
+/* Explicação embaixo de um campo do formulário — diz de onde vem o limite e
+   por que o campo entra em branco. */
+.notaCampo {
+  display: block;
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #6b6763;
+}
+
 /* -------------------------------------------------- resumo do painel DP/RH */
 
 .cartoesResumo {

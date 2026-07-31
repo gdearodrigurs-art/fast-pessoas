@@ -178,9 +178,18 @@ export interface CicloPayload {
   criado_em: string;
 }
 
+/** Estado explicado do ciclo — o que substitui a tela em branco (G1a). */
+export interface SituacaoCiclo {
+  titulo: string;
+  detalhe: string;
+  proximo_passo: string;
+  o_que_posso_fazer: string[];
+}
+
 export interface Detalhe {
   pode: Permissoes & { sou_avaliador: boolean };
   ciclo: CicloPayload;
+  situacao: SituacaoCiclo;
   estrutura: Estrutura | null;
   respostas: RespostaGravada[] | null;
   resultado: ResultadoPayload | null;

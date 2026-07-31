@@ -22,8 +22,88 @@ import {
   TipoOcorrencia,
   TipoVinculo,
 } from "@/dominios/colaboradores/esquemas";
+import { formatarMinutos } from "@/dominios/ponto/esquemas";
 import type { PermissoesFicha } from "./page";
 import estilos from "./page.module.css";
+
+/**
+ * Bloco de ponto da ficha. Busca o próprio dado no domínio DONO
+ * (`/api/ponto/resumo/[id]`, chave `ponto.ver.proprio` + alcance conferido no
+ * serviço). Quem não alcança recebe 403 e o cartão simplesmente não aparece —
+ * ausência, não máscara.
+ */
+interface ResumoPontoFicha {
+  saldo_banco_minutos: number;
+  media_he_por_dia_util_minutos_ultimo_mes: number;
+  total_he_ultimo_mes_minutos: number;
+  ultima_apuracao: { competencia: string } | null;
+  intercorrencias_abertas: number;
+  espelho_href: string;
+}
+
+function BlocoPontoFicha({ colaboradorId }: { colaboradorId: number }) {
+  const [resumo, setResumo] = useState<ResumoPontoFicha | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(`/api/ponto/resumo/${colaboradorId}`, {
+          cache: "no-store",
+        });
+        if (!ativo || !resposta.ok) return;
+        setResumo((await resposta.json()) as ResumoPontoFicha);
+      } catch {
+        /* ficha segue sem o bloco de ponto */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  if (resumo === null) return null;
+  return (
+    <div className={estilos.cartao} style={{ marginTop: 16 }}>
+      <h2>Ponto e banco de horas</h2>
+      <div className={estilos.gradeDados}>
+        <div className={estilos.campoDado}>
+          <div className={estilos.rot}>Saldo do banco de horas</div>
+          <div className={estilos.val}>
+            {formatarMinutos(resumo.saldo_banco_minutos)}
+          </div>
+        </div>
+        <div className={estilos.campoDado}>
+          <div className={estilos.rot}>Hora extra no último mês</div>
+          <div className={estilos.val}>
+            {formatarMinutos(resumo.total_he_ultimo_mes_minutos)}
+          </div>
+        </div>
+        <div className={estilos.campoDado}>
+          <div className={estilos.rot}>Média de HE por dia</div>
+          <div className={estilos.val}>
+            {formatarMinutos(resumo.media_he_por_dia_util_minutos_ultimo_mes)}
+          </div>
+        </div>
+        <div className={estilos.campoDado}>
+          <div className={estilos.rot}>Última competência apurada</div>
+          <div className={estilos.val}>
+            {resumo.ultima_apuracao?.competencia ?? "—"}
+          </div>
+        </div>
+        <div className={estilos.campoDado}>
+          <div className={estilos.rot}>Intercorrências abertas</div>
+          <div className={estilos.val}>{resumo.intercorrencias_abertas}</div>
+        </div>
+      </div>
+      <p style={{ marginTop: 12 }}>
+        <Link className={estilos.botaoLinha} href={resumo.espelho_href}>
+          Abrir espelho de ponto
+        </Link>
+      </p>
+    </div>
+  );
+}
 
 /** RCF vigente do cargo da posição atual — documento de gestão, não sensível. */
 interface Rcf {
@@ -911,6 +991,8 @@ export function FichaColaborador({
                 </div>
               )}
             </div>
+
+            <BlocoPontoFicha colaboradorId={colaboradorId} />
 
             {/* RCF do cargo — pedido explícito da analista de RH. Vem da versão
                 VIGENTE do cargo da posição atual; documento de gestão (não é

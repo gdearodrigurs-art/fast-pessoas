@@ -8,16 +8,15 @@ import {
   listarColaboradores,
 } from "@/dominios/colaboradores/servico";
 import { responderErro } from "@/lib/http";
-import { ErroHttp, exigirPermissao, lerSessao } from "@/lib/sessao";
+import { exigirPermissao, exigirSessao } from "@/lib/sessao";
 
 export async function GET(request: NextRequest) {
   try {
     // Sem chave fixa: o alcance vem do escopo por sessão/papel no repositório
-    // (funcionário vê só a própria ficha; gestor, a equipe vigente).
-    const sessao = await lerSessao();
-    if (!sessao) {
-      throw new ErroHttp(401, "Não autenticado");
-    }
+    // (funcionário vê só a própria ficha; gestor, a equipe vigente). "Sem chave"
+    // não é "sem guarda": `exigirSessao` faz as mesmas duas checagens de
+    // `exigirPermissao` — autenticado e 2FA concluído — e só dispensa a chave.
+    const sessao = await exigirSessao();
     const parametros = request.nextUrl.searchParams;
     const analise = esquemaFiltroColaboradores.safeParse({
       busca: parametros.get("busca") || undefined,

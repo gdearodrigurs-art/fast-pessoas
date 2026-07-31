@@ -15,6 +15,8 @@ interface Permissoes extends Record<string, unknown> {
   beneficios_acessar: boolean;
   avaliacao_acessar: boolean;
   recrutamento_acessar: boolean;
+  ponto_proprio: boolean;
+  ponto_administrar: boolean;
   folha_ver: boolean;
   sst_ver: boolean;
   clima_responder: boolean;
@@ -24,6 +26,7 @@ interface Permissoes extends Record<string, unknown> {
   indicador_ver: boolean;
   documento_ver: boolean;
   colaborador_ver: boolean;
+  colaborador_ver_todos: boolean;
   cargo_administrar: boolean;
   relatorio_ver: boolean;
   painel_executivo_ver: boolean;
@@ -64,6 +67,10 @@ export default async function PaginaInicial() {
         OR sistema.tem_permissao($1, 'avaliacao.resultado.ver'))   AS avaliacao_acessar,
        (sistema.tem_permissao($1, 'rs.ver')
         OR sistema.tem_permissao($1, 'rs.requisicao.criar'))       AS recrutamento_acessar,
+       -- Espelho do PRÓPRIO ponto é direito do trabalhador (Portaria 671
+       -- art. 79): a chave está em todo papel, logo o card aparece para todos.
+       sistema.tem_permissao($1, 'ponto.ver.proprio')              AS ponto_proprio,
+       sistema.tem_permissao($1, 'ponto.administrar')              AS ponto_administrar,
        sistema.tem_permissao($1, 'folha.ver')                      AS folha_ver,
        sistema.tem_permissao($1, 'sst.ver')                        AS sst_ver,
        sistema.tem_permissao($1, 'clima.responder')                AS clima_responder,
@@ -81,6 +88,7 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'indicador.ver')                  AS indicador_ver,
        sistema.tem_permissao($1, 'documento.ver')                  AS documento_ver,
        sistema.tem_permissao($1, 'rh.colaborador.ver')             AS colaborador_ver,
+       sistema.tem_permissao($1, 'rh.colaborador.ver.todos')       AS colaborador_ver_todos,
        sistema.tem_permissao($1, 'rh.cargo.administrar')           AS cargo_administrar,
        sistema.tem_permissao($1, 'relatorio.ver')                   AS relatorio_ver,
        sistema.tem_permissao($1, 'painel.executivo.ver')            AS painel_executivo_ver,
@@ -101,10 +109,11 @@ export default async function PaginaInicial() {
   );
   const pode = linhas[0];
 
-  // Quem NÃO é papel gestor e tem a chave de ver gente alcança a empresa toda
-  // (mesma régua de colaboradores/servico.resolverEscopo e do seletor de gestor
-  // do portal). Serve só para decidir se o card do portal do gestor aparece.
-  const escopoAmplo = sessao.papel !== "gestor";
+  // Alcance de empresa inteira sobre a ficha alheia — pela CHAVE, nunca pelo
+  // nome do papel (mesma régua de colaboradores/servico.resolverEscopo e do
+  // seletor de gestor do portal; ver migration 0039). Serve só para decidir se
+  // o card do portal do gestor aparece.
+  const escopoAmplo = pode?.colaborador_ver_todos ?? false;
 
   // ------------------------------------------------------------------ seções
   // A home passou de 6 para 24 cards ao longo das ondas; em lista única virou
@@ -159,6 +168,16 @@ export default async function PaginaInicial() {
           // tela é pedir a própria adesão. Quem também tem `adesao.gerir` /
           // `beneficio.administrar` encontra a fila do DP na mesma tela.
           mostrar: pode?.beneficios_acessar ?? false,
+        },
+        {
+          href: "/meu-ponto",
+          titulo: "Ponto e banco de horas",
+          descricao:
+            "Seu espelho do mês, saldo do banco de horas e horas extras apuradas.",
+          // Chave `ponto.ver.proprio`, que TODO papel tem: o card mora em "Meu
+          // dia" porque a porta é o próprio espelho. Quem também administra o
+          // ponto encontra a fila do DP no card "Ponto (DP)".
+          mostrar: pode?.ponto_proprio ?? false,
         },
         {
           href: "/documentos",
@@ -246,6 +265,16 @@ export default async function PaginaInicial() {
           titulo: "Saúde e segurança",
           descricao: "ASOs, CATs e entregas de EPI com registro de ciência.",
           mostrar: pode?.sst_ver ?? false,
+        },
+        {
+          href: "/ponto",
+          titulo: "Ponto (DP)",
+          descricao:
+            "Importação, apuração da competência, fila de intercorrências e banco de horas da empresa.",
+          // "(DP)" no título porque o card do PRÓPRIO ponto tem o nome sem
+          // sufixo em "Meu dia": quem tem as duas chaves vê os dois e precisa
+          // distinguir a operação da empresa do próprio espelho.
+          mostrar: pode?.ponto_administrar ?? false,
         },
         {
           href: "/folha",

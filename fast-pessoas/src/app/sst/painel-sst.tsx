@@ -4,8 +4,11 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
+  CLASSIFICACOES_RISCO,
+  ClassificacaoRisco,
   RESULTADOS_ASO,
   ResultadoAso,
+  ROTULOS_CLASSIFICACAO_RISCO,
   ROTULOS_RESULTADO_ASO,
   ROTULOS_STATUS_CAT,
   ROTULOS_TIPO_ASO,
@@ -34,6 +37,24 @@ interface Aso {
   resultado?: ResultadoAso;
   resultado_rotulo?: string;
   restricoes?: string | null;
+  documento_id?: number | null;
+  documento_titulo?: string | null;
+  registrado_por_nome?: string;
+}
+
+interface Psicossocial {
+  id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data_avaliacao: string;
+  validade: string | null;
+  aso_id: number | null;
+  empresa_executora: string | null;
+  // presentes só quando a API devolve a visão com dado de saúde
+  classificacao_risco?: ClassificacaoRisco;
+  classificacao_rotulo?: string;
+  observacoes?: string | null;
   documento_id?: number | null;
   documento_titulo?: string | null;
   registrado_por_nome?: string;
@@ -117,7 +138,17 @@ interface VinculoAfastamento {
   fim: string | null;
 }
 
-type Aba = "asos" | "epis" | "cats";
+type Aba = "asos" | "nr1" | "epis" | "cats";
+
+/** Etiqueta do risco psicossocial — só aparece para quem tem sst.saude.ver. */
+function classeRisco(
+  estilosMod: Record<string, string>,
+  risco: ClassificacaoRisco
+): string {
+  if (risco === "alto" || risco === "critico") return estilosMod.etiquetaVencido;
+  if (risco === "moderado") return estilosMod.etiquetaAviso;
+  return estilosMod.etiquetaOk;
+}
 
 // ------------------------------------------------------------------ apoio
 
@@ -165,6 +196,10 @@ export function PainelSst({
   // Palpite inicial pela flag de navegação; a API confirma em toda resposta.
   const [comSaude, setComSaude] = useState(podeVerSaude);
   const [painel, setPainel] = useState<PainelVencimentos | null>(null);
+  // NR-1 anda ao lado do ASO: lista e painel próprios, mesma régua.
+  const [psicossociais, setPsicossociais] = useState<Psicossocial[]>([]);
+  const [comSaudeNr1, setComSaudeNr1] = useState(podeVerSaude);
+  const [painelNr1, setPainelNr1] = useState<PainelVencimentos | null>(null);
   const [itens, setItens] = useState<ItemEpi[]>([]);
   const [entregas, setEntregas] = useState<EntregaEpi[]>([]);
   const [cats, setCats] = useState<Cat[]>([]);
@@ -181,21 +216,28 @@ export function PainelSst({
     let ativo = true;
     (async () => {
       try {
-        const [respAsos, respItens, respEntregas, respCats] =
+        const [respAsos, respNr1, respItens, respEntregas, respCats] =
           await Promise.all([
             fetch("/api/sst/asos"),
+            fetch("/api/sst/psicossociais"),
             fetch("/api/sst/epis"),
             fetch("/api/sst/epis/entregas"),
             fetch("/api/sst/cats"),
           ]);
-        const [dadosAsos, dadosItens, dadosEntregas, dadosCats] =
+        const [dadosAsos, dadosNr1, dadosItens, dadosEntregas, dadosCats] =
           await Promise.all([
             respAsos.json().catch(() => ({})),
+            respNr1.json().catch(() => ({})),
             respItens.json().catch(() => ({})),
             respEntregas.json().catch(() => ({})),
             respCats.json().catch(() => ({})),
           ]);
         if (!ativo) return;
+        if (respNr1.ok) {
+          setPsicossociais(dadosNr1.avaliacoes ?? []);
+          setComSaudeNr1(Boolean(dadosNr1.com_saude));
+          setPainelNr1(dadosNr1.painel ?? null);
+        }
         if (respAsos.ok) {
           setAsos(dadosAsos.asos ?? []);
           setComSaude(Boolean(dadosAsos.com_saude));
@@ -286,6 +328,27 @@ export function PainelSst({
   const [asoErro, setAsoErro] = useState<string | null>(null);
   const [asoAviso, setAsoAviso] = useState<string | null>(null);
 
+  // NR-1 acoplada ao ASO: "todo mundo que fizer o ASO agora já entra nessa
+  // modalidade" — o formulário do exame oferece a avaliação vinculada, que
+  // nasce na MESMA transação do ASO.
+  const [asoComNr1, setAsoComNr1] = useState(false);
+  const [asoNr1Data, setAsoNr1Data] = useState("");
+  const [asoNr1Validade, setAsoNr1Validade] = useState("");
+  const [asoNr1Risco, setAsoNr1Risco] = useState<ClassificacaoRisco>("baixo");
+  const [asoNr1Observacoes, setAsoNr1Observacoes] = useState("");
+  const [asoNr1Empresa, setAsoNr1Empresa] = useState("");
+  const [asoNr1DocumentoId, setAsoNr1DocumentoId] = useState("");
+
+  function limparNr1DoAso() {
+    setAsoComNr1(false);
+    setAsoNr1Data("");
+    setAsoNr1Validade("");
+    setAsoNr1Risco("baixo");
+    setAsoNr1Observacoes("");
+    setAsoNr1Empresa("");
+    setAsoNr1DocumentoId("");
+  }
+
   async function registrarAso(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     setAsoErro(null);
@@ -304,6 +367,19 @@ export function PainelSst({
           restricoes:
             asoResultado === "apto" ? undefined : asoRestricoes || undefined,
           documento_id: asoDocumentoId ? Number(asoDocumentoId) : null,
+          psicossocial: asoComNr1
+            ? {
+                // Sem data própria, a avaliação nasce na data do exame.
+                data_avaliacao: asoNr1Data || asoDataExame,
+                validade: asoNr1Validade || null,
+                classificacao_risco: asoNr1Risco,
+                observacoes: asoNr1Observacoes || undefined,
+                empresa_executora: asoNr1Empresa || undefined,
+                documento_id: asoNr1DocumentoId
+                  ? Number(asoNr1DocumentoId)
+                  : null,
+              }
+            : undefined,
         }),
       });
       const dados = await resposta.json().catch(() => ({}));
@@ -316,8 +392,11 @@ export function PainelSst({
         setAsoRestricoes("");
         setAsoDocumentoId("");
         setAsoAviso(
-          "ASO registrado. Resultado e restrições são dado de saúde: cifrados/ausentes para quem não tem a permissão específica."
+          asoComNr1
+            ? "ASO registrado com a avaliação psicossocial (NR-1) vinculada. Resultado, classificação e observações são dado de saúde: cifrados/ausentes para quem não tem a permissão específica."
+            : "ASO registrado. Resultado e restrições são dado de saúde: cifrados/ausentes para quem não tem a permissão específica."
         );
+        limparNr1DoAso();
         recarregar();
       } else {
         setAsoErro(dados.erro ?? "Não foi possível registrar o ASO.");
@@ -326,6 +405,66 @@ export function PainelSst({
       setAsoErro("Falha de conexão. Tente novamente.");
     } finally {
       setAsoEnviando(false);
+    }
+  }
+
+  // ---------------------------------------------------------------- formulário: NR-1 avulsa
+
+  const [nr1ColaboradorId, setNr1ColaboradorId] = useState("");
+  const [nr1Data, setNr1Data] = useState("");
+  const [nr1Validade, setNr1Validade] = useState("");
+  const [nr1Risco, setNr1Risco] = useState<ClassificacaoRisco>("baixo");
+  const [nr1Observacoes, setNr1Observacoes] = useState("");
+  const [nr1Empresa, setNr1Empresa] = useState("");
+  const [nr1DocumentoId, setNr1DocumentoId] = useState("");
+  const [nr1AsoId, setNr1AsoId] = useState("");
+  const [nr1Enviando, setNr1Enviando] = useState(false);
+  const [nr1Erro, setNr1Erro] = useState<string | null>(null);
+  const [nr1Aviso, setNr1Aviso] = useState<string | null>(null);
+
+  async function registrarPsicossocial(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setNr1Erro(null);
+    setNr1Aviso(null);
+    setNr1Enviando(true);
+    try {
+      const resposta = await fetch("/api/sst/psicossociais", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          colaborador_id: Number(nr1ColaboradorId),
+          data_avaliacao: nr1Data,
+          validade: nr1Validade || null,
+          classificacao_risco: nr1Risco,
+          observacoes: nr1Observacoes || undefined,
+          empresa_executora: nr1Empresa || undefined,
+          documento_id: nr1DocumentoId ? Number(nr1DocumentoId) : null,
+          aso_id: nr1AsoId ? Number(nr1AsoId) : null,
+        }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        setNr1ColaboradorId("");
+        setNr1Data("");
+        setNr1Validade("");
+        setNr1Risco("baixo");
+        setNr1Observacoes("");
+        setNr1Empresa("");
+        setNr1DocumentoId("");
+        setNr1AsoId("");
+        setNr1Aviso(
+          "Avaliação psicossocial registrada. Classificação e observações são dado de saúde: cifradas/ausentes para quem não tem a permissão específica."
+        );
+        recarregar();
+      } else {
+        setNr1Erro(
+          dados.erro ?? "Não foi possível registrar a avaliação psicossocial."
+        );
+      }
+    } catch {
+      setNr1Erro("Falha de conexão. Tente novamente.");
+    } finally {
+      setNr1Enviando(false);
     }
   }
 
@@ -371,7 +510,28 @@ export function PainelSst({
 
   const [entregaColaboradorId, setEntregaColaboradorId] = useState("");
   const [entregaItemId, setEntregaItemId] = useState("");
-  const [entregaQuantidade, setEntregaQuantidade] = useState("1");
+  /**
+   * NASCE VAZIO. Um agente anterior julgou este "1" benigno com o argumento de
+   * que é unidade, e não regra. Concordo com a premissa e discordo do
+   * veredito, e a distinção vale para a varredura inteira:
+   *
+   *  - NÚMERO DE REGRA é o que governa cálculos futuros de todo mundo — teto,
+   *    fator, prazo, divisor, faixa. Esse tem de ser cadastro do usuário,
+   *    versionado, porque muda com a lei, a convenção ou a política da
+   *    empresa. Quantidade de EPI não é isso: 1 não é política de ninguém.
+   *  - NÚMERO DE DADO é o que o sistema AFIRMA sobre uma pessoa naquele
+   *    registro. E aqui é disto que se trata: a ficha de EPI é prova em
+   *    fiscalização e em reclamatória (NR-6 exige o registro da entrega). Com
+   *    o campo pré-preenchido, o técnico que entrega dois pares de luva e não
+   *    repara no campo grava "1 unidade" — e o sistema passa a afirmar, com a
+   *    assinatura dele, uma quantidade que ele não disse.
+   *
+   * Ou seja: não é o defeito das faixas e dos divisores, é outro. Mas o
+   * remédio é o mesmo, custa uma linha, e o servidor já exige o campo
+   * ("Informe a quantidade", em dominios/sst/esquemas.ts). Deixar um palpite
+   * onde não custa nada perguntar é o hábito que produziu os outros três.
+   */
+  const [entregaQuantidade, setEntregaQuantidade] = useState("");
   const [entregaData, setEntregaData] = useState("");
   const [entregaTermoId, setEntregaTermoId] = useState("");
   const [entregaEnviando, setEntregaEnviando] = useState(false);
@@ -391,7 +551,13 @@ export function PainelSst({
         body: JSON.stringify({
           colaborador_id: Number(entregaColaboradorId),
           epi_item_id: Number(entregaItemId),
-          quantidade: Number(entregaQuantidade),
+          // Em branco vira chave ausente — assim o erro é "Informe a
+          // quantidade" e não "Quantidade mínima: 1", que é o que Number("")
+          // produziria ao virar zero.
+          quantidade:
+            entregaQuantidade.trim() === ""
+              ? undefined
+              : Number(entregaQuantidade),
           data_entrega: entregaData,
           termo_documento_id: entregaTermoId ? Number(entregaTermoId) : null,
         }),
@@ -400,7 +566,7 @@ export function PainelSst({
       if (resposta.ok) {
         setEntregaColaboradorId("");
         setEntregaItemId("");
-        setEntregaQuantidade("1");
+        setEntregaQuantidade("");
         setEntregaData("");
         setEntregaTermoId("");
         setEntregaAviso(
@@ -567,6 +733,14 @@ export function PainelSst({
     (entrega) => mostrarDevolvidas || entrega.devolvido_em === null
   );
   const vencidosTotal = painel?.vencidos.length ?? 0;
+  const vencidasNr1Total = painelNr1?.vencidos.length ?? 0;
+  // ASOs do colaborador escolhido que ainda não têm avaliação vinculada.
+  const asosSemAvaliacao = asos.filter(
+    (aso) =>
+      nr1ColaboradorId &&
+      aso.colaborador_id === Number(nr1ColaboradorId) &&
+      !psicossociais.some((avaliacao) => avaliacao.aso_id === aso.id)
+  );
 
   // ---------------------------------------------------------------- render
 
@@ -672,6 +846,19 @@ export function PainelSst({
                 {vencidosTotal > 0 && (
                   <span className={estilos.badge}>
                     {vencidosTotal} vencido{vencidosTotal > 1 ? "s" : ""}
+                  </span>
+                )}
+              </button>
+              <button
+                className={`${estilos.aba} ${aba === "nr1" ? estilos.abaAtiva : ""}`}
+                type="button"
+                onClick={() => setAba("nr1")}
+              >
+                NR-1 (psicossocial)
+                {vencidasNr1Total > 0 && (
+                  <span className={estilos.badge}>
+                    {vencidasNr1Total} vencida
+                    {vencidasNr1Total > 1 ? "s" : ""}
                   </span>
                 )}
               </button>
@@ -891,6 +1078,157 @@ export function PainelSst({
                           sst.saude.ver, com leitura registrada em trilha.
                         </span>
                       </div>
+
+                      <div className={estilos.campoGrupoLargo}>
+                        <label className={estilos.caixaSelecao}>
+                          <input
+                            type="checkbox"
+                            checked={asoComNr1}
+                            onChange={(e) => {
+                              setAsoComNr1(e.target.checked);
+                              if (!e.target.checked) limparNr1DoAso();
+                            }}
+                          />
+                          Registrar junto a avaliação psicossocial (NR-1)
+                          vinculada a este ASO
+                        </label>
+                        <span className={estilos.ajuda}>
+                          A NR-1 não substitui o ASO: anda ao lado dele, com
+                          validade e painel próprios. Marcada aqui, a avaliação
+                          nasce na mesma transação do exame.
+                        </span>
+                      </div>
+
+                      {asoComNr1 && (
+                        <>
+                          <div className={estilos.campoGrupo}>
+                            <label
+                              className={estilos.rotulo}
+                              htmlFor="aso-nr1-data"
+                            >
+                              Data da avaliação
+                            </label>
+                            <input
+                              className={estilos.campo}
+                              id="aso-nr1-data"
+                              type="date"
+                              value={asoNr1Data || asoDataExame}
+                              onChange={(e) => setAsoNr1Data(e.target.value)}
+                            />
+                            <span className={estilos.ajuda}>
+                              Em branco, assume a data do exame.
+                            </span>
+                          </div>
+                          <div className={estilos.campoGrupo}>
+                            <label
+                              className={estilos.rotulo}
+                              htmlFor="aso-nr1-validade"
+                            >
+                              Validade da avaliação
+                            </label>
+                            <input
+                              className={estilos.campo}
+                              id="aso-nr1-validade"
+                              type="date"
+                              value={asoNr1Validade}
+                              onChange={(e) =>
+                                setAsoNr1Validade(e.target.value)
+                              }
+                            />
+                          </div>
+                          <div className={estilos.campoGrupo}>
+                            <label
+                              className={estilos.rotulo}
+                              htmlFor="aso-nr1-risco"
+                            >
+                              Classificação de risco
+                            </label>
+                            <select
+                              className={estilos.campo}
+                              id="aso-nr1-risco"
+                              value={asoNr1Risco}
+                              onChange={(e) =>
+                                setAsoNr1Risco(
+                                  e.target.value as ClassificacaoRisco
+                                )
+                              }
+                            >
+                              {CLASSIFICACOES_RISCO.map((opcao) => (
+                                <option key={opcao} value={opcao}>
+                                  {ROTULOS_CLASSIFICACAO_RISCO[opcao]}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className={estilos.campoGrupo}>
+                            <label
+                              className={estilos.rotulo}
+                              htmlFor="aso-nr1-empresa"
+                            >
+                              Empresa executora
+                            </label>
+                            <input
+                              className={estilos.campo}
+                              id="aso-nr1-empresa"
+                              maxLength={200}
+                              value={asoNr1Empresa}
+                              onChange={(e) => setAsoNr1Empresa(e.target.value)}
+                            />
+                          </div>
+                          <div className={estilos.campoGrupo}>
+                            <label
+                              className={estilos.rotulo}
+                              htmlFor="aso-nr1-documento"
+                            >
+                              Laudo da NR-1 no GED (opcional)
+                            </label>
+                            <select
+                              className={estilos.campo}
+                              id="aso-nr1-documento"
+                              value={asoNr1DocumentoId}
+                              onChange={(e) =>
+                                setAsoNr1DocumentoId(e.target.value)
+                              }
+                            >
+                              <option value="">Sem documento</option>
+                              {documentosDoColaborador(asoColaboradorId).map(
+                                (documento) => (
+                                  <option
+                                    key={documento.id}
+                                    value={documento.id}
+                                  >
+                                    #{documento.id} — {documento.titulo}
+                                    {documento.sensivel ? " (sensível)" : ""}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+                          <div className={estilos.campoGrupoLargo}>
+                            <label
+                              className={estilos.rotulo}
+                              htmlFor="aso-nr1-observacoes"
+                            >
+                              Observações da avaliação
+                            </label>
+                            <textarea
+                              className={estilos.campo}
+                              id="aso-nr1-observacoes"
+                              rows={2}
+                              maxLength={2000}
+                              value={asoNr1Observacoes}
+                              onChange={(e) =>
+                                setAsoNr1Observacoes(e.target.value)
+                              }
+                            />
+                            <span className={estilos.ajuda}>
+                              Dado de saúde: cifrado na aplicação, igual às
+                              restrições do ASO.
+                            </span>
+                          </div>
+                        </>
+                      )}
+
                       <button
                         className={estilos.botao}
                         type="submit"
@@ -1015,6 +1353,386 @@ export function PainelSst({
                     Sem a permissão de saúde, resultado, restrições e o PDF
                     ficam ausentes do payload — o painel mostra apenas tipo do
                     exame e datas. Datas no horário de Brasília.
+                  </p>
+                </section>
+              </>
+            )}
+
+            {/* ------------------------------------- NR-1 / psicossocial */}
+            {!carregando && aba === "nr1" && (
+              <>
+                <p className={estilos.aviso}>
+                  A NR-1 <strong>não substitui o ASO</strong>: é o
+                  questionário de saúde emocional que anda ao lado dele, com
+                  validade, renovação, painel e indicador próprios. Todo ASO
+                  registrado a partir de agora pode já entrar nesta modalidade
+                  pela aba de ASOs.
+                </p>
+
+                <section className={estilos.cartao}>
+                  <h2>Painel de vencimento da avaliação psicossocial</h2>
+                  {painelNr1 && (
+                    <>
+                      <div className={estilos.painelVencimento}>
+                        <div className={estilos.colunaVencimento}>
+                          <h3 className={estilos.tituloVencido}>
+                            Vencidas ({painelNr1.vencidos.length})
+                          </h3>
+                          <ul className={estilos.listaVencimento}>
+                            {painelNr1.vencidos.map((item) => (
+                              <li key={item.colaborador_id}>
+                                {item.colaborador_nome} ({item.matricula}){" "}
+                                <span className={estilos.dataVencimento}>
+                                  — {formatarData(item.validade)}
+                                </span>
+                              </li>
+                            ))}
+                            {painelNr1.vencidos.length === 0 && (
+                              <li>Nenhuma avaliação vencida.</li>
+                            )}
+                          </ul>
+                        </div>
+                        <div className={estilos.colunaVencimento}>
+                          <h3 className={estilos.titulo30}>
+                            Vence em 30 dias ({painelNr1.vence_30.length})
+                          </h3>
+                          <ul className={estilos.listaVencimento}>
+                            {painelNr1.vence_30.map((item) => (
+                              <li key={item.colaborador_id}>
+                                {item.colaborador_nome} ({item.matricula}){" "}
+                                <span className={estilos.dataVencimento}>
+                                  — {formatarData(item.validade)}
+                                </span>
+                              </li>
+                            ))}
+                            {painelNr1.vence_30.length === 0 && (
+                              <li>Ninguém nesta janela.</li>
+                            )}
+                          </ul>
+                        </div>
+                        <div className={estilos.colunaVencimento}>
+                          <h3 className={estilos.titulo60}>
+                            Vence em 31–60 dias ({painelNr1.vence_60.length})
+                          </h3>
+                          <ul className={estilos.listaVencimento}>
+                            {painelNr1.vence_60.map((item) => (
+                              <li key={item.colaborador_id}>
+                                {item.colaborador_nome} ({item.matricula}){" "}
+                                <span className={estilos.dataVencimento}>
+                                  — {formatarData(item.validade)}
+                                </span>
+                              </li>
+                            ))}
+                            {painelNr1.vence_60.length === 0 && (
+                              <li>Ninguém nesta janela.</li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                      <p className={estilos.notaRodape}>
+                        {painelNr1.total_monitorado} colaborador(es)
+                        monitorado(s) (não desligados) • {painelNr1.em_dia} em
+                        dia • {painelNr1.sem_validade} sem avaliação com
+                        validade registrada.
+                      </p>
+                    </>
+                  )}
+                </section>
+
+                {podeGerir && (
+                  <section className={estilos.cartao}>
+                    <h2>Registrar avaliação psicossocial</h2>
+                    <form
+                      className={estilos.formulario}
+                      onSubmit={registrarPsicossocial}
+                    >
+                      <div className={estilos.campoGrupo}>
+                        <label
+                          className={estilos.rotulo}
+                          htmlFor="nr1-colaborador"
+                        >
+                          Colaborador
+                        </label>
+                        <select
+                          className={estilos.campo}
+                          id="nr1-colaborador"
+                          required
+                          value={nr1ColaboradorId}
+                          onChange={(e) => {
+                            setNr1ColaboradorId(e.target.value);
+                            setNr1AsoId("");
+                          }}
+                        >
+                          <option value="">Escolha…</option>
+                          {colaboradores.map((colaborador) => (
+                            <option key={colaborador.id} value={colaborador.id}>
+                              {colaborador.nome_completo} ({colaborador.matricula})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className={estilos.campoGrupo}>
+                        <label className={estilos.rotulo} htmlFor="nr1-data">
+                          Data da avaliação
+                        </label>
+                        <input
+                          className={estilos.campo}
+                          id="nr1-data"
+                          type="date"
+                          required
+                          value={nr1Data}
+                          onChange={(e) => setNr1Data(e.target.value)}
+                        />
+                      </div>
+                      <div className={estilos.campoGrupo}>
+                        <label
+                          className={estilos.rotulo}
+                          htmlFor="nr1-validade"
+                        >
+                          Validade (informada pela empresa executora)
+                        </label>
+                        <input
+                          className={estilos.campo}
+                          id="nr1-validade"
+                          type="date"
+                          value={nr1Validade}
+                          onChange={(e) => setNr1Validade(e.target.value)}
+                        />
+                      </div>
+                      <div className={estilos.campoGrupo}>
+                        <label className={estilos.rotulo} htmlFor="nr1-risco">
+                          Classificação de risco
+                        </label>
+                        <select
+                          className={estilos.campo}
+                          id="nr1-risco"
+                          value={nr1Risco}
+                          onChange={(e) =>
+                            setNr1Risco(e.target.value as ClassificacaoRisco)
+                          }
+                        >
+                          {CLASSIFICACOES_RISCO.map((opcao) => (
+                            <option key={opcao} value={opcao}>
+                              {ROTULOS_CLASSIFICACAO_RISCO[opcao]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className={estilos.campoGrupo}>
+                        <label className={estilos.rotulo} htmlFor="nr1-empresa">
+                          Empresa executora
+                        </label>
+                        <input
+                          className={estilos.campo}
+                          id="nr1-empresa"
+                          maxLength={200}
+                          value={nr1Empresa}
+                          onChange={(e) => setNr1Empresa(e.target.value)}
+                        />
+                      </div>
+                      <div className={estilos.campoGrupo}>
+                        <label className={estilos.rotulo} htmlFor="nr1-aso">
+                          ASO de origem (opcional)
+                        </label>
+                        <select
+                          className={estilos.campo}
+                          id="nr1-aso"
+                          disabled={asosSemAvaliacao.length === 0}
+                          value={nr1AsoId}
+                          onChange={(e) => setNr1AsoId(e.target.value)}
+                        >
+                          <option value="">Avaliação avulsa</option>
+                          {asosSemAvaliacao.map((aso) => (
+                            <option key={aso.id} value={aso.id}>
+                              #{aso.id} — {aso.tipo_rotulo} em{" "}
+                              {formatarData(aso.data_exame)}
+                            </option>
+                          ))}
+                        </select>
+                        <span className={estilos.ajuda}>
+                          Só ASOs do colaborador escolhido que ainda não têm
+                          avaliação vinculada.
+                        </span>
+                      </div>
+                      <div className={estilos.campoGrupo}>
+                        <label
+                          className={estilos.rotulo}
+                          htmlFor="nr1-documento"
+                        >
+                          Laudo no GED (opcional)
+                        </label>
+                        <select
+                          className={estilos.campo}
+                          id="nr1-documento"
+                          value={nr1DocumentoId}
+                          onChange={(e) => setNr1DocumentoId(e.target.value)}
+                        >
+                          <option value="">Sem documento</option>
+                          {documentosDoColaborador(nr1ColaboradorId).map(
+                            (documento) => (
+                              <option key={documento.id} value={documento.id}>
+                                #{documento.id} — {documento.titulo}
+                                {documento.sensivel ? " (sensível)" : ""}
+                              </option>
+                            )
+                          )}
+                        </select>
+                      </div>
+                      <div className={estilos.campoGrupoLargo}>
+                        <label
+                          className={estilos.rotulo}
+                          htmlFor="nr1-observacoes"
+                        >
+                          Observações
+                        </label>
+                        <textarea
+                          className={estilos.campo}
+                          id="nr1-observacoes"
+                          rows={2}
+                          maxLength={2000}
+                          value={nr1Observacoes}
+                          onChange={(e) => setNr1Observacoes(e.target.value)}
+                        />
+                        <span className={estilos.ajuda}>
+                          Dado de saúde: cifrado na aplicação (AES-256-GCM)
+                          antes de ir ao banco. Só aparece para quem tem
+                          sst.saude.ver, com leitura registrada em trilha.
+                        </span>
+                      </div>
+                      <button
+                        className={estilos.botao}
+                        type="submit"
+                        disabled={nr1Enviando}
+                      >
+                        {nr1Enviando ? "Registrando…" : "Registrar avaliação"}
+                      </button>
+                    </form>
+                    {nr1Erro && <p className={estilos.erro}>{nr1Erro}</p>}
+                    {nr1Aviso && <p className={estilos.sucesso}>{nr1Aviso}</p>}
+                  </section>
+                )}
+
+                <section className={estilos.cartao}>
+                  <h2>Avaliações registradas</h2>
+                  {comSaudeNr1 && (
+                    <p className={estilos.ajuda}>
+                      Você tem acesso ao conteúdo clínico: cada observação
+                      exibida nesta lista gera registro em
+                      audit.leitura_sensivel.
+                    </p>
+                  )}
+                  <div className={estilos.tabelaEnvolucro}>
+                    <table className={estilos.tabela}>
+                      <thead>
+                        <tr>
+                          <th>Colaborador</th>
+                          <th>Avaliação</th>
+                          <th>Validade</th>
+                          <th>Empresa executora</th>
+                          <th>Origem</th>
+                          {comSaudeNr1 && <th>Classificação</th>}
+                          {comSaudeNr1 && <th>Observações</th>}
+                          {comSaudeNr1 && <th>Laudo</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {psicossociais.map((avaliacao) => (
+                          <tr key={avaliacao.id}>
+                            <td>
+                              {avaliacao.colaborador_nome} (
+                              {avaliacao.matricula})
+                            </td>
+                            <td>{formatarData(avaliacao.data_avaliacao)}</td>
+                            <td>
+                              {avaliacao.validade ? (
+                                <>
+                                  {formatarData(avaliacao.validade)}{" "}
+                                  {avaliacao.validade < hoje && (
+                                    <span className={estilos.etiquetaVencido}>
+                                      Vencida
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                            <td>{avaliacao.empresa_executora ?? "—"}</td>
+                            <td>
+                              {avaliacao.aso_id === null ? (
+                                <span className={estilos.etiquetaNeutra}>
+                                  Avulsa
+                                </span>
+                              ) : (
+                                <span className={estilos.etiquetaOk}>
+                                  ASO #{avaliacao.aso_id}
+                                </span>
+                              )}
+                            </td>
+                            {comSaudeNr1 && (
+                              <td>
+                                {avaliacao.classificacao_risco ? (
+                                  <span
+                                    className={classeRisco(
+                                      estilos,
+                                      avaliacao.classificacao_risco
+                                    )}
+                                  >
+                                    {avaliacao.classificacao_rotulo}
+                                  </span>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                            )}
+                            {comSaudeNr1 && (
+                              <td>
+                                {avaliacao.observacoes ? (
+                                  <>
+                                    <span className={estilos.etiquetaSensivel}>
+                                      Sensível
+                                    </span>
+                                    <span className={estilos.detalheSaude}>
+                                      {avaliacao.observacoes}
+                                    </span>
+                                  </>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                            )}
+                            {comSaudeNr1 && (
+                              <td>
+                                {avaliacao.documento_id ? (
+                                  <a
+                                    className={estilos.ligacao}
+                                    href={`/api/documentos/${avaliacao.documento_id}/download`}
+                                  >
+                                    {avaliacao.documento_titulo ??
+                                      `#${avaliacao.documento_id}`}
+                                  </a>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                        {psicossociais.length === 0 && (
+                          <tr>
+                            <td colSpan={comSaudeNr1 ? 8 : 5}>
+                              Nenhuma avaliação psicossocial registrada.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className={estilos.notaRodape}>
+                    Sem a permissão de saúde, classificação, observações e o
+                    laudo ficam ausentes do payload — restam datas, empresa
+                    executora e o vínculo com o ASO. Datas no horário de
+                    Brasília.
                   </p>
                 </section>
               </>

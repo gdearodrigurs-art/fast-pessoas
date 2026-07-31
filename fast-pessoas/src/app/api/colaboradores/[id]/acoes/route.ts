@@ -4,7 +4,7 @@ import {
   listarAcoesColaborador,
 } from "@/dominios/colaboradores/servico";
 import { responderErro } from "@/lib/http";
-import { ErroHttp, exigirPermissao, lerSessao } from "@/lib/sessao";
+import { exigirPermissao, exigirSessao } from "@/lib/sessao";
 
 function validarId(id: string): number | null {
   const idNumero = Number(id);
@@ -16,10 +16,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const sessao = await lerSessao();
-    if (!sessao) {
-      throw new ErroHttp(401, "Não autenticado");
-    }
+    const sessao = await exigirSessao();
     const { id } = await params;
     const idNumero = validarId(id);
     if (idNumero === null) {

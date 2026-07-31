@@ -8,6 +8,7 @@ import {
   formatarCompetencia,
   formatarMoedaCentavos,
   NaturezaRubrica,
+  OrigemVariavel,
   ROTULOS_ESTADO_COMPETENCIA,
   ROTULOS_NATUREZA,
   ROTULOS_ORIGEM_VARIAVEL,
@@ -44,7 +45,7 @@ interface Variavel {
   natureza: NaturezaRubrica;
   referencia: number | null;
   valor_centavos: number | null;
-  origem: "manual" | "beneficio";
+  origem: OrigemVariavel;
 }
 
 interface RubricaLancavel {
@@ -53,6 +54,8 @@ interface RubricaLancavel {
   nome: string;
   natureza: string;
   precisa: "referencia" | "valor" | "nenhum";
+  /** Verba manual genérica (9001/9002): última da lista, com aviso. */
+  excecao: boolean;
 }
 
 interface ColaboradorOpcao {
@@ -112,6 +115,39 @@ interface Visao {
   };
 }
 
+/**
+ * Corpo devolvido por POST /api/folha/[id]/importar-ponto. Tudo aqui é NÚMERO
+ * DA IMPORTAÇÃO que o DP precisa ver na hora — a rota já devolvia, a tela é que
+ * jogava fora.
+ */
+interface RetornoImportacaoPonto {
+  importadas: number;
+  removidas: number;
+  pessoas: number;
+  intercorrencias_abertas: number;
+  totais_horas: {
+    he_50: number;
+    he_100: number;
+    adicional_noturno: number;
+    faltas_dias: number;
+  };
+}
+
+/**
+ * Retorno de uma ação bem-sucedida. `texto` é o que ela fez; `alerta` é o que
+ * continua pendente e pode mudar o número — vai em caixa de ALERTA, não na
+ * linha verde de sucesso, porque não é boa notícia.
+ */
+interface AvisoAcao {
+  texto: string;
+  alerta?: string;
+}
+
+/** Horas e dias com vírgula decimal, como o DP lê no holerite. */
+function formatarQuantidade(valor: number): string {
+  return valor.toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+}
+
 function classeEtiquetaNatureza(natureza: NaturezaRubrica): string {
   const porNatureza: Record<NaturezaRubrica, string> = {
     provento: estilos.etiquetaProvento,
@@ -136,7 +172,7 @@ export function PainelCompetencia({ id }: { id: number }) {
 
   const [acaoEmCurso, setAcaoEmCurso] = useState<string | null>(null);
   const [erroAcao, setErroAcao] = useState<string | null>(null);
-  const [avisoAcao, setAvisoAcao] = useState<string | null>(null);
+  const [avisoAcao, setAvisoAcao] = useState<AvisoAcao | null>(null);
   const [detalheAberto, setDetalheAberto] = useState<number | null>(null);
   const [codigoAprovacao, setCodigoAprovacao] = useState("");
 
@@ -207,31 +243,66 @@ export function PainelCompetencia({ id }: { id: number }) {
     }
   }
 
-  async function executarAcao(
+  /**
+   * `aviso` aceita texto fixo ou uma função do CORPO da resposta: ação que
+   * devolve número (quantas variáveis, quantas pendências) tem que mostrar o
+   * número, não uma frase genérica.
+   */
+  async function executarAcao<T>(
     chave: string,
     caminho: string,
     metodo: "POST" | "DELETE",
     confirmacao?: string,
-    aviso?: string,
-    corpo?: Record<string, unknown>
+    aviso?: string | ((dados: T) => AvisoAcao),
+    corpo?: Record<string, unknown>,
+    // 409 que o servidor manda como PERGUNTA, não como recusa final: a
+    // mensagem dele vira a confirmação e o corpo daqui é o "sim, prossiga"
+    // (hoje: importar ponto com intercorrência aberta). Sem isto o usuário via
+    // um erro vermelho sem saída, e o 409 viraria bloqueio absoluto.
+    //
+    // `chave` casa com o campo `confirmacao` do corpo do erro: a mesma rota
+    // devolve 409 por motivos que reenviar NÃO resolve (competência não
+    // aberta, ponto sem apuração), e perguntar "prosseguir assim mesmo?" neles
+    // prometeria uma saída que não existe.
+    insistirNoConflito?: {
+      chave: string;
+      pergunta: string;
+      corpo: Record<string, unknown>;
+    }
   ) {
     if (confirmacao && !window.confirm(confirmacao)) return;
     setErroAcao(null);
     setAvisoAcao(null);
     setAcaoEmCurso(chave);
-    try {
+    const enviar = async (comCorpo?: Record<string, unknown>) => {
       const resposta = await fetch(caminho, {
         method: metodo,
-        ...(corpo
+        ...(comCorpo
           ? {
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(corpo),
+              body: JSON.stringify(comCorpo),
             }
           : {}),
       });
-      const dados = await resposta.json().catch(() => ({}));
+      return { resposta, dados: await resposta.json().catch(() => ({})) };
+    };
+    try {
+      let { resposta, dados } = await enviar(corpo);
+      if (
+        resposta.status === 409 &&
+        insistirNoConflito &&
+        dados.confirmacao === insistirNoConflito.chave &&
+        window.confirm(`${dados.erro}\n\n${insistirNoConflito.pergunta}`)
+      ) {
+        ({ resposta, dados } = await enviar({
+          ...corpo,
+          ...insistirNoConflito.corpo,
+        }));
+      }
       if (resposta.ok) {
-        if (aviso) setAvisoAcao(aviso);
+        if (aviso) {
+          setAvisoAcao(typeof aviso === "string" ? { texto: aviso } : aviso(dados));
+        }
         recarregar();
       } else {
         setErroAcao(dados.erro ?? "A operação falhou.");
@@ -303,6 +374,62 @@ export function PainelCompetencia({ id }: { id: number }) {
                     {acaoEmCurso === "importar"
                       ? "Importando…"
                       : "Importar descontos de benefícios"}
+                  </button>
+                  {/*
+                    F5 — ligação ponto → folha. Mesmo padrão do botão acima:
+                    reimportar substitui só o lote da própria origem ('ponto'),
+                    o que o DP lançou à mão fica. O DSR não é importado: a
+                    rubrica 1202 é automática e o motor a deriva das faltas.
+
+                    O aviso mostra os TOTAIS LANÇADOS (os mesmos que somam na
+                    coluna Referência da tabela abaixo) e, se a fila de ponto
+                    ainda tem intercorrência aberta, alerta que o número pode
+                    mudar.
+
+                    Com fila aberta a API devolve 409 e a importação PARA: dia
+                    com intercorrência é dia cujo número ainda muda quando o DP
+                    tratar a fila — uns estão pendentes e não lançaram nada,
+                    outros já lançaram falta, atraso ou hora extra que o
+                    tratamento altera. Como competência de folha tem
+                    prazo legal, o 409 não é recusa final — vira a pergunta do
+                    `insistirNoConflito`, e o "sim" do DP fica gravado na trilha.
+                  */}
+                  <button
+                    className={estilos.botaoLinha}
+                    type="button"
+                    disabled={acaoEmCurso !== null}
+                    onClick={() =>
+                      executarAcao<RetornoImportacaoPonto>(
+                        "importar-ponto",
+                        `/api/folha/${id}/importar-ponto`,
+                        "POST",
+                        `Importar a apuração de ponto de ${rotuloCompetencia} (hora extra 50% e 100%, adicional noturno e faltas)? O lote importado anteriormente do ponto será substituído; os lançamentos manuais não são tocados.`,
+                        (dados) => ({
+                          texto:
+                            `Ponto importado: ${dados.importadas} variável(is) em ${dados.pessoas} colaborador(es)` +
+                            ` (${dados.removidas} do lote anterior substituída(s)). Total lançado —` +
+                            ` HE 50%: ${formatarQuantidade(dados.totais_horas.he_50)} h;` +
+                            ` HE 100%: ${formatarQuantidade(dados.totais_horas.he_100)} h;` +
+                            ` adicional noturno: ${formatarQuantidade(dados.totais_horas.adicional_noturno)} h;` +
+                            ` faltas: ${formatarQuantidade(dados.totais_horas.faltas_dias)} dia(s).`,
+                          alerta:
+                            dados.intercorrencias_abertas > 0
+                              ? `${dados.intercorrencias_abertas} intercorrência(s) de ponto continuam ABERTAS em ${rotuloCompetencia}: os números acima ainda podem mudar. Trate a fila em Ponto (DP) e importe de novo antes de calcular a folha.`
+                              : undefined,
+                        }),
+                        undefined,
+                        {
+                          chave: "intercorrencias_abertas",
+                          pergunta:
+                            "Importar assim mesmo? A confirmação fica registrada na trilha da competência, com o número de pendências que havia agora.",
+                          corpo: { confirmar_intercorrencias_abertas: true },
+                        }
+                      )
+                    }
+                  >
+                    {acaoEmCurso === "importar-ponto"
+                      ? "Importando…"
+                      : "Importar do ponto"}
                   </button>
                   <button
                     className={estilos.botao}
@@ -390,7 +517,10 @@ export function PainelCompetencia({ id }: { id: number }) {
               )}
             </div>
             {erroAcao && <p className={estilos.erro}>{erroAcao}</p>}
-            {avisoAcao && <p className={estilos.sucesso}>{avisoAcao}</p>}
+            {avisoAcao && <p className={estilos.sucesso}>{avisoAcao.texto}</p>}
+            {avisoAcao?.alerta && (
+              <div className={estilos.aviso}>{avisoAcao.alerta}</div>
+            )}
 
             {competencia.estado === "conferencia" && tabelasPendentes.length > 0 && (
               <div className={estilos.avisoCritico}>
@@ -467,13 +597,43 @@ export function PainelCompetencia({ id }: { id: number }) {
                       onChange={(e) => setRubricaId(e.target.value)}
                     >
                       <option value="">Escolha…</option>
-                      {visao.rubricas_lancaveis.map((rubrica) => (
-                        <option key={rubrica.rubrica_id} value={rubrica.rubrica_id}>
-                          {rubrica.codigo} — {rubrica.nome}
-                        </option>
-                      ))}
+                      <optgroup label="Rubricas próprias">
+                        {visao.rubricas_lancaveis
+                          .filter((rubrica) => !rubrica.excecao)
+                          .map((rubrica) => (
+                            <option
+                              key={rubrica.rubrica_id}
+                              value={rubrica.rubrica_id}
+                            >
+                              {rubrica.codigo} — {rubrica.nome}
+                            </option>
+                          ))}
+                      </optgroup>
+                      {/* Genéricas por ÚLTIMO e separadas: a diretoria pediu
+                          para eliminar os proventos manuais o máximo. */}
+                      <optgroup label="Exceção — verbas manuais genéricas">
+                        {visao.rubricas_lancaveis
+                          .filter((rubrica) => rubrica.excecao)
+                          .map((rubrica) => (
+                            <option
+                              key={rubrica.rubrica_id}
+                              value={rubrica.rubrica_id}
+                            >
+                              {rubrica.codigo} — {rubrica.nome}
+                            </option>
+                          ))}
+                      </optgroup>
                     </select>
                   </div>
+                  {rubricaEscolhida?.excecao && (
+                    <p className={estilos.notaRodape} style={{ flexBasis: "100%" }}>
+                      Atenção: <strong>{rubricaEscolhida.nome}</strong> é verba
+                      genérica de exceção. Se este lançamento se repete todo
+                      mês, crie uma rubrica própria em Parâmetros — verba com
+                      rubrica própria tem incidência correta de INSS, IRRF e
+                      FGTS, e aparece nomeada no holerite.
+                    </p>
+                  )}
                   {rubricaEscolhida?.precisa === "referencia" && (
                     <div className={estilos.campoGrupoCurto}>
                       <label className={estilos.rotulo} htmlFor="referencia">

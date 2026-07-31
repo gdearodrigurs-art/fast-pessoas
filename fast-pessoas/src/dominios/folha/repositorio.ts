@@ -1,5 +1,6 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
+import { TIPOS_INTERCORRENCIA_QUE_MUDAM_A_APURACAO } from "../ponto/esquemas";
 import {
   FaixaInssMotor,
   FaixaIrrfMotor,
@@ -219,8 +220,17 @@ export interface ColaboradorCalculo {
   matricula: string;
   salario_centavos: number;
   dependentes_irrf: number;
+  /** Carga semanal da jornada vigente — dá o divisor da hora (0038). */
+  carga_semanal_minutos: number | null;
 }
 
+/**
+ * A escala entra por LEFT JOIN de propósito: quem não tem jornada cadastrada
+ * continua entrando no cálculo (cai no divisor de referência dos parâmetros),
+ * em vez de sumir da folha por causa de um cadastro de ponto que falta. O JOIN
+ * não duplica linha — rh.escala_colaborador tem índice único de uma vigente por
+ * pessoa (escala_colaborador_uma_vigente, migração 0027).
+ */
 export async function listarColaboradoresParaCalculo(
   cliente: PoolClient
 ): Promise<ColaboradorCalculo[]> {
@@ -230,13 +240,18 @@ export async function listarColaboradoresParaCalculo(
     matricula: string;
     salario: string;
     dependentes: string;
+    carga_semanal_minutos: number | null;
   }>(
     `SELECT c.id, c.nome_completo, c.matricula, p.salario::text AS salario,
             (SELECT COUNT(*) FROM rh.dependente d
-              WHERE d.colaborador_id = c.id) AS dependentes
+              WHERE d.colaborador_id = c.id) AS dependentes,
+            j.carga_semanal_minutos
        FROM rh.colaborador c
        JOIN rh.posicao_colaborador p
          ON p.colaborador_id = c.id AND p.fim_vigencia IS NULL
+       LEFT JOIN rh.escala_colaborador e
+         ON e.colaborador_id = c.id AND e.fim_vigencia IS NULL
+       LEFT JOIN rh.jornada_versao j ON j.id = e.jornada_versao_id
       WHERE c.status = 'ativo'
       ORDER BY c.nome_completo, c.id`
   );
@@ -246,6 +261,10 @@ export async function listarColaboradoresParaCalculo(
     matricula: linha.matricula,
     salario_centavos: paraCentavos(linha.salario),
     dependentes_irrf: Number(linha.dependentes),
+    carga_semanal_minutos:
+      linha.carga_semanal_minutos === null
+        ? null
+        : Number(linha.carga_semanal_minutos),
   }));
 }
 
@@ -389,6 +408,111 @@ export async function excluirVariaveisDeBeneficio(
   return resultado.rowCount ?? 0;
 }
 
+export async function excluirVariaveisDePonto(
+  cliente: PoolClient,
+  competenciaId: number
+): Promise<number> {
+  const resultado = await cliente.query(
+    `DELETE FROM rh_folha.variavel_lancada
+      WHERE competencia_id = $1 AND origem = 'ponto'`,
+    [competenciaId]
+  );
+  return resultado.rowCount ?? 0;
+}
+
+/**
+ * A apuração de ponto da competência, já convertida para o que a folha
+ * precisa. TUDO EM MINUTOS INTEIROS aqui (a conversão para horas/dias é do
+ * serviço, que também precisa da carga diária para dividir): o repositório não
+ * arredonda nada, senão o erro nasce no SQL e ninguém acha depois.
+ *
+ * `carga_diaria_minutos` vem da JORNADA PINADA na apuração
+ * (rh.apuracao_ponto.jornada_versao_id), nunca da jornada "atual" — é ela que
+ * transforma minutos de falta em DIAS de falta, e trocar de jornada em agosto
+ * não pode mexer no que junho apurou.
+ */
+export interface ApuracaoParaFolha {
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  he_50_minutos: number;
+  he_100_minutos: number;
+  adicional_noturno_minutos: number;
+  faltas_minutos: number;
+  dsr_desconto_minutos: number;
+  carga_diaria_minutos: number;
+}
+
+export async function listarApuracaoDePontoDaCompetencia(
+  cliente: PoolClient,
+  ano: number,
+  mes: number
+): Promise<ApuracaoParaFolha[]> {
+  const { rows } = await cliente.query<{
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    he_50_minutos: number;
+    he_100_minutos: number;
+    adicional_noturno_minutos: number;
+    faltas_minutos: number;
+    dsr_desconto_minutos: number;
+    carga_diaria_minutos: number;
+  }>(
+    `SELECT a.colaborador_id, c.nome_completo AS colaborador_nome, c.matricula,
+            a.he_50_minutos, a.he_100_minutos, a.adicional_noturno_minutos,
+            a.faltas_minutos, a.dsr_desconto_minutos,
+            j.carga_diaria_minutos
+       FROM rh.apuracao_ponto a
+       JOIN rh.colaborador c ON c.id = a.colaborador_id
+       JOIN rh.jornada_versao j ON j.id = a.jornada_versao_id
+      WHERE a.ano = $1 AND a.mes = $2
+        AND c.status = 'ativo'
+      ORDER BY c.nome_completo, a.colaborador_id`,
+    [ano, mes]
+  );
+  return rows.map((linha) => ({
+    colaborador_id: Number(linha.colaborador_id),
+    colaborador_nome: linha.colaborador_nome,
+    matricula: linha.matricula,
+    he_50_minutos: linha.he_50_minutos,
+    he_100_minutos: linha.he_100_minutos,
+    adicional_noturno_minutos: linha.adicional_noturno_minutos,
+    faltas_minutos: linha.faltas_minutos,
+    dsr_desconto_minutos: linha.dsr_desconto_minutos,
+    carga_diaria_minutos: linha.carga_diaria_minutos,
+  }));
+}
+
+/**
+ * Quantas intercorrências de ponto continuam ABERTAS na competência E ainda
+ * podem mudar o número que a folha vai importar.
+ *
+ * O filtro por tipo não é detalhe: a fila do DP também guarda
+ * `banco_fora_do_limite`, que é decisão sobre o banco de horas e não move um
+ * centavo desta competência (ver TIPOS_INTERCORRENCIA_QUE_MUDAM_A_APURACAO no
+ * domínio de ponto, dono do conceito). Sem o filtro, a competência 07/2026
+ * travava com 28 pendências das quais 16 eram avisos de teto de banco — o DP
+ * seria obrigado a confirmar por cima de um alerta que não é sobre folha, e a
+ * confirmação viraria reflexo.
+ */
+export async function contarIntercorrenciasAbertasDaCompetencia(
+  cliente: PoolClient,
+  ano: number,
+  mes: number
+): Promise<number> {
+  const { rows } = await cliente.query<{ total: string }>(
+    `SELECT count(*)::text AS total
+       FROM rh.intercorrencia_ponto
+      WHERE status = 'aberta'
+        AND tipo = ANY($3::text[])
+        AND date_part('year', data) = $1
+        AND date_part('month', data) = $2`,
+    [ano, mes, TIPOS_INTERCORRENCIA_QUE_MUDAM_A_APURACAO]
+  );
+  return Number(rows[0]?.total ?? 0);
+}
+
 export interface AdesaoDesconto {
   colaborador_id: number;
   colaborador_nome: string;
@@ -428,6 +552,8 @@ export async function listarDescontosDeAdesao(
 
 export interface RubricaVigente extends RubricaMotor {
   rubrica_id: number;
+  /** Verba genérica de escape (9001/9002): vai por último e com aviso. */
+  excecao: boolean;
 }
 
 interface LinhaRubricaVigente extends Record<string, unknown> {
@@ -436,6 +562,7 @@ interface LinhaRubricaVigente extends Record<string, unknown> {
   codigo: string;
   nome: string;
   natureza: NaturezaRubrica;
+  excecao: boolean;
   incide_inss: boolean;
   incide_irrf: boolean;
   incide_fgts: boolean;
@@ -446,15 +573,17 @@ interface LinhaRubricaVigente extends Record<string, unknown> {
 export async function listarRubricasVigentes(
   cliente?: PoolClient
 ): Promise<RubricaVigente[]> {
+  // Ordem: rubricas próprias primeiro, as genéricas (excecao) por ÚLTIMO —
+  // diretriz da diretoria de eliminar os proventos manuais (migração 0028).
   const sql = `
     SELECT r.id AS rubrica_id, rv.id AS rubrica_versao_id, r.codigo, r.nome,
-           r.natureza, rv.incide_inss, rv.incide_irrf, rv.incide_fgts,
+           r.natureza, r.excecao, rv.incide_inss, rv.incide_irrf, rv.incide_fgts,
            rv.tipo_calculo, rv.parametro::text AS parametro
       FROM rh_folha.rubrica r
       JOIN rh_folha.rubrica_versao rv
         ON rv.rubrica_id = r.id AND rv.status = 'ativa'
      WHERE r.ativo
-     ORDER BY r.codigo`;
+     ORDER BY r.excecao, r.codigo`;
   const linhas = cliente
     ? (await cliente.query<LinhaRubricaVigente>(sql)).rows
     : await consultar<LinhaRubricaVigente>(sql);
@@ -464,6 +593,7 @@ export async function listarRubricasVigentes(
     codigo: linha.codigo,
     nome: linha.nome,
     natureza: linha.natureza,
+    excecao: linha.excecao,
     incide_inss: linha.incide_inss,
     incide_irrf: linha.incide_irrf,
     incide_fgts: linha.incide_fgts,
@@ -478,6 +608,7 @@ export interface RubricaBasica {
   nome: string;
   natureza: NaturezaRubrica;
   ativo: boolean;
+  excecao: boolean;
 }
 
 export async function buscarRubricaParaAtualizar(
@@ -490,13 +621,31 @@ export async function buscarRubricaParaAtualizar(
     nome: string;
     natureza: NaturezaRubrica;
     ativo: boolean;
+    excecao: boolean;
   }>(
-    `SELECT id, codigo, nome, natureza, ativo
+    `SELECT id, codigo, nome, natureza, ativo, excecao
        FROM rh_folha.rubrica WHERE id = $1 FOR UPDATE`,
     [id]
   );
   if (rows.length === 0) return null;
   return { ...rows[0], id: Number(rows[0].id) };
+}
+
+/**
+ * Cria a rubrica (identidade). A primeira VERSÃO entra logo em seguida, na
+ * mesma transação — rubrica sem versão vigente não é lançável nem calculável.
+ * Código duplicado estoura 23505 (rubrica_codigo_key) e vira 409 no serviço.
+ */
+export async function inserirRubrica(
+  cliente: PoolClient,
+  dados: { codigo: string; nome: string; natureza: NaturezaRubrica }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh_folha.rubrica (codigo, nome, natureza)
+     VALUES ($1, $2, $3) RETURNING id`,
+    [dados.codigo, dados.nome, dados.natureza]
+  );
+  return Number(rows[0].id);
 }
 
 export interface VersaoRubrica {
@@ -552,9 +701,11 @@ export async function listarCatalogoRubricas(): Promise<CatalogoRubrica[]> {
       nome: string;
       natureza: NaturezaRubrica;
       ativo: boolean;
+      excecao: boolean;
     }>(
-      `SELECT id, codigo, nome, natureza, ativo
-         FROM rh_folha.rubrica ORDER BY codigo`
+      // Genéricas (excecao) por último, igual à lista de lançamento.
+      `SELECT id, codigo, nome, natureza, ativo, excecao
+         FROM rh_folha.rubrica ORDER BY excecao, codigo`
     ),
     listarVersoesRubricas(),
   ]);
@@ -591,6 +742,64 @@ export async function encerrarVersaoRubrica(
       WHERE id = $1`,
     [versaoId, inicioDaProxima]
   );
+}
+
+/**
+ * Encerra a versão vigente numa data ESCOLHIDA — encerramento da rubrica, não
+ * troca de versão (lá o fim sai do início da próxima, aqui não há próxima).
+ */
+export async function encerrarVersaoRubricaEm(
+  cliente: PoolClient,
+  versaoId: number,
+  fimVigencia: string
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh_folha.rubrica_versao
+        SET status = 'encerrada', fim_vigencia = $2::date
+      WHERE id = $1`,
+    [versaoId, fimVigencia]
+  );
+}
+
+/** Tira a rubrica do catálogo lançável — listarRubricasVigentes filtra r.ativo. */
+export async function desativarRubrica(
+  cliente: PoolClient,
+  rubricaId: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh_folha.rubrica SET ativo = FALSE WHERE id = $1`,
+    [rubricaId]
+  );
+}
+
+/**
+ * Lançamentos da rubrica em competências que ainda podem ser RECALCULADAS
+ * (tudo que não está 'fechada'). Rubrica sem versão vigente derruba o motor
+ * ('Rubrica X sem versão vigente'), então encerrar com lançamento vivo trocaria
+ * um problema de catálogo por uma folha que não fecha.
+ */
+export async function contarLancamentosRecalculaveis(
+  cliente: PoolClient,
+  rubricaId: number
+): Promise<{ lancamentos: number; competencias: string[] }> {
+  const { rows } = await cliente.query<{
+    lancamentos: string;
+    competencias: string[] | null;
+  }>(
+    `SELECT count(*)::text AS lancamentos,
+            array_agg(DISTINCT lpad(c.mes::text, 2, '0') || '/' || c.ano::text
+                      ORDER BY lpad(c.mes::text, 2, '0') || '/' || c.ano::text)
+              AS competencias
+       FROM rh_folha.variavel_lancada v
+       JOIN rh_folha.competencia_folha c ON c.id = v.competencia_id
+      WHERE v.rubrica_id = $1
+        AND c.estado <> 'fechada'`,
+    [rubricaId]
+  );
+  return {
+    lancamentos: Number(rows[0]?.lancamentos ?? 0),
+    competencias: rows[0]?.competencias ?? [],
+  };
 }
 
 export async function inserirVersaoRubrica(
@@ -711,6 +920,9 @@ export interface VersaoParametros {
   id: number;
   salario_minimo: number;
   aliquota_fgts: number;
+  divisor_mensal_horas: number;
+  carga_semanal_referencia_minutos: number;
+  divisor_mensal_dias: number;
   status: "rascunho" | "ativa" | "encerrada";
   inicio_vigencia: string;
   fim_vigencia: string | null;
@@ -722,13 +934,19 @@ export async function listarVersoesParametros(): Promise<VersaoParametros[]> {
     id: string;
     salario_minimo: string;
     aliquota_fgts: string;
+    divisor_mensal_horas: string;
+    carga_semanal_referencia_minutos: number;
+    divisor_mensal_dias: string;
     status: "rascunho" | "ativa" | "encerrada";
     inicio_vigencia: string;
     fim_vigencia: string | null;
     conferido_dp: boolean;
   }>(
     `SELECT id, salario_minimo::text AS salario_minimo,
-            aliquota_fgts::text AS aliquota_fgts, status,
+            aliquota_fgts::text AS aliquota_fgts,
+            divisor_mensal_horas::text AS divisor_mensal_horas,
+            carga_semanal_referencia_minutos,
+            divisor_mensal_dias::text AS divisor_mensal_dias, status,
             inicio_vigencia::text AS inicio_vigencia,
             fim_vigencia::text AS fim_vigencia, conferido_dp
        FROM rh_folha.parametro_folha_versao
@@ -739,6 +957,11 @@ export async function listarVersoesParametros(): Promise<VersaoParametros[]> {
     id: Number(linha.id),
     salario_minimo: Number(linha.salario_minimo),
     aliquota_fgts: Number(linha.aliquota_fgts),
+    divisor_mensal_horas: Number(linha.divisor_mensal_horas),
+    carga_semanal_referencia_minutos: Number(
+      linha.carga_semanal_referencia_minutos
+    ),
+    divisor_mensal_dias: Number(linha.divisor_mensal_dias),
   }));
 }
 
@@ -772,8 +995,17 @@ export async function tabelasVigentes(
               desconto_simplificado::text AS desconto_simplificado
          FROM rh_folha.tabela_irrf_versao WHERE status = 'ativa'`
     ),
-    executar<{ id: string; aliquota_fgts: string }>(
-      `SELECT id, aliquota_fgts::text AS aliquota_fgts
+    executar<{
+      id: string;
+      aliquota_fgts: string;
+      divisor_mensal_horas: string;
+      carga_semanal_referencia_minutos: number;
+      divisor_mensal_dias: string;
+    }>(
+      `SELECT id, aliquota_fgts::text AS aliquota_fgts,
+              divisor_mensal_horas::text AS divisor_mensal_horas,
+              carga_semanal_referencia_minutos,
+              divisor_mensal_dias::text AS divisor_mensal_dias
          FROM rh_folha.parametro_folha_versao WHERE status = 'ativa'`
     ),
   ]);
@@ -809,6 +1041,11 @@ export async function tabelasVigentes(
       parametros: {
         id: Number(parametros[0].id),
         aliquota_fgts: Number(parametros[0].aliquota_fgts),
+        divisor_mensal_horas: Number(parametros[0].divisor_mensal_horas),
+        carga_semanal_referencia_minutos: Number(
+          parametros[0].carga_semanal_referencia_minutos
+        ),
+        divisor_mensal_dias: Number(parametros[0].divisor_mensal_dias),
       },
     },
     faltantes: [],
@@ -946,17 +1183,25 @@ export async function inserirVersaoParametros(
   dados: {
     salario_minimo: number;
     aliquota_fgts: number;
+    divisor_mensal_horas: number;
+    carga_semanal_referencia_minutos: number;
+    divisor_mensal_dias: number;
     inicio_vigencia: string;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh_folha.parametro_folha_versao
-       (salario_minimo, aliquota_fgts, status, inicio_vigencia)
-     VALUES ($1, $2, 'ativa', $3)
+       (salario_minimo, aliquota_fgts, divisor_mensal_horas,
+        carga_semanal_referencia_minutos, divisor_mensal_dias,
+        status, inicio_vigencia)
+     VALUES ($1, $2, $3, $4, $5, 'ativa', $6)
      RETURNING id`,
     [
       dados.salario_minimo.toFixed(2),
       dados.aliquota_fgts,
+      dados.divisor_mensal_horas.toFixed(2),
+      dados.carga_semanal_referencia_minutos,
+      dados.divisor_mensal_dias.toFixed(2),
       dados.inicio_vigencia,
     ]
   );

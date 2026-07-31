@@ -231,3 +231,53 @@
 .futuro li {
   margin-bottom: 6px;
 }
+
+/* Piso de anonimato (k) — só renderiza para quem tem privacidade.administrar. */
+.parametroPrivacidade {
+  background: #f7f5f3;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+}
+
+.parametroPrivacidade label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.parametroLinha {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.parametroLinha input {
+  width: 90px;
+  padding: 6px 8px;
+  border: 1px solid #d5d1cc;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.parametroLinha button {
+  padding: 6px 14px;
+  border: 1px solid #1f1d1b;
+  border-radius: 6px;
+  background: #1f1d1b;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.parametroLinha button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.parametroLinha .nota {
+  margin: 0;
+}

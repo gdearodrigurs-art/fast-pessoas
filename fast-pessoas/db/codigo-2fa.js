@@ -2,9 +2,11 @@
 //
 //   node --env-file=.env db/codigo-2fa.js dp@fastdemo.local
 //
-// Existe para a apresentação não travar: os papéis rh/dp/diretoria/admin são
-// obrigados a 2FA pelo app, e as contas de demo já nascem com o segredo
-// configurado. Usa a MESMA biblioteca e os MESMOS parâmetros do login
+// Existe para a apresentação não travar: quem compõe alguma chave marcada com
+// `exige_2fa` (migration 0040) é obrigado a 2FA pelo app, e as contas de demo
+// nessa situação já nascem com o segredo configurado. Confira quem é com
+// `SELECT sistema.exige_2fa(id) FROM sistema.usuario`.
+// Usa a MESMA biblioteca e os MESMOS parâmetros do login
 // (otpauth, SHA1/6 dígitos/30s — ver src/dominios/identidade/servico.ts).
 //
 // Só funciona para contas @fastdemo.local: é ferramenta de demonstração, não

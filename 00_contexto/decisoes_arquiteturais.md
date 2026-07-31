@@ -320,6 +320,26 @@ Use as tags para filtrar por área: `#arquitetura`, `#modelo-de-dados`, `#regra-
 
 **Tags:** #canonico #arquitetura #regra-negocio
 
+### [2026-07-31] DECISÃO DO USUÁRIO — Salário: sub-árvore recursiva, nada fora do ramo
+
+**Decisão:** Uma pessoa vê o salário de **todos abaixo dela no organograma, descendo até o fim do seu ramo** — e de mais ninguém. Palavras do usuário: *"gerente de loja vê o salário de todos os vendedores da loja dele, mas não vê de outras lojas; e o gerente regional vê o salário de todos os gerentes que ele controla + o salário de seus gerentes"*.
+
+**Isto SUBSTITUI a leitura anterior.** Não é "um nível abaixo" nem "apenas gerente pra cima": é a **sub-árvore inteira**, recursiva. O corte por nível hierárquico registrado em 2026-07-30 fica **cancelado** — ele quebrava o supervisor que lidera gente, caso que esta regra resolve sozinha.
+
+**Motivo:** Resposta direta do usuário à pendência §4.1 do plano (docs/10), aberta desde a reunião com a diretoria.
+
+**Consequência de implementação:** a hierarquia do organograma **passa a ser a regra de acesso ao salário**. Exige travessia RECURSIVA da cadeia de liderança (WITH RECURSIVE sobre a relação de liderança vigente), não uma consulta de um nível. O alcance lateral continua fechado: quem está ao lado não vê nada. Destrava a Onda K.
+
+**Tags:** #canonico #regra-negocio #seguranca
+
+### [2026-07-30] DECISÃO DO USUÁRIO — O gestor vê o salário do time; execução autorizada
+
+**Decisão:** O **líder direto vê o salário dos seus liderados**. Isso reconcilia a contradição §4.1 do plano: o corte "apenas gerente pra cima" vale para quem **NÃO é líder** da pessoa (a cadeia acima), enquanto o líder direto continua enxergando a própria equipe — foi o que a diretora aprovou na reunião ("Sim. O gestor, sim."). Destrava a Onda K. **Execução autorizada**: começam as ondas F (ponto e banco de horas) e G (correções).
+
+**Motivo:** Resposta direta do usuário. Sem ela, a regra de visibilidade da ficha ficaria ambígua justamente no caso mais comum.
+
+**Tags:** #canonico #regra-negocio
+
 ### [2026-07-24] Fase atual: desenho de arquitetura, sem código
 
 **Decisão:** O projeto começa pela avaliação das fontes de conhecimento e pelo desenho de arquitetura e funcionalidades. Nenhum código será escrito até autorização expressa do usuário.

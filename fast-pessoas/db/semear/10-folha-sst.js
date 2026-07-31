@@ -50,6 +50,7 @@ const {
   cifrarSaude,
   comTriggersDesligados,
   embaralhar,
+  escolher,
   executarSozinho,
   hoje,
   inserirLote,
@@ -75,6 +76,8 @@ const TABELAS_LIMPEZA = [
   'rh.cat',
   'rh.epi_entrega',
   'rh.epi_item',
+  // NR-1 (0029) referencia rh.aso: cai ANTES do ASO
+  'rh.avaliacao_psicossocial',
   'rh.aso',
   'rh.ciencia',
   'rh.documento',
@@ -181,6 +184,37 @@ function reaisIntermediario(centavos) {
   return Math.round(centavos * 100) / 10_000;
 }
 
+/**
+ * Divisor HORÁRIO de UMA pessoa (0038) — a mesma proporção do motor de
+ * produção (src/dominios/folha/calculo.ts): o divisor de referência vale para a
+ * carga de referência, então quem tem carga menor tem divisor menor. 220 h é o
+ * divisor de 44 h semanais, logo 36 h semanais (plantão 12x36) valem 180 — e
+ * não 220. Com carga igual à de referência a divisão é exata e o resultado é
+ * bit a bit o de antes da parametrização.
+ *
+ * Sem jornada vigente (`null`) cai no divisor de referência puro, igual ao
+ * motor. Vive fora de calcularFolha porque sortearVariaveis também precisa
+ * dele: o valor da HE que o semeador estima para o DSR sobre hora extra tem de
+ * sair do MESMO divisor que o motor vai usar no item.
+ */
+function divisorHorasDe(parametros, cargaSemanalMinutos) {
+  const referencia = parametros.divisor_mensal_horas;
+  const cargaReferencia = parametros.carga_semanal_referencia_minutos;
+  if (!(referencia > 0) || !(cargaReferencia > 0)) {
+    throw new Error(
+      'Divisor de horas inválido na versão vigente dos parâmetros da folha — confira a 0038.'
+    );
+  }
+  const carga = cargaSemanalMinutos ?? null;
+  const divisor = carga === null ? referencia : (referencia * carga) / cargaReferencia;
+  if (!(divisor > 0)) {
+    throw new Error(
+      'Carga semanal da jornada inválida — o divisor da hora sairia zero ou negativo'
+    );
+  }
+  return divisor;
+}
+
 function calcularFolha(entrada) {
   const porCodigo = new Map(entrada.rubricas.map((r) => [r.codigo, r]));
   const rubricaObrigatoria = (codigo) => {
@@ -193,6 +227,42 @@ function calcularFolha(entrada) {
   if (!Number.isInteger(salario) || salario < 0) {
     throw new Error('Salário base inválido (centavos inteiros ≥ 0)');
   }
+
+  // DIVISORES (0038) — nenhum dos dois é constante deste arquivo, exatamente
+  // como no motor. O HORÁRIO é proporcional à carga da jornada de quem está
+  // sendo calculado; o de DIAS vem cru dos parâmetros (o salário mensal
+  // remunera o mês inteiro, repouso incluído, seja qual for a escala).
+  const divisorDias = entrada.parametros.divisor_mensal_dias;
+  if (!(divisorDias > 0)) {
+    throw new Error(
+      'Divisor de dias inválido na versão vigente dos parâmetros da folha — confira a 0038.'
+    );
+  }
+  const cargaSemanal = entrada.carga_semanal_minutos ?? null;
+  const divisorHoras = divisorHorasDe(entrada.parametros, cargaSemanal);
+  /** O que a memória de cálculo conta sobre a origem do divisor horário. */
+  const origemDivisorHoras =
+    cargaSemanal === null
+      ? {
+          divisor_horas: divisorHoras,
+          origem_divisor:
+            'sem jornada vigente — divisor de referência dos parâmetros da folha',
+          parametro_folha_versao_id: entrada.parametros.id,
+        }
+      : {
+          divisor_horas: divisorHoras,
+          origem_divisor:
+            `${entrada.parametros.divisor_mensal_horas} h ÷ ` +
+            `${entrada.parametros.carga_semanal_referencia_minutos} min de referência ` +
+            `× ${cargaSemanal} min da jornada do colaborador`,
+          carga_semanal_minutos: cargaSemanal,
+          parametro_folha_versao_id: entrada.parametros.id,
+        };
+  const origemDivisorDias = {
+    divisor_dias: divisorDias,
+    origem_divisor: 'dias do mês nos parâmetros da folha (não depende da jornada)',
+    parametro_folha_versao_id: entrada.parametros.id,
+  };
 
   const itens = [];
   const incluir = (rubrica, valorSemArredondar, referencia, base, memoria) => {
@@ -242,11 +312,12 @@ function calcularFolha(entrada) {
       const dias = variaveis.reduce((soma, item) => soma + (item.referencia ?? 0), 0);
       if (dias <= 0) throw new Error('Falta exige referência em dias maior que zero');
       diasFalta = dias;
-      const valor = (salario * Math.round(dias * 100)) / (30 * 100);
+      const valor = (salario * Math.round(dias * 100)) / (divisorDias * 100);
       incluir(rubrica, valor, dias, salario, {
-        formula: 'dias × (salário ÷ 30)',
+        formula: `dias × (salário ÷ ${divisorDias})`,
         dias,
-        salario_dia: reaisIntermediario(salario / 30),
+        salario_dia: reaisIntermediario(salario / divisorDias),
+        ...origemDivisorDias,
       });
       continue;
     }
@@ -261,12 +332,13 @@ function calcularFolha(entrada) {
         }
         const valor =
           (salario * Math.round(horas * 100) * Math.round(fator * 10_000)) /
-          (220 * 100 * 10_000);
+          (divisorHoras * 100 * 10_000);
         incluir(rubrica, valor, horas, salario, {
-          formula: 'horas × fator × (salário ÷ 220)',
+          formula: `horas × fator × (salário ÷ ${divisorHoras})`,
           horas,
           fator,
-          valor_hora: reaisIntermediario(salario / 220),
+          valor_hora: reaisIntermediario(salario / divisorHoras),
+          ...origemDivisorHoras,
         });
         break;
       }
@@ -304,12 +376,13 @@ function calcularFolha(entrada) {
   // 3) DSR sobre faltas — 1 dia de DSR por dia de falta (F1)
   if (diasFalta > 0) {
     const rubricaDsr = rubricaObrigatoria(CODIGO_DSR_FALTAS);
-    const valor = (salario * Math.round(diasFalta * 100)) / (30 * 100);
+    const valor = (salario * Math.round(diasFalta * 100)) / (divisorDias * 100);
     incluir(rubricaDsr, valor, diasFalta, salario, {
-      formula: 'dias de falta × (salário ÷ 30) — 1 dia de DSR por dia de falta',
+      formula: `dias de falta × (salário ÷ ${divisorDias}) — 1 dia de DSR por dia de falta`,
       regra_f1:
         'simplificação fixada na 0013; apuração exata semana a semana (Lei 605/49) é evolução F2',
       dias: diasFalta,
+      ...origemDivisorDias,
     });
   }
 
@@ -578,13 +651,19 @@ async function limpar(cliente) {
       ['rh.cat', 'DELETE FROM rh.cat'],
       ['rh.epi_entrega', 'DELETE FROM rh.epi_entrega'],
       ['rh.epi_item', 'DELETE FROM rh.epi_item'],
+      // NR-1 (0029) aponta para o ASO — sai antes dele
+      [
+        'rh.avaliacao_psicossocial',
+        'DELETE FROM rh.avaliacao_psicossocial',
+      ],
       ['rh.aso', 'DELETE FROM rh.aso'],
       // eventos e documentos: SÓ os deste módulo (o GED e a linha do tempo
       // são compartilhados com os outros módulos de semeadura)
       [
         'rh.evento_colaborador',
         `DELETE FROM rh.evento_colaborador
-          WHERE origem_tabela IN ('rh.aso', 'rh.epi_entrega', 'rh.cat')`,
+          WHERE origem_tabela IN ('rh.aso', 'rh.epi_entrega', 'rh.cat',
+                                  'rh.avaliacao_psicossocial')`,
       ],
       [
         'rh.ciencia',
@@ -627,11 +706,21 @@ async function carregarPessoas(cliente) {
             cv.nome                    AS cargo,
             ev.unidade                 AS unidade,
             (SELECT count(*) FROM rh.dependente d
-              WHERE d.colaborador_id = c.id)::int AS dependentes
+              WHERE d.colaborador_id = c.id)::int AS dependentes,
+            j.carga_semanal_minutos
        FROM rh.colaborador c
        LEFT JOIN rh.posicao_colaborador p
          ON p.colaborador_id = c.id AND p.fim_vigencia IS NULL
        LEFT JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
+       -- Jornada vigente (0038): é a carga semanal dela que dá o divisor da
+       -- hora de cada um. LEFT JOIN pelo mesmo motivo do repositório de
+       -- produção (listarColaboradoresParaCalculo): quem não tem escala
+       -- cadastrada continua entrando na folha, caindo no divisor de
+       -- referência. Não duplica linha — escala_colaborador tem índice único
+       -- de uma vigente por pessoa (escala_colaborador_uma_vigente, 0027).
+       LEFT JOIN rh.escala_colaborador e
+         ON e.colaborador_id = c.id AND e.fim_vigencia IS NULL
+       LEFT JOIN rh.jornada_versao j ON j.id = e.jornada_versao_id
        LEFT JOIN rh.lotacao l
          ON l.colaborador_id = c.id AND l.fim_vigencia IS NULL
        LEFT JOIN rh.estabelecimento_versao ev
@@ -653,6 +742,8 @@ async function carregarPessoas(cliente) {
     cargo: linha.cargo,
     unidade: linha.unidade,
     dependentes: Number(linha.dependentes),
+    cargaSemanalMinutos:
+      linha.carga_semanal_minutos === null ? null : Number(linha.carga_semanal_minutos),
   }));
 }
 
@@ -705,6 +796,9 @@ async function carregarRubricas(cliente) {
   for (const codigo of [
     CODIGO_SALARIO_BASE, '1101', '1102', CODIGO_FALTAS, CODIGO_DSR_FALTAS,
     CODIGO_INSS, CODIGO_IRRF, CODIGO_DESCONTO_BENEFICIO, CODIGO_FGTS, '9001', '9002',
+    // As seis nomeadas pela diretoria (0028): o semeador lança em todas, então
+    // a falta de qualquer uma tem de estourar aqui, não no meio do cálculo.
+    '1301', '1302', '1303', '1304', '1401', '1501',
   ]) {
     if (!porCodigo.has(codigo)) {
       throw new Error(`Rubrica ${codigo} sem versão vigente — confira o seed da 0013.`);
@@ -727,7 +821,15 @@ async function carregarTabelasLegais(cliente) {
        FROM rh_folha.tabela_irrf_versao WHERE status = 'ativa'`
   );
   const parametros = await cliente.query(
-    `SELECT id, aliquota_fgts::text AS aliquota_fgts
+    // Os DIVISORES (0038) entram aqui junto da alíquota: eles deixaram de ser
+    // número do fonte e viraram parâmetro. Ler só a alíquota, como era antes,
+    // fazia esta cópia do motor não enxergar as colunas novas e continuar
+    // dividindo por 220 e por 30 chumbados — ver o bloco dos divisores em
+    // calcularFolha.
+    `SELECT id, aliquota_fgts::text AS aliquota_fgts,
+            divisor_mensal_horas::text AS divisor_mensal_horas,
+            carga_semanal_referencia_minutos,
+            divisor_mensal_dias::text AS divisor_mensal_dias
        FROM rh_folha.parametro_folha_versao WHERE status = 'ativa'`
   );
   if (inss.rows.length === 0 || irrf.rows.length === 0 || parametros.rows.length === 0) {
@@ -759,6 +861,11 @@ async function carregarTabelasLegais(cliente) {
     parametros: {
       id: Number(parametros.rows[0].id),
       aliquota_fgts: Number(parametros.rows[0].aliquota_fgts),
+      divisor_mensal_horas: Number(parametros.rows[0].divisor_mensal_horas),
+      carga_semanal_referencia_minutos: Number(
+        parametros.rows[0].carga_semanal_referencia_minutos
+      ),
+      divisor_mensal_dias: Number(parametros.rows[0].divisor_mensal_dias),
     },
   };
 }
@@ -790,27 +897,88 @@ const CARGOS_COM_HE = [
   'Vendedor(a)', 'Auxiliar Administrativo',
 ];
 
+// Quem recebe COMISSÃO: o time que vende. A comissão é a primeira verba que a
+// diretoria nomeou na reunião (migração 0028) e a demo tem de mostrá-la viva.
+const CARGOS_COMISSIONADOS = [
+  'Vendedor(a)', 'Auxiliar de Vendas', 'Supervisor(a) Comercial',
+];
+
 /**
- * Sorteia as variáveis da competência (HE, faltas, verbas manuais) de forma
- * determinística. `perfil` muda a semente para o mês passado e o corrente não
- * saírem idênticos.
+ * Dias de REPOUSO e dias ÚTEIS da competência — a razão que o DP usa para
+ * apurar DSR sobre verba variável (Lei 605/49 art. 7º; Súmula 27 do TST para a
+ * comissão): variável × repousos ÷ úteis.
+ *
+ * Só domingos entram como repouso: o calendário de FERIADOS é do módulo de
+ * ponto, não da folha, e inventar feriado aqui produziria número que o DP não
+ * consegue conferir. A demo subestima o DSR de propósito e diz isso.
  */
-function sortearVariaveis(rng, elegiveis, perfil) {
+function repousosDoMes(competencia) {
+  let repousos = 0;
+  let uteis = 0;
+  const ultimo = competencia.ultimo.getUTCDate();
+  for (let dia = 1; dia <= ultimo; dia += 1) {
+    const data = new Date(Date.UTC(competencia.ano, competencia.mes - 1, dia));
+    if (data.getUTCDay() === 0) repousos += 1;
+    else uteis += 1;
+  }
+  return { repousos, uteis };
+}
+
+/**
+ * Sorteia as variáveis da competência de forma determinística. `perfil` muda a
+ * semente para o mês passado e o corrente não saírem idênticos.
+ *
+ * As SEIS rubricas nomeadas pela diretoria (0028) são lançadas aqui, com gente
+ * de verdade: sem isso o catálogo existia e nenhuma delas tinha um lançamento —
+ * a demo mostrava só as verbas genéricas 9001/9002, contradizendo a diretriz
+ * "a gente tem que eliminar esses proventos manuais o máximo". As genéricas
+ * continuam existindo, em DOSE PEQUENA (perfil.manualProvento/manualDesconto),
+ * porque a tela precisa ter o que mostrar quando o aviso de exceção dispara.
+ *
+ * Todas as seis são 'valor_informado': quem calcula é a planilha de vendas / o
+ * cálculo de férias / a tabela da cota, fora do sistema — o DP lança o valor
+ * apurado (é o que a 0028 fixou para F1). Os valores abaixo imitam essa
+ * apuração; nenhum deles vira regra do motor.
+ */
+function sortearVariaveis(rng, elegiveis, perfil, competencia, porCodigo, parametros) {
   const embaralhados = embaralhar(rng, elegiveis);
   const comHe = embaralhados.filter((p) => CARGOS_COM_HE.includes(p.cargo));
   const lancamentos = [];
+  const { repousos, uteis } = repousosDoMes(competencia);
+
+  /**
+   * Valor da HE em centavos, com a mesma conta de `horas_adicional` do motor —
+   * divisor da PESSOA (0038), não 220 para todo mundo. Este número não vira
+   * item da folha (o motor recalcula), mas é a base do DSR sobre hora extra
+   * lançado logo abaixo: com o divisor errado aqui, o 1303 do plantonista sai
+   * proporcional a uma HE que o motor nunca vai pagar.
+   */
+  const valorHoraExtra = (pessoa, horas, codigo) => {
+    const fator = porCodigo.get(codigo).parametro;
+    const divisorHoras = divisorHorasDe(parametros, pessoa.cargaSemanalMinutos);
+    return Math.round(
+      (pessoa.salarioCentavos * Math.round(horas * 100) * Math.round(fator * 10_000)) /
+        (divisorHoras * 100 * 10_000)
+    );
+  };
 
   const he50 = comHe.slice(0, perfil.he50);
+  const horasExtrasPorPessoa = new Map();
   he50.forEach((pessoa) => {
     // meia em meia hora, como o espelho de ponto entrega
     const horas = inteiro(rng, 8, 44) / 2;
     lancamentos.push({ pessoa, codigo: '1101', referencia: horas, valor: null, origem: 'manual' });
+    horasExtrasPorPessoa.set(pessoa.id, valorHoraExtra(pessoa, horas, '1101'));
   });
 
   const he100 = comHe.slice(perfil.he50, perfil.he50 + perfil.he100);
   he100.forEach((pessoa) => {
     const horas = inteiro(rng, 4, 16) / 2;
     lancamentos.push({ pessoa, codigo: '1102', referencia: horas, valor: null, origem: 'manual' });
+    horasExtrasPorPessoa.set(
+      pessoa.id,
+      (horasExtrasPorPessoa.get(pessoa.id) ?? 0) + valorHoraExtra(pessoa, horas, '1102')
+    );
   });
 
   const faltosos = embaralhados
@@ -826,6 +994,106 @@ function sortearVariaveis(rng, elegiveis, perfil) {
     });
   });
 
+  // ------------------------------------------------ 1301 comissão + 1304 reflexo de DSR
+  // Toda comissão do mês arrasta o repouso remunerado sobre ela (Súmula 27 do
+  // TST) — as duas linhas nascem juntas, que é como o DP lança.
+  const comissionados = embaralhados
+    .filter((p) => CARGOS_COMISSIONADOS.includes(p.cargo))
+    .slice(0, perfil.comissionados);
+  const comissaoPorPessoa = new Map();
+  comissionados.forEach((pessoa) => {
+    // Entre 12% e 48% do salário — a faixa que a planilha de vendas produz num
+    // mês normal de distribuidora.
+    const comissao = Math.round((pessoa.salarioCentavos * inteiro(rng, 12, 48)) / 100);
+    comissaoPorPessoa.set(pessoa.id, comissao);
+    lancamentos.push({ pessoa, codigo: '1301', referencia: null, valor: comissao / 100, origem: 'manual' });
+    lancamentos.push({
+      pessoa,
+      codigo: '1304',
+      referencia: null,
+      valor: Math.round((comissao * repousos) / uteis) / 100,
+      origem: 'manual',
+    });
+  });
+
+  // ------------------------------------------------ 1302 reflexo de comissão
+  // Repercussão da comissão nas verbas de férias/13º de quem teve o período no
+  // mês — poucos por competência, não é verba de todo mundo todo mês.
+  comissionados.slice(0, perfil.reflexoComissao).forEach((pessoa) => {
+    lancamentos.push({
+      pessoa,
+      codigo: '1302',
+      referencia: null,
+      valor: Math.round(comissaoPorPessoa.get(pessoa.id) / 12) / 100,
+      origem: 'manual',
+    });
+  });
+
+  // ------------------------------------------------ 1303 DSR sobre hora extra
+  // O repouso é pago como trabalhado (Lei 605/49 art. 7º): a semana com hora
+  // extra arrasta DSR. Mesma razão do 1304, aplicada à HE em vez da comissão.
+  // LEITURA NOSSA, a confirmar com o DP — a 0028 nomeou a rubrica "DSR" sem
+  // dizer sobre qual variável a Fast a usa.
+  [...horasExtrasPorPessoa.entries()]
+    .slice(0, perfil.dsrHoraExtra)
+    .forEach(([colaboradorId, valorHe]) => {
+      const pessoa = embaralhados.find((p) => p.id === colaboradorId);
+      lancamentos.push({
+        pessoa,
+        codigo: '1303',
+        referencia: null,
+        valor: Math.round((valorHe * repousos) / uteis) / 100,
+        origem: 'manual',
+      });
+    });
+
+  // ------------------------------------------------ 1401 abono pecuniário
+  // Venda de 1/3 das férias (CLT art. 143): 10 dias de salário mais o terço
+  // constitucional. Quem calcula é o recibo de férias; aqui é o valor apurado.
+  // Só CLT: estagiário tem recesso (Lei 11.788), não férias — e PJ não tem nem
+  // uma coisa nem outra.
+  embaralhados
+    .filter((p) => p.vinculo === 'clt' && !comissionados.includes(p))
+    .slice(0, perfil.abono)
+    .forEach((pessoa) => {
+      lancamentos.push({
+        pessoa,
+        codigo: '1401',
+        referencia: null,
+        // 10 dias de salário-dia mais o terço: salário ÷ divisor_dias × 10 × 4/3.
+        // O salário-dia sai do parâmetro (0038), não de um 30 escrito aqui.
+        valor:
+          Math.round(
+            (pessoa.salarioCentavos * 10 * 4) / (parametros.divisor_mensal_dias * 3)
+          ) / 100,
+        origem: 'manual',
+      });
+    });
+
+  // ------------------------------------------------ 1501 salário família
+  // Cota por filho de até 14 anos, devida ao segurado EMPREGADO que ganha
+  // abaixo do teto da Previdência. A demo escolhe pelos MENORES salários entre
+  // os CLT com dependente cadastrado — o teto e a cota moram na tabela do INSS,
+  // que não está no sistema (F2), então o DP lança o valor apurado lá fora.
+  embaralhados
+    .filter((p) => p.vinculo === 'clt' && p.dependentes > 0)
+    .sort((a, b) => a.salarioCentavos - b.salarioCentavos || a.id - b.id)
+    .slice(0, perfil.salarioFamilia)
+    .forEach((pessoa) => {
+      const cota = inteiro(rng, 55, 65);
+      lancamentos.push({
+        pessoa,
+        codigo: '1501',
+        referencia: null,
+        valor: cota * pessoa.dependentes,
+        origem: 'manual',
+      });
+    });
+
+  // ------------------------------------------------ 9001/9002: a EXCEÇÃO
+  // Ficam de propósito, em dose pequena: é o caso que faz a tela de lançamento
+  // disparar "se este lançamento se repete todo mês, crie uma rubrica própria
+  // em Parâmetros". Verba recorrente já tem rubrica nomeada acima.
   const premiados = embaralhados.slice(-perfil.manualProvento);
   premiados.forEach((pessoa) => {
     lancamentos.push({
@@ -900,9 +1168,20 @@ async function semearCompetenciaFechada(cliente, contexto, mesesAtras) {
   );
   const competenciaFechadaId = Number(linhasFechada[0].id);
 
-  const lancamentosFechada = sortearVariaveis(rng, doMes, {
-    he50: 16, he100: 5, faltas: 5, manualProvento: 3, manualDesconto: 3,
-  });
+  const lancamentosFechada = sortearVariaveis(
+    rng,
+    doMes,
+    {
+      he50: 16, he100: 5, faltas: 5,
+      comissionados: 6, reflexoComissao: 2, dsrHoraExtra: 4,
+      abono: 1, salarioFamilia: 3,
+      // As genéricas são EXCEÇÃO: uma de cada, só para a tela ter o caso.
+      manualProvento: 1, manualDesconto: 1,
+    },
+    competencia,
+    porCodigo,
+    tabelas.parametros
+  );
   const idsFechada = new Set(doMes.map((p) => p.id));
   for (const desconto of descontosBeneficio) {
     if (!idsFechada.has(desconto.colaboradorId)) continue;
@@ -1022,9 +1301,19 @@ async function semearFolha(cliente, { ativos, dp }) {
   );
   const competenciaAbertaId = Number(linhasAberta[0].id);
 
-  const lancamentosAberta = sortearVariaveis(rng, ativos, {
-    he50: 18, he100: 6, faltas: 4, manualProvento: 3, manualDesconto: 3,
-  });
+  const lancamentosAberta = sortearVariaveis(
+    rng,
+    ativos,
+    {
+      he50: 18, he100: 6, faltas: 4,
+      comissionados: 7, reflexoComissao: 2, dsrHoraExtra: 5,
+      abono: 2, salarioFamilia: 3,
+      manualProvento: 1, manualDesconto: 1,
+    },
+    corrente,
+    porCodigo,
+    tabelas.parametros
+  );
   for (const desconto of descontosBeneficio) {
     const pessoa = ativos.find((p) => p.id === desconto.colaboradorId);
     if (!pessoa) continue;
@@ -1133,6 +1422,8 @@ function calcularCompetencia({ pessoas, lancamentos, rubricas, tabelas }) {
       resultado = calcularFolha({
         salario_base_centavos: pessoa.salarioCentavos,
         dependentes_irrf: pessoa.dependentes,
+        // Carga da jornada vigente (0038) — é ela que dá o divisor da hora.
+        carga_semanal_minutos: pessoa.cargaSemanalMinutos,
         variaveis,
         rubricas,
         tabela_inss: tabelas.inss,
@@ -1442,6 +1733,55 @@ async function semearSst(cliente, { pessoas, ativos, dp }) {
     ]);
   }
 
+  // ---------------------------------------------------------- NR-1 (avaliação psicossocial)
+  // Fala da diretoria: "todo mundo que fizer o ASO agora já entra nessa
+  // modalidade" — logo, a avaliação NASCE ACOPLADA ao ASO (aso_id), com a
+  // mesma data do exame e validade de 1 ano. Só os ASOs do último ano entram:
+  // é o que sustenta o indicador `psicossocial_valida` sem fingir que a
+  // empresa executora já passou por todo mundo (ela foi contratada agora).
+  //
+  // Classificação de risco e observações são DADO DE SAÚDE: a classificação
+  // fica em coluna própria (o serviço a omite de quem não tem sst.saude.ver) e
+  // a observação vai CIFRADA, mesma cifra do ASO.
+  const CLASSIFICACOES = ['baixo', 'baixo', 'baixo', 'moderado', 'moderado', 'alto'];
+  const OBSERVACOES = {
+    moderado:
+      'Indicadores de sobrecarga em picos de demanda; recomendado acompanhamento semestral.',
+    alto:
+      'Sinais de esgotamento relatados no questionário; encaminhamento ao programa de apoio psicológico.',
+    critico:
+      'Encaminhamento imediato ao serviço de saúde ocupacional; reavaliação em 90 dias.',
+  };
+  const rngNr1 = aleatorio(SEMENTE_SST + 7);
+  const limiteNr1 = iso(maisMeses(agora, -12));
+  const psicossociais = asos
+    .filter((aso) => aso.dataExame >= limiteNr1 && aso.pessoa.status === 'ativo')
+    .map((aso) => {
+      const classificacao = escolher(rngNr1, CLASSIFICACOES);
+      return [
+        aso.pessoa.id,
+        aso.dataExame,
+        iso(maisMeses(new Date(`${aso.dataExame}T00:00:00Z`), 12)),
+        classificacao,
+        OBSERVACOES[classificacao] ? cifrarSaude(OBSERVACOES[classificacao]) : null,
+        null,
+        aso.id,
+        'Mentalis Saúde Ocupacional',
+        dp.aprovador.id,
+        instanteBrasilia(new Date(`${aso.dataExame}T00:00:00Z`), 14, 40),
+      ];
+    });
+  await inserirLote(
+    cliente,
+    'rh.avaliacao_psicossocial',
+    [
+      'colaborador_id', 'data_avaliacao', 'validade', 'classificacao_risco',
+      'observacoes_cifradas', 'documento_id', 'aso_id', 'empresa_executora',
+      'registrado_por', 'criado_em',
+    ],
+    psicossociais
+  );
+
   // ---------------------------------------------------------- grava entregas
   const gravadasEntregas = await inserirLote(
     cliente,
@@ -1537,8 +1877,14 @@ async function semearSst(cliente, { pessoas, ativos, dp }) {
     `${cats.total} registros de CAT (2 cadeias, 1 com correção encadeada; ` +
     `típica ${cats.vinculada_a_afastamento ? 'vinculada ao' : 'sem'} afastamento de acidente).`
   );
+  log(
+    `10-folha-sst: NR-1 — ${psicossociais.length} avaliações psicossociais ` +
+    'acopladas ao ASO (validade de 12 meses, observações cifradas) — é a fonte ' +
+    'do indicador psicossocial_valida.'
+  );
 
   return {
+    psicossociais: psicossociais.length,
     asos: asos.length,
     asos_vencidos: vencidos,
     asos_vence_30: baldes[1].pessoas.length,

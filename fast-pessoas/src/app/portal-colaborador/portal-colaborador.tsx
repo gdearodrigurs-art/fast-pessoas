@@ -15,7 +15,20 @@ import type {
   MeusDados,
   MinhaSolicitacao,
 } from "@/dominios/portais/colaborador-esquemas";
+import { formatarMinutos } from "@/dominios/ponto/esquemas";
 import estilos from "./page.module.css";
+
+/** Contrato de GET /api/ponto/resumo (domínio de ponto, chave própria). */
+interface BlocoPonto {
+  disponivel: boolean;
+  explicacao?: string;
+  saldo_banco_minutos?: number;
+  media_he_por_dia_util_minutos?: number;
+  total_he_ultimo_mes_minutos?: number;
+  ultima_apuracao?: { competencia: string } | null;
+  intercorrencias_abertas?: number;
+  espelho_href?: string;
+}
 
 interface Visao {
   pode: {
@@ -593,6 +606,75 @@ function CartaoCheckin({ bloco }: { bloco: BlocoCheckin }) {
   );
 }
 
+/**
+ * Meu ponto — pedido textual da diretoria: saldo do banco de horas, média de
+ * hora extra POR DIA e total de HE do último mês, com link para o espelho.
+ *
+ * Sem valor em reais de propósito: hora extra em dinheiro é folha, tem chave
+ * própria e trilha própria. Aqui é jornada.
+ */
+function CartaoPonto({ bloco }: { bloco: BlocoPonto }) {
+  if (!bloco.disponivel) {
+    return (
+      <section className={estilos.cartao}>
+        <h2>Meu ponto</h2>
+        <p className={estilos.vazio}>{bloco.explicacao}</p>
+      </section>
+    );
+  }
+  const saldo = bloco.saldo_banco_minutos ?? 0;
+  return (
+    <section className={estilos.cartao}>
+      <h2>Meu ponto e banco de horas</h2>
+      <dl className={estilos.dados}>
+        <div className={estilos.dado}>
+          <dt>Saldo do banco de horas</dt>
+          <dd>
+            <strong>{formatarMinutos(saldo)}</strong>{" "}
+            {saldo > 0
+              ? "a seu favor"
+              : saldo < 0
+                ? "a compensar"
+                : "— zerado"}
+          </dd>
+        </div>
+        <div className={estilos.dado}>
+          <dt>Média de hora extra por dia</dt>
+          <dd>{formatarMinutos(bloco.media_he_por_dia_util_minutos ?? 0)}</dd>
+        </div>
+        <div className={estilos.dado}>
+          <dt>Total de hora extra no último mês</dt>
+          <dd>
+            {formatarMinutos(bloco.total_he_ultimo_mes_minutos ?? 0)}
+            {bloco.ultima_apuracao
+              ? ` (${bloco.ultima_apuracao.competencia})`
+              : " — nenhuma competência apurada ainda"}
+          </dd>
+        </div>
+        {(bloco.intercorrencias_abertas ?? 0) > 0 && (
+          <div className={estilos.dado}>
+            <dt>Pendências no seu ponto</dt>
+            <dd>
+              {bloco.intercorrencias_abertas} em aberto — o DP está tratando.
+            </dd>
+          </div>
+        )}
+      </dl>
+      {bloco.espelho_href && (
+        <div className={estilos.acoesCartao}>
+          <Link className={estilos.botaoLigacao} href={bloco.espelho_href}>
+            Ver meu espelho do mês
+          </Link>
+        </div>
+      )}
+      <p className={estilos.notaRodape}>
+        A média divide a hora extra do mês pelos dias com jornada prevista. O
+        valor em reais da hora extra aparece no holerite, não aqui.
+      </p>
+    </section>
+  );
+}
+
 function CartaoTreinamentos({ explicacao }: { explicacao: string }) {
   return (
     <section className={estilos.cartao}>
@@ -606,8 +688,30 @@ function CartaoTreinamentos({ explicacao }: { explicacao: string }) {
 
 export function PortalColaborador() {
   const [visao, setVisao] = useState<Visao | null>(null);
+  const [ponto, setPonto] = useState<BlocoPonto | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+
+  // Bloco de ponto vem do domínio DONO do dado, com a chave dele
+  // (ponto.ver.proprio). Falha aqui não derruba o portal: o cartão só não
+  // aparece.
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/ponto/resumo", {
+          cache: "no-store",
+        });
+        if (!ativo || !resposta.ok) return;
+        setPonto((await resposta.json()) as BlocoPonto);
+      } catch {
+        /* portal segue sem o bloco de ponto */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   useEffect(() => {
     let ativo = true;
@@ -664,6 +768,7 @@ export function PortalColaborador() {
             <CartaoMeusDados dados={visao.meus_dados} />
 
             <div className={estilos.colunas}>
+              {ponto !== null && <CartaoPonto bloco={ponto} />}
               {visao.ferias !== null && <CartaoFerias bloco={visao.ferias} />}
               {visao.solicitacoes !== null && (
                 <CartaoSolicitacoes bloco={visao.solicitacoes} />

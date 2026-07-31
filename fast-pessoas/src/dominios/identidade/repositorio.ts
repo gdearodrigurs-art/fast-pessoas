@@ -50,6 +50,29 @@ export async function buscarPorId(
   return { ...linha, id: Number(linha.id) };
 }
 
+export interface ChaveDoUsuario {
+  chave: string;
+  exige_2fa: boolean;
+}
+
+/**
+ * Chaves que o papel do usuário compõe hoje, com o flag `exige_2fa` de cada
+ * uma (migration 0040). É a matéria-prima da decisão de segundo fator: quem
+ * decide não é o nome do papel, é o que as chaves abrem.
+ */
+export async function listarChavesDoUsuario(
+  usuarioId: number
+): Promise<ChaveDoUsuario[]> {
+  return consultar<ChaveDoUsuario & Record<string, unknown>>(
+    `SELECT pp.chave, p.exige_2fa
+       FROM sistema.usuario u
+       JOIN sistema.papel_permissao pp ON pp.papel = u.papel
+       JOIN sistema.permissao p ON p.chave = pp.chave
+      WHERE u.id = $1 AND u.ativo`,
+    [usuarioId]
+  );
+}
+
 export type AcaoIdentidade =
   | "login_sucesso"
   | "login_falha"

@@ -28,7 +28,10 @@ import {
   FiltroAniversariantes,
   Genero,
   IDADE_LIMITE_CRIANCA,
-  MINIMO_POR_RECORTE,
+  esquemaParametroPrivacidade,
+  MINIMO_POR_RECORTE_MAX,
+  MINIMO_POR_RECORTE_MIN,
+  MINIMO_POR_RECORTE_PADRAO,
   ROTULOS_GENERO,
   ROTULOS_MOTIVO_POSICAO,
   ROTULOS_OCORRENCIA,
@@ -54,6 +57,10 @@ import {
   contarPorGenero,
   contarPorIdade,
   contarQuadro,
+  gravarMinimoPorRecorte,
+  lerMinimoPorRecorte,
+  lerParametroPrivacidade,
+  type ParametroPrivacidadeVigente,
   buscarEstabelecimentoVersaoAtiva,
   buscarFaixaAtivaParaAtualizar,
   buscarFicha,
@@ -134,22 +141,28 @@ function truncar(texto: string, limite: number): string {
 }
 
 // ------------------------------------------------------------------ escopo de visibilidade
-// Fonte única do "quem vê quem": rh/dp/diretoria (chave rh.colaborador.ver)
-// veem todos; gestor vê a si e aos liderados com relação VIGENTE; quem não tem
-// a chave (funcionário) vê apenas a própria ficha.
+// Fonte única do "quem vê quem", e a régua inteira está em DUAS chaves — nunca
+// no nome do papel (migration 0039 conta o porquê):
+//   sem rh.colaborador.ver ................ só a própria ficha
+//   com rh.colaborador.ver ................ si e liderados com relação VIGENTE
+//   mais rh.colaborador.ver.todos ......... empresa inteira
+// O default de quem só tem a primeira chave é "equipe": perfil novo composto
+// em /perfis nasce restrito, e o alcance amplo só existe se o administrador o
+// tiver concedido explicitamente na tela.
 
 export async function resolverEscopo(sessao: PayloadSessao): Promise<Escopo> {
-  const podeVerTodos = await temPermissao(
-    sessao.usuario_id,
-    "rh.colaborador.ver"
-  );
-  if (!podeVerTodos) {
+  const podeVer = await temPermissao(sessao.usuario_id, "rh.colaborador.ver");
+  if (!podeVer) {
     return {
       alcance: "proprio",
       colaboradorId: await colaboradorIdDoUsuario(sessao.usuario_id),
     };
   }
-  if (sessao.papel === "gestor") {
+  const alcancaTodos = await temPermissao(
+    sessao.usuario_id,
+    "rh.colaborador.ver.todos"
+  );
+  if (!alcancaTodos) {
     return {
       alcance: "equipe",
       colaboradorId: await colaboradorIdDoUsuario(sessao.usuario_id),
@@ -1556,21 +1569,26 @@ export interface RecorteAgregado {
 }
 
 /**
- * Supressão de recorte pequeno. Recorte com 1..MINIMO_POR_RECORTE-1 pessoas não
- * é publicado. Guarda contra revelação por complemento: se sobrar UM único
- * recorte suprimido, o menor recorte publicado também é suprimido — senão
- * bastaria subtrair do total para reidentificar. Limitação conhecida: com uma
- * base minúscula (um só recorte não vazio) nem isso protege; o relatório então
+ * Supressão de recorte pequeno. Recorte com 1..k-1 pessoas não é publicado.
+ * Guarda contra revelação por complemento: se sobrar UM único recorte
+ * suprimido, o menor recorte publicado também é suprimido — senão bastaria
+ * subtrair do total para reidentificar. Limitação conhecida: com uma base
+ * minúscula (um só recorte não vazio) nem isso protege; o relatório então
  * mostra apenas o total, que já é informação pública de headcount.
+ *
+ * O k vem do parâmetro administrável (migration 0044), não de constante: quem
+ * chama já leu o valor e o passa aqui, para o relatório inteiro ser calculado
+ * com UM k só, mesmo que alguém mude o parâmetro no meio da montagem.
  */
 function suprimirRecortesPequenos(
-  recortes: { chave: string; rotulo: string; quantidade: number }[]
+  recortes: { chave: string; rotulo: string; quantidade: number }[],
+  minimoPorRecorte: number
 ): RecorteAgregado[] {
   const suprimidos = new Set(
     recortes
       .filter(
         (recorte) =>
-          recorte.quantidade > 0 && recorte.quantidade < MINIMO_POR_RECORTE
+          recorte.quantidade > 0 && recorte.quantidade < minimoPorRecorte
       )
       .map((recorte) => recorte.chave)
   );
@@ -1650,12 +1668,14 @@ export async function relatorioDiversidade(
     recurso: "relatorio.diversidade",
     registroId: "agregado",
   });
-  const [quadro, genero, idades, cobertura] = await Promise.all([
-    contarQuadro(),
-    contarPorGenero(),
-    contarPorIdade(),
-    contarCoberturaNascimento(),
-  ]);
+  const [quadro, genero, idades, cobertura, minimoPorRecorte] =
+    await Promise.all([
+      contarQuadro(),
+      contarPorGenero(),
+      contarPorIdade(),
+      contarCoberturaNascimento(),
+      lerMinimoPorRecorte(),
+    ]);
   const porFaixa = FAIXAS_IDADE.map((faixa) => ({
     chave: faixa.chave,
     rotulo: faixa.rotulo,
@@ -1667,15 +1687,16 @@ export async function relatorioDiversidade(
     total_quadro: quadro.total,
     com_data_nascimento: cobertura.com_data,
     sem_data_nascimento: cobertura.sem_data,
-    minimo_por_recorte: MINIMO_POR_RECORTE,
+    minimo_por_recorte: minimoPorRecorte,
     por_genero: suprimirRecortesPequenos(
       genero.map((linha) => ({
         chave: linha.genero,
         rotulo: ROTULOS_GENERO[linha.genero as Genero],
         quantidade: linha.quantidade,
-      }))
+      })),
+      minimoPorRecorte
     ),
-    por_faixa_idade: suprimirRecortesPequenos(porFaixa),
+    por_faixa_idade: suprimirRecortesPequenos(porFaixa, minimoPorRecorte),
   };
 }
 
@@ -1701,31 +1722,35 @@ export async function relatorioComposicaoFamiliar(
     recurso: "relatorio.composicao_familiar",
     registroId: "agregado",
   });
-  const [quadro, bruto] = await Promise.all([
+  const [quadro, bruto, minimoPorRecorte] = await Promise.all([
     contarQuadro(),
     agregarComposicaoFamiliar(IDADE_LIMITE_CRIANCA),
+    lerMinimoPorRecorte(),
   ]);
   return {
     total_quadro: quadro.total,
-    minimo_por_recorte: MINIMO_POR_RECORTE,
+    minimo_por_recorte: minimoPorRecorte,
     idade_limite_crianca: IDADE_LIMITE_CRIANCA,
-    responsaveis_por_genero: suprimirRecortesPequenos([
-      {
-        chave: "maes",
-        rotulo: "Mães (gênero feminino com filho cadastrado)",
-        quantidade: bruto.com_filho_feminino,
-      },
-      {
-        chave: "pais",
-        rotulo: "Pais (gênero masculino com filho cadastrado)",
-        quantidade: bruto.com_filho_masculino,
-      },
-      {
-        chave: "outros",
-        rotulo: "Outro/não informado com filho cadastrado",
-        quantidade: bruto.com_filho_outro_ou_nao_informado,
-      },
-    ]),
+    responsaveis_por_genero: suprimirRecortesPequenos(
+      [
+        {
+          chave: "maes",
+          rotulo: "Mães (gênero feminino com filho cadastrado)",
+          quantidade: bruto.com_filho_feminino,
+        },
+        {
+          chave: "pais",
+          rotulo: "Pais (gênero masculino com filho cadastrado)",
+          quantidade: bruto.com_filho_masculino,
+        },
+        {
+          chave: "outros",
+          rotulo: "Outro/não informado com filho cadastrado",
+          quantidade: bruto.com_filho_outro_ou_nao_informado,
+        },
+      ],
+      minimoPorRecorte
+    ),
     com_conjuge_cadastrado: bruto.com_conjuge,
     total_filhos: bruto.total_filhos,
     total_criancas: bruto.total_criancas,
@@ -1760,4 +1785,65 @@ export async function relatorioHeadcount(): Promise<RelatorioHeadcount> {
       quantidade: linha.quantidade,
     })),
   };
+}
+
+// ------------------------------------------------------------------ parâmetro de privacidade (0044)
+
+export interface PainelPrivacidade extends ParametroPrivacidadeVigente {
+  minimo: number;
+  maximo: number;
+  padrao: number;
+}
+
+/** Leitura para a tela: valor vigente, quem mexeu por último e os limites. */
+export async function obterParametroPrivacidade(): Promise<PainelPrivacidade> {
+  const vigente = await lerParametroPrivacidade();
+  return {
+    ...vigente,
+    minimo: MINIMO_POR_RECORTE_MIN,
+    maximo: MINIMO_POR_RECORTE_MAX,
+    padrao: MINIMO_POR_RECORTE_PADRAO,
+  };
+}
+
+/**
+ * Muda o piso de anonimato. Exigir a chave é da rota; aqui vale a regra do
+ * dado: valor dentro dos limites e ALTERAÇÃO NA TRILHA, na mesma transação —
+ * baixar o k publica recorte que estava suprimido, e essa é uma decisão que
+ * precisa ter dono e data.
+ */
+export async function alterarParametroPrivacidade(
+  sessao: PayloadSessao,
+  dados: unknown
+): Promise<PainelPrivacidade> {
+  const analise = esquemaParametroPrivacidade.safeParse(dados);
+  if (!analise.success) {
+    throw new ErroHttpCampo(
+      400,
+      analise.error.issues[0]?.message ?? "Valor inválido",
+      "minimo_por_recorte"
+    );
+  }
+  const antes = await lerParametroPrivacidade();
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const novo = await gravarMinimoPorRecorte(
+      cliente,
+      sessao.usuario_id,
+      analise.data.minimo_por_recorte
+    );
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "privacidade.minimo_por_recorte.alterar",
+      tabela: "sistema.parametro_privacidade",
+      registroId: "1",
+      diff: {
+        "Piso de anonimato (k)": {
+          de: String(antes.minimo_por_recorte),
+          para: String(novo),
+        },
+      },
+    });
+  });
+  return obterParametroPrivacidade();
 }

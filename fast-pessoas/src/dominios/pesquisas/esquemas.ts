@@ -84,18 +84,51 @@ export const ROTULOS_STATUS_PLANO: Record<StatusPlano, string> = {
 // ------------------------------------------------------------------ privacidade
 
 /**
- * k-anonimato: nenhum recorte de resultado aparece com menos de 5 respostas.
+ * k-anonimato: nenhum recorte de resultado aparece com menos de k respostas.
  * Abaixo disso a média deixa de ser agregado e passa a ser dedução de quem
  * respondeu o quê — o oposto do que a pesquisa anônima promete.
+ *
+ * ESTE NÚMERO NÃO É A POLÍTICA — é o PADRÃO DE FÁBRICA dela, e só serve de
+ * fallback quando a linha de sistema.parametro_privacidade não existe. A
+ * política vigente é a MESMA dos relatórios agregados:
+ * sistema.parametro_privacidade.minimo_por_recorte (migration 0044),
+ * administrável em /relatorios por quem tem `privacidade.administrar`.
+ *
+ * POR QUE O MESMO PARÂMETRO, E NÃO UM SEGUNDO CAMPO SÓ PARA A PESQUISA
+ * Porque os dois respondem à mesma pergunta: quantas PESSOAS precisam estar
+ * por trás de um número para ele poder ser publicado. Um k separado só se
+ * justificaria se as unidades de contagem fossem diferentes — e não são: o
+ * recorte de diversidade conta pessoas do recorte, o agregado de clima conta
+ * COUNT(DISTINCT colaborador_id) por unidade, e aqui cada resposta de uma
+ * pergunta é de uma pessoa distinta (uma resposta por pessoa por pergunta).
+ * Dois campos administráveis reproduziriam o defeito que a 0045 corrigiu: o
+ * dono mexe em um, acredita ter mudado a política inteira, e metade dela
+ * segue publicando o que ele acabou de mandar esconder.
+ *
+ * RESSALVA MEDIDA, registrada de propósito: em `recortesPorUnidade` a
+ * contagem é de RESPOSTAS somadas por unidade, não de pessoas — numa pesquisa
+ * com 2 perguntas de escala, 3 pessoas produzem 6 respostas e passam por um
+ * piso de 5. Isso é defeito do DENOMINADOR, não do piso, e está descrito no
+ * relatório desta frente; corrigi-lo muda o que a tela publica hoje e por isso
+ * não foi embutido nesta mudança, que é de parametrização.
  */
-export const MINIMO_AMOSTRA = 5;
+export const MINIMO_AMOSTRA_PADRAO = 5;
 
 export const TEXTO_AMOSTRA_INSUFICIENTE = "Amostra insuficiente";
 
-export const AVISO_ANONIMATO =
-  "Suas respostas são anônimas: o sistema registra apenas que você participou " +
-  "e a sua unidade, nunca o vínculo entre você e o que respondeu. Resultados " +
-  `só aparecem em recortes com ${MINIMO_AMOSTRA} respostas ou mais.`;
+/**
+ * O aviso que o respondente lê ANTES de responder. Recebe o k vigente em vez
+ * de citar uma constante: prometer "5 respostas ou mais" numa empresa que
+ * configurou 20 seria mentir para a pessoa justamente na tela em que se pede
+ * que ela confie no sistema.
+ */
+export function avisoAnonimato(minimoAmostra: number): string {
+  return (
+    "Suas respostas são anônimas: o sistema registra apenas que você participou " +
+    "e a sua unidade, nunca o vínculo entre você e o que respondeu. Resultados " +
+    `só aparecem em recortes com ${minimoAmostra} respostas ou mais.`
+  );
+}
 
 // ------------------------------------------------------------------ entrada
 

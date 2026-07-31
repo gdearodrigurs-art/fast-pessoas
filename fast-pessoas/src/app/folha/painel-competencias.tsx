@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { acaoCabecalho, Cabecalho } from "@/app/cabecalho";
 import {
+  competenciaCorrente,
   EstadoCompetencia,
   formatarCompetencia,
   MESES_ROTULO,
@@ -57,9 +58,11 @@ export function PainelCompetencias() {
   const [erro, setErro] = useState<string | null>(null);
   const [versao, setVersao] = useState(0);
 
-  const agora = new Date();
-  const [ano, setAno] = useState(String(agora.getFullYear()));
-  const [mes, setMes] = useState(String(agora.getMonth() + 1));
+  // Trava retroativa (G3): o formulário só oferece do mês corrente para
+  // frente. O servidor recusa igual com 409 — a tela só evita o erro óbvio.
+  const atual = competenciaCorrente();
+  const [ano, setAno] = useState(String(atual.ano));
+  const [mes, setMes] = useState(String(atual.mes));
   const [abrindo, setAbrindo] = useState(false);
   const [erroAbrir, setErroAbrir] = useState<string | null>(null);
 
@@ -110,9 +113,16 @@ export function PainelCompetencias() {
     }
   }
 
-  const anosOpcoes: number[] = [];
-  for (let i = agora.getFullYear() - 1; i <= agora.getFullYear() + 1; i += 1) {
-    anosOpcoes.push(i);
+  // Do ano corrente para frente — nunca o ano passado.
+  const anosOpcoes = [atual.ano, atual.ano + 1];
+  // No ano corrente, só do mês corrente em diante; nos anos seguintes, todos.
+  const primeiroMes = Number(ano) === atual.ano ? atual.mes : 1;
+
+  function trocarAno(novoAno: string) {
+    setAno(novoAno);
+    if (Number(novoAno) === atual.ano && Number(mes) < atual.mes) {
+      setMes(String(atual.mes));
+    }
   }
 
   return (
@@ -138,6 +148,12 @@ export function PainelCompetencias() {
         {!carregando && visao?.pode.operar && (
           <section className={estilos.cartao}>
             <h2>Abrir competência</h2>
+            <p className={estilos.notaRodape}>
+              Só do mês corrente ({formatarCompetencia(atual.ano, atual.mes)})
+              para frente — abrir dezembro em julho pode; voltar para um mês já
+              passado, não. Correção de competência encerrada é folha
+              complementar.
+            </p>
             <form className={estilos.formulario} onSubmit={abrir}>
               <div className={estilos.campoGrupoCurto}>
                 <label className={estilos.rotulo} htmlFor="mes">
@@ -149,11 +165,13 @@ export function PainelCompetencias() {
                   value={mes}
                   onChange={(e) => setMes(e.target.value)}
                 >
-                  {MESES_ROTULO.map((nome, indice) => (
-                    <option key={nome} value={indice + 1}>
-                      {nome}
-                    </option>
-                  ))}
+                  {MESES_ROTULO.map((nome, indice) => indice + 1)
+                    .filter((numero) => numero >= primeiroMes)
+                    .map((numero) => (
+                      <option key={numero} value={numero}>
+                        {MESES_ROTULO[numero - 1]}
+                      </option>
+                    ))}
                 </select>
               </div>
               <div className={estilos.campoGrupoCurto}>
@@ -164,7 +182,7 @@ export function PainelCompetencias() {
                   className={estilos.campo}
                   id="ano"
                   value={ano}
-                  onChange={(e) => setAno(e.target.value)}
+                  onChange={(e) => trocarAno(e.target.value)}
                 >
                   {anosOpcoes.map((opcao) => (
                     <option key={opcao} value={opcao}>

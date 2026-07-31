@@ -175,3 +175,48 @@
   color: #6b6763;
   margin-top: 10px;
 }
+
+/* Estado explicado do ciclo (G1a) — nunca deixar a página sem conteúdo. */
+.cartaoSituacao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-left: 4px solid #d21217;
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.cartaoSituacao h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.detalheSituacao {
+  font-size: 13.5px;
+  margin: 0 0 10px;
+}
+
+.proximoPasso {
+  font-size: 13px;
+  color: #6b6763;
+  margin: 0 0 10px;
+}
+
+.rotuloSituacao {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b6763;
+  margin: 0 0 4px;
+}
+
+.listaPosso {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13.5px;
+}
+
+.listaPosso li {
+  margin-bottom: 3px;
+}

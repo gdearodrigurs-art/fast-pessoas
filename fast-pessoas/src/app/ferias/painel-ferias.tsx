@@ -4,6 +4,10 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
+  ABONO_DIAS_MAXIMO,
+  ABONO_DIAS_MINIMO,
+  DIAS_GOZO_MAXIMO,
+  DIAS_GOZO_MINIMO,
   nivelAlerta,
   NivelAlerta,
   ROTULOS_NIVEL_ALERTA,
@@ -98,8 +102,24 @@ export function PainelFerias({
 
   const [periodoId, setPeriodoId] = useState("");
   const [inicio, setInicio] = useState("");
-  const [dias, setDias] = useState("30");
-  const [abonoDias, setAbonoDias] = useState("0");
+  /**
+   * OS DOIS CAMPOS NASCEM VAZIOS — de propósito, e é correção de defeito.
+   *
+   * Nasciam "30" e "0". Como os dois são `required`/opcional e o corpo do POST
+   * lê o estado direto, bastava escolher o período e a data e clicar em
+   * Programar para GRAVAR trinta dias de gozo e zero de abono que ninguém
+   * escolheu — e trinta dias é a decisão inteira desta tela. Reproduzido em
+   * 2026-07-30 contra o dev server com o corpo exato do formulário intocado:
+   * `{"dias":30,"abono_dias":0}` chegou ao servidor e só não virou linha
+   * porque a pessoa da demo já tinha 15 dias pendentes no período.
+   *
+   * Aqui não há "versão vigente" de onde semear, como em SecaoJornadas ou em
+   * SecaoParametrosGerais: dias de gozo não é parâmetro da empresa, é a
+   * escolha daquela pessoa naquele pedido. Então a semeadura certa é nenhuma,
+   * e o vazio é a resposta honesta — o sistema não tem palpite para dar.
+   */
+  const [dias, setDias] = useState("");
+  const [abonoDias, setAbonoDias] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [avisoEnvio, setAvisoEnvio] = useState<string | null>(null);
@@ -149,16 +169,21 @@ export function PainelFerias({
         body: JSON.stringify({
           periodo_aquisitivo_id: Number(periodoId),
           inicio,
-          dias: Number(dias),
-          abono_dias: Number(abonoDias) || 0,
+          // Campo em branco vira chave AUSENTE, não zero: quem diz que a
+          // ausência de abono vale 0 é o esquema do domínio, com a citação do
+          // art. 143, e não este formulário. O `|| 0` que estava aqui era o
+          // mesmo número inventado por outro caminho.
+          dias: dias.trim() === "" ? undefined : Number(dias),
+          abono_dias:
+            abonoDias.trim() === "" ? undefined : Number(abonoDias),
         }),
       });
       const dados = await resposta.json().catch(() => ({}));
       if (resposta.ok) {
         setPeriodoId("");
         setInicio("");
-        setDias("30");
-        setAbonoDias("0");
+        setDias("");
+        setAbonoDias("");
         setAvisoEnvio(
           "Programação enviada — abriu uma demanda para aprovação do seu gestor."
         );
@@ -316,32 +341,41 @@ export function PainelFerias({
                 </div>
                 <div className={estilos.campoGrupo}>
                   <label className={estilos.rotulo} htmlFor="dias">
-                    Dias de gozo (5 a 30)
+                    Dias de gozo ({DIAS_GOZO_MINIMO} a {DIAS_GOZO_MAXIMO})
                   </label>
                   <input
                     className={estilos.campo}
                     id="dias"
                     type="number"
-                    min={5}
-                    max={30}
+                    min={DIAS_GOZO_MINIMO}
+                    max={DIAS_GOZO_MAXIMO}
                     required
                     value={dias}
                     onChange={(e) => setDias(e.target.value)}
                   />
+                  <small className={estilos.notaCampo}>
+                    Quantos dias você vai gozar neste pedido — o campo entra em
+                    branco porque a escolha é sua. O mínimo e o máximo são da
+                    CLT (art. 134 §1º e art. 130), não da empresa.
+                  </small>
                 </div>
                 <div className={estilos.campoGrupo}>
                   <label className={estilos.rotulo} htmlFor="abono">
-                    Abono pecuniário (0 a 10)
+                    Abono pecuniário ({ABONO_DIAS_MINIMO} a {ABONO_DIAS_MAXIMO})
                   </label>
                   <input
                     className={estilos.campo}
                     id="abono"
                     type="number"
-                    min={0}
-                    max={10}
+                    min={ABONO_DIAS_MINIMO}
+                    max={ABONO_DIAS_MAXIMO}
                     value={abonoDias}
                     onChange={(e) => setAbonoDias(e.target.value)}
                   />
+                  <small className={estilos.notaCampo}>
+                    Opcional — venda de até 1/3 das férias (art. 143). Deixando
+                    em branco, o pedido vai sem abono.
+                  </small>
                 </div>
                 <button
                   className={estilos.botao}
@@ -439,25 +473,25 @@ export function PainelFerias({
                   className={`${estilos.cartaoResumo} ${estilos.cartaoResumoVencidas}`}
                 >
                   <strong>{visao.painel.totais.vencidas}</strong>
-                  <span>VENCIDAS — dobro (art. 137)</span>
+                  <span>{ROTULOS_NIVEL_ALERTA.vencida}</span>
                 </div>
                 <div
                   className={`${estilos.cartaoResumo} ${estilos.cartaoResumo30}`}
                 >
                   <strong>{visao.painel.totais.ate_30}</strong>
-                  <span>vencendo em até 30 dias</span>
+                  <span>{ROTULOS_NIVEL_ALERTA.ate_30}</span>
                 </div>
                 <div
                   className={`${estilos.cartaoResumo} ${estilos.cartaoResumo60}`}
                 >
                   <strong>{visao.painel.totais.ate_60}</strong>
-                  <span>vencendo em até 60 dias</span>
+                  <span>{ROTULOS_NIVEL_ALERTA.ate_60}</span>
                 </div>
                 <div
                   className={`${estilos.cartaoResumo} ${estilos.cartaoResumo90}`}
                 >
                   <strong>{visao.painel.totais.ate_90}</strong>
-                  <span>vencendo em até 90 dias</span>
+                  <span>{ROTULOS_NIVEL_ALERTA.ate_90}</span>
                 </div>
               </div>
               <div className={estilos.tabelaEnvolucro}>

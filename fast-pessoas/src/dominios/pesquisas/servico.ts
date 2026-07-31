@@ -2,6 +2,7 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { lerMinimoPorRecorte } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import {
   AcaoPesquisa,
@@ -9,7 +10,6 @@ import {
   CriacaoPesquisa,
   EnvioRespostas,
   FAIXA_NUMERICA,
-  MINIMO_AMOSTRA,
   PlanoNovo,
   ROTULOS_STATUS_PLANO,
   ROTULOS_TIPO_PERGUNTA,
@@ -60,9 +60,13 @@ import {
  *   1. ANONIMATO — nenhuma função aqui liga resposta a pessoa. O respondente é
  *      resolvido apenas para (a) saber a unidade e (b) marcar participação;
  *      as duas coisas seguem por caminhos separados (ver 0022_pesquisas.sql).
- *   2. k-ANONIMATO DE 5 — todo recorte de resultado passa por `recorte()`. Com
- *      menos de MINIMO_AMOSTRA respostas o payload sai SEM o valor e SEM a
- *      contagem: só o rótulo "amostra insuficiente". Ausência, não máscara.
+ *   2. k-ANONIMATO — todo recorte de resultado passa por `recorte()`. Com menos
+ *      de k respostas o payload sai SEM o valor e SEM a contagem: só o rótulo
+ *      "amostra insuficiente". Ausência, não máscara. O k é o MESMO dos
+ *      relatórios agregados (sistema.parametro_privacidade.minimo_por_recorte,
+ *      migrations 0044 e 0045), lido a cada chamada — não é constante deste
+ *      arquivo. Ver a nota longa em esquemas.ts sobre por que é um parâmetro
+ *      só e não dois.
  *   3. eNPS CORRETO — %promotores(9–10) − %detratores(0–6) em pontos
  *      percentuais; neutros (7–8) contam no denominador e em nada mais.
  *
@@ -124,12 +128,18 @@ function arredondar(valor: number, casas = 1): number {
 /**
  * Porta única do k-anonimato. Devolve o valor calculado quando a amostra
  * alcança o mínimo; abaixo dele devolve ausência — nem valor, nem contagem.
+ *
+ * `minimo` é PARÂMETRO OBRIGATÓRIO de propósito: sem valor padrão, é
+ * impossível chamar esta porta esquecendo de consultar a política vigente —
+ * o compilador cobra. Foi exatamente o esquecimento oposto (constante local
+ * em vez de política) que deixou este módulo fora da migration 0044.
  */
 function recorte<T>(
   respostas: number,
+  minimo: number,
   calcular: () => T
 ): { amostra_suficiente: boolean; respostas: number | null; valor: T | null } {
-  if (respostas < MINIMO_AMOSTRA) {
+  if (respostas < minimo) {
     return { amostra_suficiente: false, respostas: null, valor: null };
   }
   return { amostra_suficiente: true, respostas, valor: calcular() };
@@ -238,6 +248,12 @@ export interface VisaoPesquisas {
   /** Pesquisas abertas para a pessoa da sessão responder. */
   minhas_abertas: AbertaParaMim[];
   colaborador_vinculado: boolean;
+  /**
+   * Piso de anonimato vigente. Vai no payload porque a tela ANUNCIA o número
+   * ("só aparece em recortes com N respostas ou mais") — e anunciar 5 quando a
+   * empresa configurou 20 é prometer errado no lugar onde a promessa importa.
+   */
+  minimo_amostra: number;
 }
 
 export async function obterVisao(
@@ -249,12 +265,13 @@ export async function obterVisao(
     buscarColaboradorPorUsuario(sessao.usuario_id),
   ]);
   const podeVerLista = pode.administrar || pode.ver_resultado;
-  const [lista, ativos, abertas] = await Promise.all([
+  const [lista, ativos, abertas, minimoAmostra] = await Promise.all([
     podeVerLista ? listarPesquisas() : Promise.resolve([]),
     podeVerLista ? contarAtivos() : Promise.resolve(0),
     pode.responder
       ? listarAbertasParaColaborador(colaborador ? colaborador.id : null)
       : Promise.resolve([]),
+    lerMinimoPorRecorte(),
   ]);
   return {
     pode,
@@ -273,6 +290,7 @@ export async function obterVisao(
       tipo_rotulo: ROTULOS_TIPO_PESQUISA[aberta.tipo],
     })),
     colaborador_vinculado: colaborador !== null,
+    minimo_amostra: minimoAmostra,
   };
 }
 
@@ -409,6 +427,8 @@ export interface FormularioPesquisa {
   /** Unidade que acompanhará a resposta — a pessoa tem direito de saber. */
   unidade: string | null;
   dentro_do_periodo: boolean;
+  /** Piso vigente, para o aviso de anonimato prometer o número que vale. */
+  minimo_amostra: number;
 }
 
 export async function obterFormulario(
@@ -425,9 +445,10 @@ export async function obterFormulario(
   if (pesquisa.status !== "aberta") {
     throw new ErroHttp(409, "Esta pesquisa não está aberta para resposta.");
   }
-  const [perguntas, respondida] = await Promise.all([
+  const [perguntas, respondida, minimoAmostra] = await Promise.all([
     listarPerguntas(id),
     colaborador ? jaParticipou(id, colaborador.id) : Promise.resolve(false),
+    lerMinimoPorRecorte(),
   ]);
   const hoje = hojeIso();
   return {
@@ -453,6 +474,7 @@ export async function obterFormulario(
     colaborador_vinculado: colaborador !== null,
     unidade: colaborador ? colaborador.unidade : null,
     dentro_do_periodo: hoje >= pesquisa.inicio && hoje <= pesquisa.fim,
+    minimo_amostra: minimoAmostra,
   };
 }
 
@@ -718,6 +740,7 @@ export async function obterResultado(
     unidades,
     planos,
     ativos,
+    minimoAmostra,
   ] = await Promise.all([
     listarPerguntas(id),
     contagensEscala(id),
@@ -727,6 +750,10 @@ export async function obterResultado(
     recortesPorUnidade(id),
     listarPlanos(id),
     contarAtivos(),
+    // Política vigente, lida junto com os dados: o resultado é sempre "posição
+    // de agora", então o k que vale é o de agora — não há resultado antigo a
+    // reproduzir com o k antigo (mesmo raciocínio da 0044).
+    lerMinimoPorRecorte(),
   ]);
 
   const escalaPorPergunta = new Map(escalas.map((e) => [e.pergunta_id, e]));
@@ -751,7 +778,7 @@ export async function obterResultado(
     if (pergunta.tipo === "escala_1_5") {
       const contagem = escalaPorPergunta.get(pergunta.id);
       const total = contagem?.respostas ?? 0;
-      const corte = recorte(total, () =>
+      const corte = recorte(total, minimoAmostra, () =>
         arredondar((contagem as { soma: number }).soma / total, 2)
       );
       return {
@@ -766,7 +793,7 @@ export async function obterResultado(
     if (pergunta.tipo === "nps_0_10") {
       const contagem = npsPorPergunta.get(pergunta.id);
       const total = contagem?.respostas ?? 0;
-      const corte = recorte(total, () => contagem!);
+      const corte = recorte(total, minimoAmostra, () => contagem!);
       return {
         ...base,
         amostra_suficiente: corte.amostra_suficiente,
@@ -784,7 +811,7 @@ export async function obterResultado(
     if (pergunta.tipo === "escolha_unica") {
       const linhas = escolhas.filter((e) => e.pergunta_id === pergunta.id);
       const total = linhas.reduce((soma, linha) => soma + linha.respostas, 0);
-      const corte = recorte(total, () =>
+      const corte = recorte(total, minimoAmostra, () =>
         linhas.map((linha) => ({
           rotulo: linha.opcao,
           respostas: linha.respostas,
@@ -805,7 +832,7 @@ export async function obterResultado(
     const lista = textos
       .filter((t) => t.pergunta_id === pergunta.id)
       .map((t) => t.texto);
-    const corte = recorte(lista.length, () => lista);
+    const corte = recorte(lista.length, minimoAmostra, () => lista);
     return {
       ...base,
       amostra_suficiente: corte.amostra_suficiente,
@@ -819,15 +846,15 @@ export async function obterResultado(
   const promotores = nps.reduce((soma, linha) => soma + linha.promotores, 0);
   const neutros = nps.reduce((soma, linha) => soma + linha.neutros, 0);
   const detratores = nps.reduce((soma, linha) => soma + linha.detratores, 0);
-  const corteEnps = recorte(totalNps, () =>
+  const corteEnps = recorte(totalNps, minimoAmostra, () =>
     calcularEnps(promotores, detratores, totalNps)
   );
 
   const porUnidade: ResultadoUnidade[] = unidades.map((linha) => {
-    const corteEscala = recorte(linha.respostas_escala, () =>
+    const corteEscala = recorte(linha.respostas_escala, minimoAmostra, () =>
       arredondar(linha.soma_escala / linha.respostas_escala, 2)
     );
-    const corteUnidadeNps = recorte(linha.respostas_nps, () =>
+    const corteUnidadeNps = recorte(linha.respostas_nps, minimoAmostra, () =>
       calcularEnps(linha.promotores, linha.detratores, linha.respostas_nps)
     );
     const suficiente =
@@ -871,7 +898,7 @@ export async function obterResultado(
     perguntas: resultadoPerguntas,
     por_unidade: porUnidade,
     planos,
-    minimo_amostra: MINIMO_AMOSTRA,
+    minimo_amostra: minimoAmostra,
     texto_amostra_insuficiente: TEXTO_AMOSTRA_INSUFICIENTE,
   };
 }
@@ -1064,13 +1091,17 @@ export async function valorIndicadorAdesaoPesquisa(): Promise<number | null> {
 
 /**
  * Fonte do indicador `enps`: eNPS da última pesquisa ENCERRADA que tenha
- * pergunta de nota 0–10 respondida, em pontos. Respeita o k-anonimato: com
- * menos de MINIMO_AMOSTRA respostas devolve null ("sem dados" na Central),
- * nunca um número de amostra pequena.
+ * pergunta de nota 0–10 respondida, em pontos. Respeita o k-anonimato vigente:
+ * abaixo do piso devolve null ("sem dados" na Central), nunca um número de
+ * amostra pequena. Se o piso subir, este indicador some da Central junto com o
+ * resto — a Central não pode ser a porta dos fundos do que a tela esconde.
  */
 export async function valorIndicadorEnps(): Promise<number | null> {
-  const contagem = await ultimaContagemEnpsEncerrada();
-  if (!contagem || contagem.respostas < MINIMO_AMOSTRA) return null;
+  const [contagem, minimoAmostra] = await Promise.all([
+    ultimaContagemEnpsEncerrada(),
+    lerMinimoPorRecorte(),
+  ]);
+  if (!contagem || contagem.respostas < minimoAmostra) return null;
   return calcularEnps(
     contagem.promotores,
     contagem.detratores,
