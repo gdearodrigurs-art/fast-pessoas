@@ -14,7 +14,8 @@
     "mapa:retrato": "node db/mapa.js retrato",
     "dev:local": "node db/servidor.js dev",
     "start:local": "node db/servidor.js start",
-    "test": "tsc -p tsconfig.testes.json && node --test \".tmp-testes/tests/**/*.test.js\""
+    "test": "tsc -p tsconfig.testes.json && node --test \".tmp-testes/tests/**/*.test.js\"",
+    "fechar-onda": "node db/fechar-onda.js"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

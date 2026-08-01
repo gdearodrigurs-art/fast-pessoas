@@ -390,6 +390,7 @@
           "arquivos": {
             "db/bancada.js": 3,
             "db/codigo-2fa.js": 1,
+            "db/fechar-onda.js": 3,
             "db/logar-como.js": 1,
             "db/migrations/0001_fundacao.sql": 1,
             "db/migrations/0022_pesquisas.sql": 1,
@@ -417,7 +418,7 @@
             "src/dominios/sst/esquemas.ts": 1,
             "src/dominios/sst/repositorio.ts": 1
           },
-          "total": 46
+          "total": 49
         },
         {
           "descricao": "timestamptz castado para date sem AT TIME ZONE — o cast usa o TimeZone da SESSAO, que e UTC. Pega CHECKs e backfills.",
@@ -447,6 +448,7 @@
           "arquivos": {
             "db/bancada.js": 3,
             "db/codigo-2fa.js": 1,
+            "db/fechar-onda.js": 3,
             "db/logar-como.js": 1,
             "db/mapa.js": 1,
             "db/semear-demo.js": 2,
@@ -497,7 +499,7 @@
             "src/dominios/sst/esquemas.ts": 3,
             "src/dominios/sst/servico.ts": 2
           },
-          "total": 70
+          "total": 73
         },
         {
           "descricao": "Getters UTC de componente de data. Cruzado com a consulta anterior, isola quem deriva ano/mes/dia de HOJE em UTC.",
@@ -2656,5 +2658,5 @@
       ]
     }
   },
-  "gerado_em": "2026-08-01T19:19:54.308Z"
+  "gerado_em": "2026-08-01T19:53:38.883Z"
 }
