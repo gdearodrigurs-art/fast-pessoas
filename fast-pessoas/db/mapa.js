@@ -183,7 +183,7 @@ function rodarGrep(comando) {
   if (r.error) return { erro: `rg não executou: ${r.error.message}` };
   if (r.status === 2) return { erro: `rg reclamou: ${(r.stderr || '').trim().split('\n')[0]}` };
 
-  const arquivos = {};
+  const contagem = {};
   let total = 0;
   for (const linha of (r.stdout || '').split('\n')) {
     if (!linha.trim()) continue;
@@ -191,9 +191,17 @@ function rodarGrep(comando) {
     const m = linha.match(/^(.+?):(\d+):/);
     const arq = (m ? m[1] : linha).replace(/\\/g, '/').trim();
     if (!arq) continue;
-    arquivos[arq] = (arquivos[arq] || 0) + 1;
+    contagem[arq] = (contagem[arq] || 0) + 1;
     total++;
   }
+
+  // Ordem alfabética ANTES de gravar. O rg varre em paralelo e devolve os arquivos na
+  // ordem em que as threads terminam — sem ordenar, dois retratos do mesmo código
+  // produzem 1.148 linhas de diff e zero informação. Descoberto no primeiro fechamento
+  // de onda que usou a ferramenta de verdade: o diff do baseline é o sinal que o portão
+  // de commit lê, e sinal com mil linhas de ruído é sinal que ninguém lê.
+  const arquivos = {};
+  for (const chave of Object.keys(contagem).sort()) arquivos[chave] = contagem[chave];
   return { arquivos, total };
 }
 
