@@ -9,7 +9,7 @@
 //   • todo INSERT parametrizado ($1, $2…), nunca concatenação de valores.
 //
 // Uso isolado de um módulo: node --env-file=.env db/semear/NN-modulo.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const { Client } = require('pg');
 const crypto = require('crypto');

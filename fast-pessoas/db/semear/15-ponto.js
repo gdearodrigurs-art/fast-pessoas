@@ -54,7 +54,7 @@
 // DENTRO da transação) e insere de novo. Datas SEMPRE relativas a hoje.
 //
 // Uso isolado: node --env-file=.env db/semear/15-ponto.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,
@@ -390,7 +390,7 @@ async function limpar(cliente) {
   const removidos = {};
   await comTriggersDesligados(cliente, TABELAS_LIMPEZA, async () => {
     for (const tabela of TABELAS_LIMPEZA) {
-      // eslint-disable-next-line no-await-in-loop -- ordem filho → pai importa
+       
       const resultado = await cliente.query(`DELETE FROM ${tabela}`);
       if (resultado.rowCount > 0) removidos[tabela] = resultado.rowCount;
     }

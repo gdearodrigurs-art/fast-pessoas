@@ -29,6 +29,7 @@ fast-pessoas/.env.local-db
 
 # temporarios de agente
 .tmp-*/
+.tmp-*.js
 fast-pessoas/.tmp-*/
 _verif-*
 fast-pessoas/_verif-*

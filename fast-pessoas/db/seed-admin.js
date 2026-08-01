@@ -1,7 +1,7 @@
 // Cria o PRIMEIRO usuário admin com senha aleatória forte, impressa uma única vez.
 // Recusa se já houver admin ativo — depois do primeiro, usuários nascem pela aplicação.
 // Uso: node --env-file=.env db/seed-admin.js email "Nome Completo"
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 const { Client } = require('pg');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');

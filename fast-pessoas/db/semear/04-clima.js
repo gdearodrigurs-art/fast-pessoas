@@ -24,7 +24,7 @@
 // a pessoa nomeada — é o que a diretoria vai ler na frente da plateia.
 //
 // Uso isolado: node --env-file=.env db/semear/04-clima.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,

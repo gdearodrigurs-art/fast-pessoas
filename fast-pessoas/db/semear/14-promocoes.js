@@ -40,7 +40,7 @@
 // `rh.posicao.ver` com trilha de leitura.
 //
 // Uso isolado: node --env-file=.env db/semear/14-promocoes.js (após 01-base)
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   comTriggersDesligados,

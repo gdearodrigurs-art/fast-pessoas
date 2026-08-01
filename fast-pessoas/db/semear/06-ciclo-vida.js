@@ -16,7 +16,7 @@
 //   docs/03-modulos/09-recrutamento-admissao.md e 11-desligamento.md
 //
 // Uso isolado: node --env-file=.env db/semear/06-ciclo-vida.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   comTriggersDesligados,

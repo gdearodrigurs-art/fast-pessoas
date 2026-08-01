@@ -32,7 +32,7 @@
 //     heurística anti-vazamento (replicada em garantirTextoNeutro).
 //
 // Uso isolado: node --env-file=.env db/semear/03-demandas.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,

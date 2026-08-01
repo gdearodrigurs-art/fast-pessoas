@@ -156,9 +156,23 @@ function arredondarCentavos(valor: number): number {
   return Math.floor(valor + 0.5 + 1e-6);
 }
 
-/** Percentual como razão inteira: centavos × (alíquota em pontos-base) ÷ 10⁴. */
+/**
+ * Percentual como razão inteira: centavos × (alíquota em centésimos de ponto-base) ÷ 10⁶.
+ *
+ * Eram 10⁴, o que truncava a alíquota em DUAS casas — e a coluna, o zod e a tela guardam
+ * QUATRO. Uma comissão de 8,3333% sobre R$ 3.000,00 era paga como 8,33%: R$ 249,90 em vez de
+ * R$ 250,00. Dez centavos por competência, por pessoa, e o erro cresce com o salário — em
+ * R$ 30.000,00 é um real. Quatro casas entravam, duas saíam.
+ *
+ * A razão inteira continua sendo o ponto: multiplicar primeiro e dividir depois mantém o
+ * intermediário exato. Com centavos na casa do milhão e alíquota até 27,5%, o produto fica
+ * ordens de grandeza abaixo de Number.MAX_SAFE_INTEGER.
+ *
+ * INSS, IRRF e FGTS passam por aqui. Como as alíquotas deles têm no máximo duas casas, o
+ * resultado não muda — e é a bateria de tests/folha.test.ts que prova isso, não o argumento.
+ */
 function aplicarPercentual(centavos: number, aliquota: number): number {
-  return (centavos * Math.round(aliquota * 100)) / 10_000;
+  return (centavos * Math.round(aliquota * 10_000)) / 1_000_000;
 }
 
 function reais(centavos: number): number {

@@ -14,7 +14,7 @@
 //
 // NUNCA apaga: o usuário real (sistema.usuario id 2), o RBAC e os catálogos
 // estruturais semeados pelas migrations. Ver db/semear/00-limpar.js.
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const fs = require('fs');
 const path = require('path');

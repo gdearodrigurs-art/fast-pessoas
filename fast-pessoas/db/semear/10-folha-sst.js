@@ -41,7 +41,7 @@
 // insere de novo. Datas SEMPRE relativas a hoje.
 //
 // Uso isolado: node --env-file=.env db/semear/10-folha-sst.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const crypto = require('crypto');
 
@@ -1286,7 +1286,7 @@ async function semearFolha(cliente, { ativos, dp }) {
   // execução — ver as regras de db/semear/comum.js).
   const fechadas = [];
   for (let mesesAtras = COMPETENCIAS_FECHADAS; mesesAtras >= 1; mesesAtras -= 1) {
-    // eslint-disable-next-line no-await-in-loop -- serial de propósito: determinismo
+     
     fechadas.push(await semearCompetenciaFechada(cliente, contexto, mesesAtras));
   }
 

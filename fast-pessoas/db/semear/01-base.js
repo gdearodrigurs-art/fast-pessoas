@@ -25,7 +25,7 @@
 //
 // NÃO cria processo_desligamento (é de outro módulo) — os 8 desligados ficam
 // só no estado final: status desligado + data + usuário inativo.
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,

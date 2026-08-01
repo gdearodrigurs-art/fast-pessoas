@@ -28,7 +28,7 @@
 // Idempotente: apaga tudo que ele cria (ciclos, avaliações, respostas,
 // resultados, decisões e os eventos com origem rh.ciclo_avaliacao) e insere de
 // novo. Roda sozinho: node --env-file=.env db/semear/08-avaliacao.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   comTriggersDesligados,

@@ -21,7 +21,7 @@
 // foi ACORDADO com o colaborador.
 //
 // Uso isolado: node --env-file=.env db/semear/07-beneficios.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,

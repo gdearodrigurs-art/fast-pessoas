@@ -20,7 +20,7 @@
 //       rh_folha.caso_teste_folha;
 //   • audit.alteracao e audit.leitura_sensivel — trilha é append-only por
 //     decisão de arquitetura; histórico de auditoria NÃO se apaga por reset.
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const { comTriggersDesligados, log, executarSozinho } = require('./comum');
 
@@ -217,7 +217,7 @@ async function semear(cliente) {
       const sql = condicao
         ? `DELETE FROM ${tabela} WHERE ${condicao}`
         : `DELETE FROM ${tabela}`;
-      // eslint-disable-next-line no-await-in-loop -- ordem filho → pai é a regra
+       
       const resultado = await cliente.query(sql);
       if (resultado.rowCount > 0) removidos[tabela] = resultado.rowCount;
     }

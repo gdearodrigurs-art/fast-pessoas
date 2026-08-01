@@ -34,7 +34,7 @@
 // Idempotente: apaga TODO o R&S (menos rh.etapa_selecao_versao, que é
 // catálogo das migrations) e insere de novo. Rodar sozinho:
 //   node --env-file=.env db/semear/09-recrutamento.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,

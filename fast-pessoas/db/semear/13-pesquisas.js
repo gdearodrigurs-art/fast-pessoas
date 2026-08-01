@@ -35,7 +35,7 @@
 // código em vez de sair de um sorteio.
 //
 // Uso isolado: node --env-file=.env db/semear/13-pesquisas.js (após 01-base)
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   comTriggersDesligados,

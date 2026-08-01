@@ -1,0 +1,1426 @@
+{
+  "banco": "fast_pessoas_dev",
+  "data_referencia": "2026-08-01",
+  "folha": {
+    "casos": [
+      {
+        "descricao": "R$ 2.000,00 + 10h de HE 50%. Hora normal 2.000/220 = 9,0909…; HE50 = 10 × 1,5 × 9,0909… = 136,3636 → 136,36. Bases = 2.136,36. INSS: 122,3250 + (2.136,36−1.631,00)×9% = 45,4824 → 167,8074 → 167,81. FGTS: 2.136,36×8% = 170,9088 → 170,91. IRRF: completo 2.136,36−167,81 = 1.968,55 e simplificado 2.136,36−607,20 = 1.529,16 — ambos ≤ 2.428,80, isento → sem item 2002. Líquido: 2.136,36 − 167,81 = 1.968,55.",
+        "entrada": {
+          "dependentes": 0,
+          "salario": 2000,
+          "variaveis": [
+            {
+              "referencia": 10,
+              "rubrica": "1101"
+            }
+          ]
+        },
+        "nome": "com_he50_2000_10h",
+        "saida_esperada": {
+          "itens": {
+            "1001": 2000,
+            "1101": 136.36,
+            "2001": 167.81,
+            "3001": 170.91
+          },
+          "liquido": 1968.55
+        }
+      },
+      {
+        "descricao": "R$ 3.300,00 com 1 dia de falta. Falta (1201) = 1 × 3.300/30 = 110,00; DSR sobre faltas (1202, regra F1: 1 dia de DSR por dia de falta) = 110,00. Bases = 3.300,00 − 220,00 = 3.080,00. INSS: 122,3250 + 117,2313 + (3.080,00−2.933,57)×12% = 17,5716 → 257,1279 → 257,13. FGTS: 3.080,00×8% = 246,40. IRRF: simplificado 3.080,00−607,20 = 2.472,80 → ×7,5% − 182,16 = 185,46 − 182,16 = 3,30; completo 3.080,00−257,13 = 2.822,87 → ×7,5% − 182,16 = 29,56 — vale o menor → 3,30. Líquido: 3.080,00 − 257,13 − 3,30 = 2.819,57.",
+        "entrada": {
+          "dependentes": 0,
+          "salario": 3300,
+          "variaveis": [
+            {
+              "referencia": 1,
+              "rubrica": "1201"
+            }
+          ]
+        },
+        "nome": "falta_com_dsr_3300",
+        "saida_esperada": {
+          "itens": {
+            "1001": 3300,
+            "1201": 110,
+            "1202": 110,
+            "2001": 257.13,
+            "2002": 3.3,
+            "3001": 246.4
+          },
+          "liquido": 2819.57
+        }
+      },
+      {
+        "descricao": "Gêmeo do caso com_he50_2000_10h, mudando SÓ a carga semanal: 2160 min (36 h, jornada 12x36). Divisor da pessoa = 220 × 2160 ÷ 2640 = 180, e não 220. Hora normal 2.000/180 = 11,1111…; HE50 = 10 × 1,5 × 11,1111… = 166,6666… → 166,67 (contra 136,36 pelo divisor de 44 h — 30,31 a menos por 10 horas). Bases = 2.000,00 + 166,67 = 2.166,67. INSS: 1.631,00×7,5% = 122,3250; (2.166,67−1.631,00)×9% = 48,2103; soma 170,5353 → 170,54. FGTS: 2.166,67×8% = 173,3336 → 173,33. IRRF: completo 2.166,67−170,54 = 1.996,13 e simplificado 2.166,67−607,20 = 1.559,47 — ambos ≤ 2.428,80, isento → sem item 2002. Líquido: 2.166,67 − 170,54 = 1.996,13.",
+        "entrada": {
+          "carga_semanal_minutos": 2160,
+          "dependentes": 0,
+          "salario": 2000,
+          "variaveis": [
+            {
+              "referencia": 10,
+              "rubrica": "1101"
+            }
+          ]
+        },
+        "nome": "he50_2000_10h_carga_36h",
+        "saida_esperada": {
+          "itens": {
+            "1001": 2000,
+            "1101": 166.67,
+            "2001": 170.54,
+            "3001": 173.33
+          },
+          "liquido": 1996.13
+        }
+      },
+      {
+        "descricao": "R$ 12.000,00 com 2 dependentes. INSS no teto: 998,66 (idem caso do teto). FGTS: 12.000,00×8% = 960,00. IRRF completo: 12.000,00 − 998,66 − 2×189,59 (= 379,18) = 10.622,16 → ×27,5% − 908,73 = 2.921,094 − 908,73 = 2.012,364 → 2.012,36; simplificado 11.392,80 → 2.224,29 — vale o menor → 2.012,36. Líquido: 12.000,00 − 998,66 − 2.012,36 = 8.988,98.",
+        "entrada": {
+          "dependentes": 2,
+          "salario": 12000,
+          "variaveis": []
+        },
+        "nome": "irrf_faixa_alta_12000_2dep",
+        "saida_esperada": {
+          "itens": {
+            "1001": 12000,
+            "2001": 998.66,
+            "2002": 2012.36,
+            "3001": 960
+          },
+          "liquido": 8988.98
+        }
+      },
+      {
+        "descricao": "Mensalista R$ 3.000,00, sem variáveis, sem dependentes. INSS progressivo: 1.631,00×7,5% = 122,3250; (2.933,57−1.631,00)×9% = 117,2313; (3.000,00−2.933,57)×12% = 7,9716; soma 247,5279 → 247,53. FGTS informativo: 3.000,00×8% = 240,00. IRRF: simplificado 3.000,00−607,20 = 2.392,80 ≤ 2.428,80 → isento (completo daria base 2.752,47 e imposto 24,28; vale o menor) → sem item 2002. Líquido: 3.000,00 − 247,53 = 2.752,47.",
+        "entrada": {
+          "dependentes": 0,
+          "salario": 3000,
+          "variaveis": []
+        },
+        "nome": "salario_simples_3000",
+        "saida_esperada": {
+          "itens": {
+            "1001": 3000,
+            "2001": 247.53,
+            "3001": 240
+          },
+          "liquido": 2752.47
+        }
+      },
+      {
+        "descricao": "R$ 9.000,00 — acima do teto de contribuição (8.565,28). INSS no teto: 122,3250 + 117,2313 + 176,0160 + 583,0874 = 998,6597 → 998,66. FGTS sem teto: 9.000,00×8% = 720,00. IRRF: completo 9.000,00−998,66 = 8.001,34 → ×27,5% − 908,73 = 2.200,3685 − 908,73 = 1.291,6385 → 1.291,64; simplificado 8.392,80 → 1.399,29 — vale o menor → 1.291,64. Líquido: 9.000,00 − 998,66 − 1.291,64 = 6.709,70.",
+        "entrada": {
+          "dependentes": 0,
+          "salario": 9000,
+          "variaveis": []
+        },
+        "nome": "teto_inss_9000",
+        "saida_esperada": {
+          "itens": {
+            "1001": 9000,
+            "2001": 998.66,
+            "2002": 1291.64,
+            "3001": 720
+          },
+          "liquido": 6709.7
+        }
+      }
+    ],
+    "vigentes": {
+      "parametros": {
+        "aliquota_fgts": 8,
+        "carga_semanal_referencia_minutos": 2640,
+        "divisor_mensal_dias": 30,
+        "divisor_mensal_horas": 220,
+        "id": 1
+      },
+      "rubricas": [
+        {
+          "codigo": "1001",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Salário Base",
+          "parametro": null,
+          "rubrica_versao_id": 1,
+          "tipo_calculo": "automatico"
+        },
+        {
+          "codigo": "1101",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Horas Extras 50%",
+          "parametro": 1.5,
+          "rubrica_versao_id": 2,
+          "tipo_calculo": "horas_adicional"
+        },
+        {
+          "codigo": "1102",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Horas Extras 100%",
+          "parametro": 2,
+          "rubrica_versao_id": 3,
+          "tipo_calculo": "horas_adicional"
+        },
+        {
+          "codigo": "1103",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Adicional Noturno",
+          "parametro": 0.2,
+          "rubrica_versao_id": 18,
+          "tipo_calculo": "horas_adicional"
+        },
+        {
+          "codigo": "1201",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "desconto",
+          "nome": "Faltas",
+          "parametro": null,
+          "rubrica_versao_id": 4,
+          "tipo_calculo": "automatico"
+        },
+        {
+          "codigo": "1202",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "desconto",
+          "nome": "DSR sobre Faltas",
+          "parametro": null,
+          "rubrica_versao_id": 5,
+          "tipo_calculo": "automatico"
+        },
+        {
+          "codigo": "1301",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Comissão",
+          "parametro": null,
+          "rubrica_versao_id": 12,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "1302",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Reflexo de Comissão",
+          "parametro": null,
+          "rubrica_versao_id": 13,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "1303",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "DSR",
+          "parametro": null,
+          "rubrica_versao_id": 14,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "1304",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Reflexo de DSR sobre Comissão",
+          "parametro": null,
+          "rubrica_versao_id": 15,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "1401",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "provento",
+          "nome": "Abono Pecuniário",
+          "parametro": null,
+          "rubrica_versao_id": 16,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "1501",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "provento",
+          "nome": "Salário Família",
+          "parametro": null,
+          "rubrica_versao_id": 17,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "2001",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "desconto",
+          "nome": "Desconto INSS",
+          "parametro": null,
+          "rubrica_versao_id": 6,
+          "tipo_calculo": "automatico"
+        },
+        {
+          "codigo": "2002",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "desconto",
+          "nome": "IRRF",
+          "parametro": null,
+          "rubrica_versao_id": 7,
+          "tipo_calculo": "automatico"
+        },
+        {
+          "codigo": "2101",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "desconto",
+          "nome": "Desconto de Benefício",
+          "parametro": null,
+          "rubrica_versao_id": 8,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "3001",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "informativa",
+          "nome": "FGTS",
+          "parametro": null,
+          "rubrica_versao_id": 9,
+          "tipo_calculo": "automatico"
+        },
+        {
+          "codigo": "9001",
+          "incide_fgts": true,
+          "incide_inss": true,
+          "incide_irrf": true,
+          "natureza": "provento",
+          "nome": "Provento Manual",
+          "parametro": null,
+          "rubrica_versao_id": 10,
+          "tipo_calculo": "valor_informado"
+        },
+        {
+          "codigo": "9002",
+          "incide_fgts": false,
+          "incide_inss": false,
+          "incide_irrf": false,
+          "natureza": "desconto",
+          "nome": "Desconto Manual",
+          "parametro": null,
+          "rubrica_versao_id": 11,
+          "tipo_calculo": "valor_informado"
+        }
+      ],
+      "tabela_inss": {
+        "faixas": [
+          {
+            "aliquota": 7.5,
+            "ate_centavos": 163100
+          },
+          {
+            "aliquota": 9,
+            "ate_centavos": 293357
+          },
+          {
+            "aliquota": 12,
+            "ate_centavos": 440037
+          },
+          {
+            "aliquota": 14,
+            "ate_centavos": 856528
+          }
+        ],
+        "id": 1,
+        "teto_centavos": 856528
+      },
+      "tabela_irrf": {
+        "deducao_dependente_centavos": 18959,
+        "desconto_simplificado_centavos": 60720,
+        "faixas": [
+          {
+            "aliquota": 0,
+            "ate_centavos": 242880,
+            "deducao_centavos": 0
+          },
+          {
+            "aliquota": 7.5,
+            "ate_centavos": 282665,
+            "deducao_centavos": 18216
+          },
+          {
+            "aliquota": 15,
+            "ate_centavos": 375105,
+            "deducao_centavos": 39416
+          },
+          {
+            "aliquota": 22.5,
+            "ate_centavos": 466468,
+            "deducao_centavos": 67549
+          },
+          {
+            "aliquota": 27.5,
+            "ate_centavos": null,
+            "deducao_centavos": 90873
+          }
+        ],
+        "id": 1
+      }
+    }
+  },
+  "ponto": {
+    "casos": [
+      {
+        "descricao": "GÊMEO do caso anterior pelo outro lado: DUAS entradas às 08:00 — o mesmo tipo no MESMO MINUTO, que é o eco do coletor de verdade (o índice UNIQUE do banco olha o momento COM segundos: 08:00:15 e 08:00:45 são duas linhas legítimas lá e a mesma batida aqui). Sem tempo entre as duas, descartar a segunda deixa o pareamento ÍNTEGRO: o dia fecha normal — 08:00–12:24 e 13:24–17:48 = 528 min, exatamente o previsto, sem atraso, sem hora extra, sem banco — e NÃO fica pendente. A única linha na fila é marcacao_duplicada, informando o descarte. Nenhuma marcação some do banco em nenhum dos dois casos: rh.marcacao é append-only; o que muda é só o que entra na conta do dia.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-11"
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 528,
+            "carga_semanal_minutos": 2640,
+            "dia_repouso_semana": 0,
+            "dias_uteis_semana": 5,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": 480,
+            "horario_saida_minuto": 1068,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 588,
+            "nome": "Administrativo 44h (5x2)",
+            "previsto_por_dia_semana": [
+              0,
+              528,
+              528,
+              528,
+              528,
+              528,
+              0
+            ],
+            "tipo": "5x2",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-11",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "12:24",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "13:24",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "17:48",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "batida_repetida_no_mesmo_minuto",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-11": {
+              "atraso": 0,
+              "banco": 0,
+              "falta": 0,
+              "he_50": 0,
+              "intercorrencias": [
+                "marcacao_duplicada"
+              ],
+              "intervalo": 60,
+              "pendente": false,
+              "previsto": 528,
+              "trabalhado": 528
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 0,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 0,
+            "noturno_ficto": 0,
+            "noturno_relogio": 0,
+            "previsto": 528,
+            "trabalhado": 528
+          }
+        }
+      },
+      {
+        "descricao": "Administrativo 5x2 (528 min/dia, 2640 na semana, repartidos em 5 dias) com UMA falta injustificada na quarta 11/03 — dia previsto e nenhuma marcação. Falta = 528 min (a jornada do dia) e o dia entra na fila como sem_marcacao. DSR: a falta derruba o repouso da semana que começa no repouso da pessoa (domingo 08/03). DSR de um dia = carga semanal ÷ dias úteis = 2640 ÷ 5 = 528 min. Uma semana com falta → 528 min de desconto. Com o divisor 6 que ficava chumbado no motor sairiam 440 — 88 min de graça por semana com falta, sempre a favor da empresa. A quinta 12/03 é um dia cheio e exato (08:00–12:24, 13:24–17:48 = 528 min), só para provar que o resto da semana não é afetado. Falta NÃO vai ao banco de horas (vira desconto em folha, com o DSR): banco 0.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-11"
+            },
+            {
+              "data": "2026-03-12"
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 528,
+            "carga_semanal_minutos": 2640,
+            "dia_repouso_semana": 0,
+            "dias_uteis_semana": 5,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": 480,
+            "horario_saida_minuto": 1068,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 588,
+            "nome": "Administrativo 44h (5x2)",
+            "previsto_por_dia_semana": [
+              0,
+              528,
+              528,
+              528,
+              528,
+              528,
+              0
+            ],
+            "tipo": "5x2",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-12",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "12:24",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "13:24",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "17:48",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "dsr_por_carga_5x2_divisor_5",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-11": {
+              "banco": 0,
+              "falta": 528,
+              "intercorrencias": [
+                "sem_marcacao"
+              ],
+              "pendente": false,
+              "previsto": 528,
+              "trabalhado": 0
+            },
+            "2026-03-12": {
+              "atraso": 0,
+              "banco": 0,
+              "falta": 0,
+              "he_50": 0,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "pendente": false,
+              "previsto": 528,
+              "trabalhado": 528
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 0,
+            "dsr_desconto": 528,
+            "faltas": 528,
+            "he_100": 0,
+            "he_50": 0,
+            "noturno_ficto": 0,
+            "noturno_relogio": 0,
+            "previsto": 1056,
+            "trabalhado": 528
+          }
+        }
+      },
+      {
+        "descricao": "GÊMEO do caso anterior na LOJA 6x1: MESMA carga semanal (2640 min), repartida em 6 dias de 440 min. Mesma falta na quarta 11/03, mesma semana. Falta = 440 min (a jornada do dia da loja). DSR de um dia = 2640 ÷ 6 = 440 min. É o par que fecha o cerco no divisor: 528 aqui (divisor 5 chumbado) ou 440 no gêmeo administrativo (divisor 6 chumbado) — qualquer constante quebra um dos dois e deixa o outro passando, apontando o defeito.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-11"
+            },
+            {
+              "data": "2026-03-12"
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 440,
+            "carga_semanal_minutos": 2640,
+            "dia_repouso_semana": 0,
+            "dias_uteis_semana": 6,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": 480,
+            "horario_saida_minuto": 980,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 500,
+            "nome": "Loja 44h (6x1)",
+            "previsto_por_dia_semana": [
+              0,
+              440,
+              440,
+              440,
+              440,
+              440,
+              440
+            ],
+            "tipo": "6x1",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-12",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "11:40",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "12:40",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "16:20",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "dsr_por_carga_6x1_divisor_6",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-11": {
+              "falta": 440,
+              "intercorrencias": [
+                "sem_marcacao"
+              ],
+              "pendente": false,
+              "previsto": 440,
+              "trabalhado": 0
+            },
+            "2026-03-12": {
+              "falta": 0,
+              "he_50": 0,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "pendente": false,
+              "previsto": 440,
+              "trabalhado": 440
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 0,
+            "dsr_desconto": 440,
+            "faltas": 440,
+            "he_100": 0,
+            "he_50": 0,
+            "noturno_ficto": 0,
+            "noturno_relogio": 0,
+            "previsto": 880,
+            "trabalhado": 440
+          }
+        }
+      },
+      {
+        "descricao": "O erro de coleta mais comum que existe: entrada 08:00, ENTRADA 13:00 (a pessoa esqueceu de bater a saída para o almoço) e saída 18:00. A batida órfã sai da conta e o período aberto às 08:00 é mantido, então o dia reporta 600 min de trabalho OBSERVADO — mas fica PENDENTE DE TRATAMENTO: nem falta, nem atraso, nem hora extra são lançados enquanto a intercorrência estiver aberta, e o banco de horas recebe 0. Duas linhas para o DP: entrada_sem_saida (falta a batida entre as duas aberturas) e intervalo_incompleto (600 min trabalhados acima do limite de 360 do art. 71, com 0 min de intervalo batido). Enquanto o motor tratava tipo repetido como \"eco do coletor\", este dia fechava com 600 min corridos: 72 min de HORA EXTRA INVENTADA (600 contra 528 previstos) e 108 min creditados no banco, com a folha importando o número. É este caso que impede aquele ramo de voltar.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-11"
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 528,
+            "carga_semanal_minutos": 2640,
+            "dia_repouso_semana": 0,
+            "dias_uteis_semana": 5,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": 480,
+            "horario_saida_minuto": 1068,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 588,
+            "nome": "Administrativo 44h (5x2)",
+            "previsto_por_dia_semana": [
+              0,
+              528,
+              528,
+              528,
+              528,
+              528,
+              0
+            ],
+            "tipo": "5x2",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-11",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "13:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "18:00",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "dupla_abertura_entrada_sobre_entrada",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-11": {
+              "atraso": 0,
+              "banco": 0,
+              "falta": 0,
+              "he_100": 0,
+              "he_50": 0,
+              "intercorrencias": [
+                "entrada_sem_saida",
+                "intervalo_incompleto"
+              ],
+              "intervalo": 0,
+              "pendente": true,
+              "previsto": 528,
+              "trabalhado": 600
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 0,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 0,
+            "noturno_ficto": 0,
+            "noturno_relogio": 0,
+            "previsto": 528,
+            "trabalhado": 600
+          }
+        }
+      },
+      {
+        "descricao": "GÊMEO do caso anterior, mudando SÓ a duração da hora noturna: 3600 s, que é o rural do art. 7º da Lei 5.889/73 (a redução do art. 73 §1º é do urbano). Mesmas batidas, mesmos 720 min trabalhados, mesmos 420 min de relógio na janela — e ficto = 420 × 3600 ÷ 3600 = 420, sem acréscimo nenhum. Sem acréscimo ficto, o dia fecha exatamente no previsto: HE 50% = 0 e banco = 0 (contra 60 e 90 do gêmeo urbano). É este caso que quebra se alguém rechumbar 3150 no motor; o urbano quebra se rechumbarem 3600. Um número só não consegue passar nos dois.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-10",
+              "dia_de_escala": true
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 720,
+            "carga_semanal_minutos": 2160,
+            "dia_repouso_semana": null,
+            "dias_uteis_semana": 3,
+            "hora_noturna_segundos": 3600,
+            "horario_entrada_minuto": null,
+            "horario_saida_minuto": null,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 780,
+            "nome": "Plantão 12x36 (rural, hora noturna cheia)",
+            "previsto_por_dia_semana": null,
+            "tipo": "12x36",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-10",
+              "hora": "18:30",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "21:00",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "22:00",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "07:30",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "noturno_hora_cheia_3600_rural",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-10": {
+              "banco": 0,
+              "he_50": 0,
+              "intercorrencias": [],
+              "noturno_ficto": 420,
+              "noturno_relogio": 420,
+              "pendente": false,
+              "previsto": 720,
+              "trabalhado": 720
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 0,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 0,
+            "noturno_ficto": 420,
+            "noturno_relogio": 420,
+            "previsto": 720,
+            "trabalhado": 720
+          }
+        }
+      },
+      {
+        "descricao": "Plantão 12x36 noturno, urbano: hora noturna de 3150 s (52min30s). Entrada 18:30, intervalo 21:00–22:00, saída 07:30 do dia seguinte — o arraste da jornada (janela 780 min) amarra a saída ao plantão do dia 10. Trabalhado = (21:00−18:30) + (07:30−22:00) = 150 + 570 = 720 min, a carga diária exata. Noturno de RELÓGIO = interseção com a janela 22:00–05:00 = 420 min. Ficto = 420 × 3600 ÷ 3150 = 480 min (7 h de relógio valem 8 h noturnas), arredondado UMA vez sobre o total do dia. O acréscimo ficto de 60 min é jornada CUMPRIDA: 720 + 60 = 780 contra 720 previstos → 60 min de HE 50% (a jornada não tem horário contratual, então a medição é pelo saldo do dia, e 60 > 10 min de tolerância diária). Banco: 60 × 1,50 = 90 min. Sem intercorrência: 720 min trabalhados exigem intervalo (art. 71) e os 60 min batidos cumprem o mínimo da jornada.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-10",
+              "dia_de_escala": true
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 720,
+            "carga_semanal_minutos": 2160,
+            "dia_repouso_semana": null,
+            "dias_uteis_semana": 3,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": null,
+            "horario_saida_minuto": null,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 780,
+            "nome": "Plantão 12x36 (urbano)",
+            "previsto_por_dia_semana": null,
+            "tipo": "12x36",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-10",
+              "hora": "18:30",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "21:00",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "22:00",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "07:30",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "noturno_hora_reduzida_52min30",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-10": {
+              "atraso": 0,
+              "banco": 90,
+              "falta": 0,
+              "he_100": 0,
+              "he_50": 60,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "noturno_ficto": 480,
+              "noturno_relogio": 420,
+              "pendente": false,
+              "previsto": 720,
+              "trabalhado": 720
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 90,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 60,
+            "noturno_ficto": 480,
+            "noturno_relogio": 420,
+            "previsto": 720,
+            "trabalhado": 720
+          }
+        }
+      },
+      {
+        "descricao": "Plantão que entra 19:00, PARA O INTERVALO ÀS 23:30 e volta 00:30 — o intervalo cruza a meia-noite —, saindo às 08:00 EM PONTO do dia seguinte. Arraste: a janela desta jornada é 780 min (carga 720 + intervalo 60), então 00:30 e 08:00 ainda pertencem ao turno da véspera. Com os 480 min que ficavam chumbados no motor antes da 0033, a saída de 08:00 NÃO seria arrastada e o plantão inteiro viraria falta. Trabalhado = (23:30−19:00) + (08:00−00:30) = 270 + 450 = 720 min; intervalo 60. Noturno de RELÓGIO, pela interseção de cada período com a janela 22:00–05:00: período 19:00–23:30 → 22:00–23:30 = 90 min; período 00:30–08:00 → 00:30–05:00 = 270 min; total 360 min. Ficto = 360 × 3600 ÷ 3150 = 411,43 → 411 (arredondado meio-para-cima UMA vez sobre o total do dia). Acréscimo ficto = 51. 720 + 51 = 771 contra 720 previstos → 51 min de HE 50%. Banco: 51 × 1,50 = 76,5 → 77 min.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-10",
+              "dia_de_escala": true
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 720,
+            "carga_semanal_minutos": 2160,
+            "dia_repouso_semana": null,
+            "dias_uteis_semana": 3,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": null,
+            "horario_saida_minuto": null,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 780,
+            "nome": "Plantão 12x36 (urbano)",
+            "previsto_por_dia_semana": null,
+            "tipo": "12x36",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-10",
+              "hora": "19:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "23:30",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "00:30",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "08:00",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "plantao_12x36_intervalo_na_meia_noite",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-10": {
+              "banco": 77,
+              "he_50": 51,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "noturno_ficto": 411,
+              "noturno_relogio": 360,
+              "pendente": false,
+              "previsto": 720,
+              "trabalhado": 720
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 77,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 51,
+            "noturno_ficto": 411,
+            "noturno_relogio": 360,
+            "previsto": 720,
+            "trabalhado": 720
+          }
+        }
+      },
+      {
+        "descricao": "Duas viradas de mês no mesmo caso. ENTRADA DA COMPETÊNCIA: plantão que entrou em 28/02 (mês anterior) e saiu 07:00 de 01/03. O dia 01/03 é apurado e tem de fechar LIMPO — previsto 0, trabalhado 0, nenhuma intercorrência —, porque aquela saída pertence ao plantão da véspera e 01/03 é o descanso das 36 h. SAÍDA DA COMPETÊNCIA: plantão de 31/03 com saída 07:30 de 01/04 (mês seguinte). O dia 31/03 tem de fechar com o plantão inteiro: 720 min trabalhados, 420 de relógio noturno, 480 fictos, 60 min de HE 50% e 90 no banco — os mesmos números do caso noturno_hora_reduzida_52min30, porque é o mesmo plantão. Sem o arraste nas duas pontas, esta competência mostraria um dia pendente no dia 1º e meio plantão no dia 31.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-01",
+              "dia_de_escala": null
+            },
+            {
+              "data": "2026-03-31",
+              "dia_de_escala": true
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 720,
+            "carga_semanal_minutos": 2160,
+            "dia_repouso_semana": null,
+            "dias_uteis_semana": 3,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": null,
+            "horario_saida_minuto": null,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 780,
+            "nome": "Plantão 12x36 (urbano)",
+            "previsto_por_dia_semana": null,
+            "tipo": "12x36",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-02-28",
+              "hora": "18:30",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-02-28",
+              "hora": "21:00",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-02-28",
+              "hora": "22:00",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-01",
+              "hora": "07:00",
+              "tipo": "saida"
+            },
+            {
+              "data": "2026-03-31",
+              "hora": "18:30",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-31",
+              "hora": "21:00",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-31",
+              "hora": "22:00",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-04-01",
+              "hora": "07:30",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "plantao_12x36_virada_do_mes",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-01": {
+              "banco": 0,
+              "falta": 0,
+              "he_50": 0,
+              "intercorrencias": [],
+              "pendente": false,
+              "previsto": 0,
+              "trabalhado": 0
+            },
+            "2026-03-31": {
+              "banco": 90,
+              "he_50": 60,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "noturno_ficto": 480,
+              "noturno_relogio": 420,
+              "pendente": false,
+              "previsto": 720,
+              "trabalhado": 720
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 90,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 60,
+            "noturno_ficto": 480,
+            "noturno_relogio": 420,
+            "previsto": 720,
+            "trabalhado": 720
+          }
+        }
+      },
+      {
+        "descricao": "Loja 6x1 com folga rotativa na TERÇA: previsto [dom 440, seg 440, ter 0, qua 440, qui 440, sex 440, sáb 440] e dia_repouso_semana = 2. DOMINGO 08/03 (dia normal DELA): 08:00–11:40, 12:40–17:20 = 500 min trabalhados contra 440 previstos. Medição por marcação: entrada e intervalo em dia, saída 60 min depois do contratual (16:20 → 17:20) → 60 min de excedente. Como domingo NÃO é o repouso dela, é HE 50%: 60 min. Banco: 60 × 1,50 = 90. TERÇA 10/03 (o repouso DELA): trabalhou 08:00–12:00 = 240 min. Em dia de repouso não há jornada contratada da qual variar — não há tolerância a aplicar e o primeiro minuto já é HE 100%: 240 min. Banco: 240 × 2,00 = 480. Total do banco: 570 min. Com o domingo chumbado como repouso, os dois viravam o contrário: 60 min a 100% no domingo e 240 a 50% na terça — a pessoa recebendo adicional errado nos dois dias.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-08"
+            },
+            {
+              "data": "2026-03-10"
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 440,
+            "carga_semanal_minutos": 2640,
+            "dia_repouso_semana": 2,
+            "dias_uteis_semana": 6,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": 480,
+            "horario_saida_minuto": 980,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 500,
+            "nome": "Loja 44h (6x1, folga na terça)",
+            "previsto_por_dia_semana": [
+              440,
+              440,
+              0,
+              440,
+              440,
+              440,
+              440
+            ],
+            "tipo": "6x1",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-08",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-08",
+              "hora": "11:40",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-08",
+              "hora": "12:40",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-08",
+              "hora": "17:20",
+              "tipo": "saida"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "08:00",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-10",
+              "hora": "12:00",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "repouso_na_terca_nao_no_domingo",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-08": {
+              "atraso": 0,
+              "banco": 90,
+              "he_100": 0,
+              "he_50": 60,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "pendente": false,
+              "previsto": 440,
+              "trabalhado": 500
+            },
+            "2026-03-10": {
+              "atraso": 0,
+              "banco": 480,
+              "falta": 0,
+              "he_100": 240,
+              "he_50": 0,
+              "intercorrencias": [],
+              "pendente": false,
+              "previsto": 0,
+              "trabalhado": 240
+            }
+          },
+          "totais": {
+            "atrasos": 0,
+            "banco": 570,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 240,
+            "he_50": 60,
+            "noturno_ficto": 0,
+            "noturno_relogio": 0,
+            "previsto": 440,
+            "trabalhado": 740
+          }
+        }
+      },
+      {
+        "descricao": "Administrativo 5x2, dois dias com o MESMO saldo de dia (zero) e resultados opostos. QUARTA 11/03 — chega 20 min atrasada (08:20) e sai 20 min depois (18:08), intervalo de 60 min exatos. O saldo do dia fecha em zero, mas as variações são medidas UMA A UMA contra o horário contratual: entrada +20 min (não cabe na tolerância de 5 min da marcação) → 20 min de ATRASO pela TOTALIDADE (Súmula 366, não só o excedente); saída −20 min → 20 min de HE 50%. O dia entra na fila como fora_da_tolerancia. Banco do dia: crédito 20 × 1,50 = 30, menos o débito do atraso 20 → +10 min. Comparando o saldo do dia — como o motor fazia — atraso e hora extra se anulavam: a empresa deixava de descontar o atraso E a pessoa perdia a hora extra, com a fila do DP em silêncio. QUINTA 12/03 — mesma forma, com 4 min em cada ponta (08:04 e 17:52): cada variação cabe na tolerância de 5 min da marcação e a soma ignorada (8 min) cabe no teto diário de 10 min → nada lançado, nenhuma intercorrência.",
+        "entrada": {
+          "ano": 2026,
+          "dias": [
+            {
+              "data": "2026-03-11"
+            },
+            {
+              "data": "2026-03-12"
+            }
+          ],
+          "jornada": {
+            "adicional_noturno_fim_minuto": 300,
+            "adicional_noturno_inicio_minuto": 1320,
+            "carga_diaria_minutos": 528,
+            "carga_semanal_minutos": 2640,
+            "dia_repouso_semana": 0,
+            "dias_uteis_semana": 5,
+            "hora_noturna_segundos": 3150,
+            "horario_entrada_minuto": 480,
+            "horario_saida_minuto": 1068,
+            "intervalo_minimo_minutos": 60,
+            "intervalo_obrigatorio_acima_minutos": 360,
+            "janela_arraste_minutos": 588,
+            "nome": "Administrativo 44h (5x2)",
+            "previsto_por_dia_semana": [
+              0,
+              528,
+              528,
+              528,
+              528,
+              528,
+              0
+            ],
+            "tipo": "5x2",
+            "tolerancia_entrada_minutos": 5,
+            "tolerancia_saida_minutos": 5
+          },
+          "marcacoes": [
+            {
+              "data": "2026-03-11",
+              "hora": "08:20",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "12:44",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "13:44",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-11",
+              "hora": "18:08",
+              "tipo": "saida"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "08:04",
+              "tipo": "entrada"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "12:28",
+              "tipo": "inicio_intervalo"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "13:28",
+              "tipo": "fim_intervalo"
+            },
+            {
+              "data": "2026-03-12",
+              "hora": "17:52",
+              "tipo": "saida"
+            }
+          ],
+          "mes": 3,
+          "regra": {
+            "fator_he_100": 2,
+            "fator_he_50": 1.5
+          }
+        },
+        "nome": "tolerancia_por_marcacao_20_min",
+        "saida_esperada": {
+          "dias": {
+            "2026-03-11": {
+              "atraso": 20,
+              "banco": 10,
+              "falta": 0,
+              "he_50": 20,
+              "intercorrencias": [
+                "fora_da_tolerancia"
+              ],
+              "intervalo": 60,
+              "pendente": false,
+              "previsto": 528,
+              "trabalhado": 528
+            },
+            "2026-03-12": {
+              "atraso": 0,
+              "banco": 0,
+              "he_50": 0,
+              "intercorrencias": [],
+              "intervalo": 60,
+              "pendente": false,
+              "previsto": 528,
+              "trabalhado": 528
+            }
+          },
+          "totais": {
+            "atrasos": 20,
+            "banco": 10,
+            "dsr_desconto": 0,
+            "faltas": 0,
+            "he_100": 0,
+            "he_50": 20,
+            "noturno_ficto": 0,
+            "noturno_relogio": 0,
+            "previsto": 1056,
+            "trabalhado": 1056
+          }
+        }
+      }
+    ]
+  },
+  "versao": 1
+}

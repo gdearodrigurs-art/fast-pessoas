@@ -654,10 +654,11 @@
           "descricao": "Quem cita ou usa a funcao rh.hoje() criada na onda I. Em 01/08/2026 devolve apenas a propria migration 0049 — nenhum consumidor novo.",
           "tipo": "grep",
           "arquivos": {
+            "db/exportar-baterias.js": 2,
             "db/migrations/0049_hoje_em_sao_paulo.sql": 12,
             "src/dominios/folha/repositorio.ts": 2
           },
-          "total": 14
+          "total": 16
         },
         {
           "descricao": "As funcoes que derivam hoje via Intl — separar as que passam year/month/day explicitos das que confiam no formato padrao de en-CA.",
@@ -2655,5 +2656,5 @@
       ]
     }
   },
-  "gerado_em": "2026-08-01T18:13:30.197Z"
+  "gerado_em": "2026-08-01T19:19:54.308Z"
 }

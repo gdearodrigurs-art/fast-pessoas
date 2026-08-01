@@ -21,7 +21,7 @@
 // Leituras que guiam este arquivo: db/migrations/0001, 0002 e 0006 (nomes,
 // CHECKs e triggers append-only) e src/dominios/colaboradores/ +
 // src/dominios/documentos/ (invariantes que as telas esperam ler).
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const crypto = require('crypto');
 

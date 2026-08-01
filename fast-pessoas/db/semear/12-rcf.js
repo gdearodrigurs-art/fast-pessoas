@@ -30,7 +30,7 @@
 // dado sorteado.
 //
 // Uso isolado: node --env-file=.env db/semear/12-rcf.js (depois de 01-base)
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const { executarSozinho, log } = require('./comum');
 

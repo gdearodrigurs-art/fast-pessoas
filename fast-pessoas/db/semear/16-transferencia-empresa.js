@@ -48,7 +48,7 @@
 // não produz.
 //
 // Uso isolado: node --env-file=.env db/semear/16-transferencia-empresa.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   comTriggersDesligados,
@@ -177,7 +177,7 @@ async function desfazer(cliente) {
       const data = anterior.data_pretendida;
       const demandaId = Number(anterior.demanda_id);
 
-      /* eslint-disable no-await-in-loop -- desfazer é sequencial por natureza */
+       
       // A MOVIMENTAÇÃO SAI PRIMEIRO. Ela guarda FK para a posição e a lotação
       // criadas pelo efeito (demanda_movimentacao_lotacao_id_fkey); apagar
       // aquelas linhas antes desta esbarra na chave estrangeira.
@@ -254,7 +254,7 @@ async function desfazer(cliente) {
       ]);
       await cliente.query('DELETE FROM rh.demanda_transicao WHERE demanda_id = $1', [demandaId]);
       await cliente.query('DELETE FROM rh.demanda WHERE id = $1', [demandaId]);
-      /* eslint-enable no-await-in-loop */
+       
     }
   });
   return anteriores.length;
@@ -505,7 +505,7 @@ async function semear(cliente) {
     data,
   ]);
   for (const relacao of liderados) {
-    // eslint-disable-next-line no-await-in-loop -- lista curta, ordem irrelevante
+     
     await cliente.query('UPDATE rh.relacao_gestor SET fim_vigencia = $2::date - 1 WHERE id = $1', [
       Number(relacao.relacao_id),
       data,

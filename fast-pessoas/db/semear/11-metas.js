@@ -45,7 +45,7 @@
 // meta nunca é sobrescrita, sempre versionada (migration 0005).
 //
 // Uso isolado: node --env-file=.env db/semear/11-metas.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   comTriggersDesligados,

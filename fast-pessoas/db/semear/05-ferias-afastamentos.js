@@ -26,7 +26,7 @@
 // eventos cuja origem é uma dessas tabelas) e insere de novo.
 //
 // Uso isolado: node --env-file=.env db/semear/05-ferias-afastamentos.js
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const {
   aleatorio,

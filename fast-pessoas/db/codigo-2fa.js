@@ -11,7 +11,7 @@
 //
 // Só funciona para contas @fastdemo.local: é ferramenta de demonstração, não
 // um bypass de 2FA para contas reais.
-/* eslint-disable @typescript-eslint/no-require-imports -- script CLI CommonJS, como db/migrar.js */
+ 
 
 const { Client } = require('pg');
 const OTPAuth = require('otpauth');
