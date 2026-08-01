@@ -26,21 +26,65 @@ Nenhum desses é falha de agente. **São buracos de arnês.**
 
 ---
 
-## 1 · Ferramentas definidas — *a maior dor medida*
+## 1 · Ferramentas definidas — *FECHADO em 01/08/2026*
 
 **Evidência:** todo verificador reescreveu do zero: abrir conexão, montar `SELECT`, fazer login HTTP,
 gerar o código TOTP, comparar payload. Dezenas de vezes, em todas as ondas.
 
-**Vira:**
+**Cinco firmes, uma opcional.** O número é curto de propósito: agente com ferramenta demais perde
+tempo escolhendo, e cada uma precisa ter propósito que não se confunde com o das outras.
 
-| Ferramenta | O que resolve |
-|---|---|
-| `db/consultar.js "<SQL>"` | fim do script `pg` ad-hoc a cada agente |
-| `db/logar-como.js <persona>` | devolve cookie pronto, resolve senha + TOTP |
-| `db/snapshot.js <nome>` | retrato dos números-chave, para comparar antes/depois |
-| `db/proximo-migration.js` | **aloca** o número — fim das colisões |
+| | Ferramenta | O que substitui |
+|---|---|---|
+| 1 | `db/consultar.js "<SQL>" [--local]` | o `node -e "const {Pool}=require('pg')…"` de cada agente |
+| 2 | `db/logar-como.js <persona> [--local]` | a dança de login que cada verificador reimplementou |
+| 3 | `db/snapshot.js <nome>` · `comparar <a> <b>` | eu digitando "HE 50%=27333…" de memória em todo prompt |
+| 4 | `db/migracoes.js conferir` · `nova <nome>` | 3 colisões de número + a conferência disco×banco à mão |
+| 5 | `db/comparar-personas.js <rota> [personas…]` | o comparador de payload reescrito a cada verificação de acesso |
+| — | `db/trilha.js "<comando>"` | *opcional, baixa prioridade* — o antes/depois de `audit.leitura_sensivel` |
 
-Regra no prompt: *"use estas ferramentas; não reimplemente."*
+Regra no prompt: **"use estas; não reimplemente."** Cada uma responde a `--help` com exemplo real, e
+todas ficam listadas no `PROJETO.md` (ponto 5).
+
+### Decisões tomadas ao fechar este ponto
+
+**Nada de bypass na tela de acesso.** A pergunta foi legítima — os dados são 100% fictícios, um atalho
+no login pouparia trabalho. Mas os melhores achados desta sessão vieram de agentes fazendo login de
+verdade: gestor de outro CNPJ aprovando demanda, ficha vazando o vínculo que a autorização bloqueia,
+2FA por nome de papel, uma caixa marcada levando de 1 a 70 colaboradores. **Com atalho, essa classe
+inteira de defeito fica invisível.** E, depois da 0040, a sessão carrega estado real (`pendente_2fa`,
+chaves que autorizaram) — um bypass ingênuo inventaria isso e faria passar teste que devia falhar.
+
+O `logar-como.js` é **fábrica de sessão, não bypass**: chama a mesma função que a rota de login chama.
+Pula a digitação da senha e do TOTP, não a lógica de autorização. Três travas: recusa em
+`NODE_ENV=production`, recusa fora do banco de demonstração, e vive em `db/` — fora de `src/`, não
+entra no build.
+
+**O `comparar-personas` é a de maior retorno.** É a forma exata da lente que mais rendeu: um
+verificador fez isso em 16 rotas, uma a uma, escrevendo o comparador do zero. Virando comando,
+qualquer onda roda barato, e a lente deixa de depender de alguém pedir.
+
+**Smoke das telas NÃO é ferramenta — é portão (ponto 3).** Todo agente de fechamento fez, e cada um
+fez diferente: um cobriu 10 telas, outro 13, outro 91. É determinístico e dá passa/falha, então entra
+no `npm test` e roda igual toda vez.
+
+**Não existe ferramenta de limpeza de dado de teste** — o ponto 2 apaga o problema. Com banco por
+frente, o agente suja à vontade e o banco é descartado. Construir a ferramenta seria resolver um
+problema que estamos prestes a deletar.
+
+**Varredor contínuo de lixo: recusado, com a boa ideia aproveitada.** A proposta era um agente
+varrendo sempre e indicando candidatos, com a decisão ficando comigo. O que há de certo nela —
+**separar quem detecta de quem decide** — é exatamente o que faltou nas quatro vezes que lixo entrou
+em commit. Mas: (a) o padrão no `.gitignore` já resolveu — depois de `.tmp-*/` e `_verif-*`, zero lixo
+nos dois últimos commits; (b) agente vivo custa RAM, que é o nosso gargalo medido (0,34 GB no pico);
+(c) viraria ruído, porque a maioria dos candidatos é arquivo de agente em serviço — os vinte
+`.tmp-out_api_*.json` pareciam lixo e eram um cético trabalhando; (d) é o mesmo erro que este
+documento existe para corrigir: agente onde regra resolve.
+
+Vira **portão no commit** (ponto 7): lista os não rastreados que o `.gitignore` não cobre e exige
+confirmação. Custo zero, fala só quando há algo, acontece na hora certa, e o que aparecer sem padrão
+vira padrão novo. **A ideia do varredor fica guardada** para quando houver folga de máquina — ela
+cobre o que a regra não previu, como o `prova-*.js` que ninguém tinha imaginado.
 
 ---
 
