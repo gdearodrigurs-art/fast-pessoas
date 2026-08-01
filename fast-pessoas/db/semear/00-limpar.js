@@ -197,6 +197,10 @@ const TABELAS_COM_TRIGGER = [...ORDEM_LIMPEZA, 'sistema.usuario', 'rh.pessoa'];
 
 async function semear(cliente) {
   const removidos = {};
+  // Quantas contas reais existiam ANTES da limpeza. A guarda de saída compara contra isto, e
+  // não contra "pelo menos uma": numa bancada nova eram zero e continuam zero, e isso não é
+  // perda de acesso — é banco vazio.
+  let reaisAntes = 0;
 
   await comTriggersDesligados(cliente, TABELAS_COM_TRIGGER, async () => {
     // UM DELETE POR IDA AO BANCO, na ordem filho → pai.
@@ -220,17 +224,31 @@ async function semear(cliente) {
 
     // CONFERÊNCIA ANTES DE APAGAR. A guarda antiga conferia depois, então
     // avisava "abortando para não perder o acesso" com o acesso já perdido.
+    // A guarda protege CONTA REAL de ser apagada junto com a demonstração. Ela precisa saber
+    // distinguir dois casos que dão o mesmo "zero contas reais":
+    //
+    //   banco EM USO sem conta real  -> a limpeza deixaria todo mundo sem acesso. Aborta.
+    //   banco VAZIO (bancada nova)   -> não há o que proteger. Segue.
+    //
+    // Sem a segunda linha, a bancada por frente do ponto 2 do arnês não nasce: o banco é criado,
+    // as 52 migrations entram, e o semeador para no primeiro módulo dizendo que não achou conta
+    // real — num banco que ainda não tem conta nenhuma. Foi o que aconteceu na primeira bancada
+    // que este projeto tentou criar, minutos depois de a permissão de CREATEDB existir.
     const { rows: antes } = await cliente.query(
-      'SELECT count(*)::int AS reais FROM sistema.usuario WHERE email NOT LIKE $1',
+      `SELECT count(*)::int                                        AS total,
+              count(*) FILTER (WHERE email NOT LIKE $1)::int       AS reais
+         FROM sistema.usuario`,
       [`%${DOMINIO_DEMO}`]
     );
-    if (antes[0].reais === 0) {
+    if (antes[0].total > 0 && antes[0].reais === 0) {
       throw new Error(
-        `Nenhuma conta real encontrada (nenhum e-mail fora de ${DOMINIO_DEMO}). ` +
+        `Nenhuma conta real encontrada (nenhum e-mail fora de ${DOMINIO_DEMO}), ` +
+          `e existem ${antes[0].total} conta(s) de demonstração. ` +
           'A limpeza apagaria TODOS os acessos — abortando antes de tocar em nada. ' +
           'Rode `node --env-file=.env db/seed-admin.js <email> "<Nome>"` primeiro.'
       );
     }
+    reaisAntes = antes[0].reais;
 
     // Usuários: some com a demonstração, ficam as contas reais.
     const usuarios = await cliente.query(
@@ -264,11 +282,17 @@ async function semear(cliente) {
   // conferência de entrada, e é para ser mesmo — esta pega o caso de a
   // limpeza ter derrubado a conta por um caminho que ninguém previu (CASCADE
   // de uma FK nova, por exemplo).
+  //
+  // A comparação é contra o que HAVIA ANTES, não contra "pelo menos uma". Numa bancada nova
+  // eram zero antes e são zero depois, e isso não é perda — é banco vazio. Exigir "> 0" aqui
+  // reprovava a bancada no último passo, depois de as 52 migrations e quinze módulos já terem
+  // rodado. É a mesma guarda da entrada errando pelo mesmo motivo, e por isso as duas foram
+  // consertadas juntas.
   const { rows } = await cliente.query(
     'SELECT count(*)::int AS total FROM sistema.usuario WHERE email NOT LIKE $1',
     [`%${DOMINIO_DEMO}`]
   );
-  if (rows[0].total < 1) {
+  if (rows[0].total < reaisAntes) {
     throw new Error(
       `As contas reais (e-mail fora de ${DOMINIO_DEMO}) sumiram na limpeza — ` +
         'algum caminho não previsto as derrubou. Restaure antes de seguir.'
