@@ -52,10 +52,18 @@ a defesa passa a ser o `db/README.md`, não a memória de quem escreve o prompt.
 e foi escrita quando existiam dois bancos. O ponto 2 criou **N**: um por frente. Pior, o default da
 assinatura antiga apontava para o Supabase, que é justamente o recurso que o ponto 2 protege.
 
-Regra nova: **o default é o banco da frente**, lido de variável de ambiente do processo do agente —
-**nunca de arquivo compartilhado**, senão duas frentes rodando juntas leem a mesma variável e a
-primeira que trocar leva a outra junto. Sem variável definida, a ferramenta **recusa e diz como
-definir**; ela nunca escolhe um banco por conta própria.
+Regra nova: **`--banco <nome>` é obrigatório em toda chamada.** Sem ele a ferramenta recusa; ela nunca
+escolhe um banco por conta própria.
+
+Eu tinha escrito "o default é o banco da frente, lido de variável de ambiente do processo" — e não
+funciona por dois motivos que a conferência apontou. **Variável de ambiente não sobrevive entre duas
+chamadas do mesmo agente**: cada Bash é um processo novo. E o único jeito que o projeto tem de definir
+`DATABASE_URL` é `--env-file=.env.local-db`, que é **arquivo compartilhado entre as frentes** desde que
+o ponto 2 tirou o worktree — exatamente o que a regra proibia. Na prática toda ferramenta cairia no
+ramo "recusa e diz como definir", em toda chamada.
+
+**O nome da bancada vive no prompt da frente** — é a única memória que atravessa as chamadas de um
+agente. O fechamento, que não é frente, nomeia o alvo passo a passo.
 
 Regra no prompt: **"use estas; não reimplemente."** Cada uma responde a `--help` com exemplo real.
 
@@ -202,6 +210,13 @@ onda. Em troca de ficar uma onda atrás, a base de apresentação fica sempre li
 sobrou na apuração da Juliana ou nas regras 8 e 9 presas pelo gatilho.
 **O dono pode pedir atualização pontual do Supabase a qualquer momento.**
 
+**O que o fechamento roda contra o Supabase, delimitado — e o que isso custa.** Só **subida, migrations
+e o subconjunto somente-leitura do smoke**. O que escreve roda contra bancada. A consequência precisa
+ficar escrita porque ela reduz uma promessa deste documento: o Supabase passa a ser **espelho
+verificado quanto a subida e a migrations, não quanto a escrita no 17.6**. A classe de defeito que só
+aparece gravando no PostgreSQL 17 continua sem quem a pegue — e essa é a razão de a alternativa
+(instalar o 17 ao lado) seguir guardada.
+
 ### O risco das duas versões de Postgres
 
 **Local 18.4 × Supabase 17.6.** Se toda a verificação roda no 18 e a demonstração vive no 17, existe
@@ -221,7 +236,7 @@ assume **uma vaga**, que é o pior caso.
 
 ---
 
-## 3 · Verificação com gatilho, escopo e profundidade — *FECHADO, menos o gatilho adversarial*
+## 3 · Verificação com gatilho, escopo e profundidade — *FECHADO*
 
 **Evidência:** sete varreduras do mesmo tipo de defeito, cada uma se dizendo completa. Um agente de
 fechamento cobriu 10 telas, outro 13, outro 91. Gatilho era "quando eu decido", escopo era o que eu
@@ -243,8 +258,14 @@ motivo para não ter portão, e sim para ter um portão próprio.
 |---|---|---|
 | **Agente** | antes de qualquer agente declarar pronto: tsc, lint, motor puro, baterias | segundos |
 | **Commit** | portão: tsc, lint, teste, lixo, `bancada.js orfaos`, onda-atual × branch | segundos |
-| **Fechamento** | ato nomeado — ver a seção **O fechamento**, no fim deste documento | minutos |
-| **Adversarial** | quando `node db/mapa.js` acusa **arquivo novo** em eixo que esta onda tocou | horas |
+| **Fechamento** | ato nomeado — ver a seção **O fechamento**, no fim deste documento | minutos, ou **horas** se o passo 5 acusar |
+| └ *Adversarial* | **sub-gatilho do fechamento**: quando `node db/mapa.js` acusa arquivo novo em eixo tocado | horas |
+
+**A conferência do `onda-atual` tem exceção, e sem ela o portão recusaria 100% dos commits de hoje:**
+a branch atual é `onda-i` e `docs/onda-atual.md` **não existe**. A cláusula é —
+*arquivo ausente é válido, e a conferência só roda em branch cujo nome comece com `onda-`.* Sem isso,
+o commit do próprio fechamento (já na `main`, tendo apagado o arquivo no passo 11) seria o único que a
+regra recusaria.
 
 A mudança central está na primeira linha: hoje o agente escreve, declara pronto, e a verdade aparece
 uma onda depois. Com `npm test`, **ele fecha o próprio laço**.
@@ -297,7 +318,15 @@ agravante conferido no disco: `db/semear/01-base.js:776` usa `new Date().getUTCF
 ninguém sujar nada.**
 
 Snapshot é medida de estado compartilhado; portão de agente é punição individual. Misturar os dois
-reprova quem não errou. Ele vai para o fechamento, contra banco recém-semeado **com data congelada**.
+reprova quem não errou. Ele vai para o fechamento, contra banco recém-semeado.
+
+**Sobre "data congelada", que eu escrevi e não tenho como cumprir hoje.** O semeador tem **34 leituras
+de relógio** (`new Date()`, `CURRENT_DATE`, `now()`) e o `db/semear/comum.js` só lê `DATABASE_URL` e
+`CHAVE_CIFRA_SAUDE` do ambiente — **nenhum semeador aceita data base**. Então, enquanto isso não
+existir, vale a versão honesta: **o snapshot compara só os números que não dependem do relógio**
+(contagens de estrutura, integridade referencial, totais em centavos de competência fechada), e os que
+dependem ficam de fora com a razão anotada. A `DATA_BASE` em `comum.js` fica como tarefa, e quando ela
+existir o snapshot pode cobrir o resto.
 
 ### As baterias: as DUAS, com propósito declarado
 
@@ -317,31 +346,43 @@ sintática, com lista de exceções.
 **2. `papel ===` em decisão de acesso.** Trivial, com exceção para as travas anti-lockout de
 `usuarios/servico.ts`.
 
-**3. Float de hora ou dinheiro no domínio — a contagem que a aprovou não se sustenta.**
+**3. Float de hora ou dinheiro no domínio — VIÁVEL, e o número custou três tentativas.**
 
-Eu escrevi aqui: *"4 ocorrências de `/60`, 9 de `/100`, zero `parseFloat`. Treze linhas, todas
-fronteira legítima."* Foi esse número que mudou minha recomendação de "só a regra estreita" para "as
-duas". A revisão cruzada mandou conferir. Medido em 01/08 com o comando ao lado:
+Contagem correta, medida em 01/08 **no PowerShell**, que é o shell primário desta máquina:
 
-| Busca | `src/dominios/**/*.ts` |
+```powershell
+$rg = node -p "require('@vscode/ripgrep').rgPath"
+& $rg --fixed-strings "/ 60" src/dominios | Measure-Object -Line
+```
+
+| Busca em `src/dominios` | Ocorrências |
 |---|---|
-| `rg --fixed-strings "/ 60"` | **0** |
-| `rg --fixed-strings "/ 100"` | **0** |
-| `rg "parseFloat" src db` | **0** no código (só aparece dentro do JSON do próprio mapa) |
-| `rg --pcre2 '/\s*[0-9]+'` (ampla) | **132**, quase toda ruído: `Lei 8.213/91`, `0047/0048`, `nota/5` |
+| `/ 60` | **6** |
+| `/ 100` | **19** |
+| `/60` | **3** |
+| `/100` | **1** |
+| `parseFloat` (em `src` e `db`) | **0** — só aparece dentro do JSON do próprio mapa |
 
-**Os treze não existem.** Não é que fossem poucos ou muitos — eu não consigo reproduzir o número, e
-ele era o argumento inteiro.
+**Vinte e nove linhas.** Lista curta o bastante para marcar de uma vez, que era a condição da regra
+ampla. Então ela vale, e sai de "em aberto": `parseFloat` proibido **mais** marcador nas 29, e daí em
+diante qualquer conversão nova se justifica.
 
-**O que fica de pé:** `parseFloat` proibido em `src/dominios` e em `db/`. É preventiva, custa nada e
-hoje pega zero — e agora "zero" é medido, com o comando registrado.
+E as 29 não são todas cosméticas — `folha/servico.ts:642` faz `Math.round((minutos / 60) * 100) / 100`
+e `ponto/servico.ts:3077` faz o mesmo com `* 10`. São exatamente a fronteira que a regra existe para
+vigiar.
 
-**O que fica EM ABERTO:** a marcação das fronteiras legítimas. Ela dependia de existir uma lista curta
-para anotar de uma vez; sem os treze, a lista precisa ser levantada de verdade antes de a regra ser
-escrita. Vai junto do conserto dos 36 arquivos que o mapa não enxerga.
+### O número que eu errei duas vezes — e a lição que sobrou
 
-> A lição, que o próprio ponto 3 já exigia do mapa e eu não apliquei a mim mesmo: **número que decide
-> coisa vem com o comando ao lado.** O meu não tinha.
+1. **Primeira versão:** *"4 de `/60`, 9 de `/100` — treze fronteiras."* Sem comando ao lado. Não se
+   reproduz.
+2. **Segunda versão:** *"zero, zero."* Rodei no Git Bash — que **converte argumento começado por `/`
+   em caminho do Windows**, então `--fixed-strings "/ 60"` nunca procurou o que eu pensei. E publiquei
+   esse zero sob a frase "número que decide coisa vem com o comando ao lado".
+3. **Terceira:** a de cima, no PowerShell, com o caminho do binário resolvido.
+
+> **A regra completa, que a segunda tentativa provou faltar:** número que decide coisa vem com o
+> comando **e com o shell em que ele roda**. Neste projeto convivem PowerShell e Git Bash, e eles
+> discordam sobre argumento que começa com `/`. Comando sem shell declarado é comando irreproduzível.
 
 Motivo da convenção, com evidência desta sessão: o corretor da folha registrou que *"somar float de
 hora devolveria 346.90999999999997"*. Ele percebeu; o próximo pode não perceber.
@@ -460,7 +501,7 @@ Hoje a lista de achados só cresce. Com essa regra ela **encolhe**: a hora notur
 de bateria e não precisa mais ser lembrada em prosa — o teste lembra, e melhor, porque ele *acusa*. É o
 mesmo movimento do ponto 7: o que era prosa vira trava.
 
-### Os cinco tipos, com prazo de validade declarado
+### Os tipos, com prazo de validade declarado
 
 | Tipo | Responde | Vive em | Morre quando |
 |---|---|---|---|
@@ -539,7 +580,7 @@ contexto.
 
 | | Arquivo | Quem escreve | Quando morre |
 |---|---|---|---|
-| **1 · sempre** | `fast-pessoas/AGENTS.md` — os dez eixos, uma linha cada (~20 linhas) | uma vez | nunca; só muda quando um eixo muda |
+| **1 · sempre** | `fast-pessoas/AGENTS.md` — os dez eixos (uma linha cada) **+ a linha que aponta as ferramentas para `db/README.md`** ≈ 35 linhas | uma vez | nunca; só muda quando um eixo muda |
 | **2 · busca** | `docs/14-mapa-de-eixos.md` + `db/mapa-eixos.json` | o mapa, regenerável | reexecutado a cada onda |
 | **3 · some** | `docs/onda-atual.md` — só o objetivo da vez | o começo da onda | **o fechamento apaga** |
 
@@ -582,7 +623,14 @@ tem dono e regra de atualização.
 |---|---|
 | **Decisão que é dele** — regra de negócio, escolha legal, dinheiro | minha decisão + porquê + prós e contras (regra do ponto 4) |
 | **Risco ao projeto** | o único caso que pede autorização |
+| **De-acordo para fechar a onda** | o fechamento é ato do principal **depois** do sim dele — sem este gatilho o ato não tem como começar |
 | **Pulso de 15 min** | estado real |
+
+> **O relógio dos 15 minutos é MEU, e isso não contradiz o ponto 7.** O ponto 7 dá "pulse a cada 15
+> minutos" como exemplo de instrução inexequível — e está certo **para o agente**, que não percebe
+> tempo passar, só passos. Eu percebo: rodo `date` quando quiser. Por isso a cadência em minuto vive
+> deste lado (eu → dono) e a cadência em passo vive do outro (agente → eu). São mecanismos diferentes
+> de propósito, não a mesma regra escrita duas vezes.
 
 **Estado real** são quatro linhas: portão verde ou vermelho e o que quebrou · achados abertos ×
 fechados · **eixos tocados** (só existe porque o mapa existe) · **o que está travado esperando ele**.
@@ -676,8 +724,12 @@ eu a estava usando como primeira.
 Só o que passa nas três condições: não dá para virar portão · é executável de dentro do laço do
 agente · corrige um viés que ele traz de fábrica.
 
-Fica: os dez eixos (uma linha cada) · o protocolo do informe, incluindo **como responder a uma sonda**
-· o que fazer quando travar (sobe, não inventa) · o escopo de escrita.
+Fica: os dez eixos (uma linha cada) · **a linha que manda ler `db/README.md` antes de escrever
+ferramenta nova** · o protocolo do informe, incluindo **como responder a uma sonda** · o que fazer
+quando travar (sobe, não inventa) · o escopo de escrita.
+
+*(A linha das ferramentas está aqui, na camada 1 do ponto 5 e no ponto 1. Três lugares, de propósito —
+foi ficar em zero que a deixou órfã.)*
 
 Sai, porque virou trava: número de migration · lixo · float de dinheiro, papel em decisão de acesso,
 literal em formulário · "rode `tsc` antes de dizer pronto".
@@ -705,28 +757,64 @@ Configuração em `.claude/settings.json`, **versionada** — a regra viaja com 
 o Diego. Ressalva da própria documentação: para proibição dura, o filtro `if` é "melhor esforço" — o
 certo é **regra de permissão mais hook**, não um só.
 
-| Regra de ouro | Mecanismo | Por que ela existe |
+### O que hook consegue e o que ele NÃO consegue
+
+Escrevi aqui, com convicção, que os denys passariam a "mirar o efeito, não a grafia do comando" — e que
+o deny do retrato viraria **escrita em `db/mapa-baseline.json`**. A conferência derrubou isso, e o
+argumento é mecânico:
+
+> `PreToolUse` intercepta **chamada de ferramenta** — `Bash`, `Edit`, `Write`. Quem grava o baseline é
+> `fs.writeFileSync` na linha 296 do `db/mapa.js`, **dentro de um processo `node`** lançado pelo Bash.
+> O hook não enxerga escrita de subprocesso. Um deny sobre aquele caminho só pegaria quem editasse o
+> arquivo pela ferramenta `Write` — que é exatamente o caminho que ninguém usa.
+
+Eu tinha trocado um deny fraco por um deny que pega **zero** caminhos, e escrito "agora mira o efeito"
+por cima. Daí sai a regra que faltava:
+
+> **Hook guarda o que o agente faz direto. Script guarda o que script faz.**
+> Se o efeito a proteger é produzido pelo nosso próprio código, a trava mora **dentro do código** —
+> como a do `logar-como.js`, que recusa `DATABASE_URL` não-local. Hook é a camada de fora; ele nunca
+> alcança o que acontece depois que o `node` começou a rodar.
+
+### As regras de ouro, com o mecanismo REAL de cada uma
+
+| Regra de ouro | Onde a trava mora | Força |
 |---|---|---|
-| não reescreve histórico do git | deny + `PreToolUse` em Bash | um agente rodou `git reset` apesar do "NÃO use" |
-| não edita migration já aplicada | `PreToolUse` `if: "Edit(db/migrations/*)"` | hoje o hash só reclama na hora de migrar, tarde demais |
-| não escreve no Supabase | deny nas ferramentas MCP do Supabase | LGPD: só dado fictício, e o banco de trabalho é o local |
-| **não declara pronto com portão vermelho** | **`SubagentStop`** | é o ponto 3 inteiro virando trava |
-| não commita lixo | `PreToolUse` em `Bash(git commit *)` | lixo em quatro commits |
-| **não apaga prova** | `PreToolUse` em `Bash(rm *)` sobre pasta de prova | **eu apaguei a prova da onda I** — a regra de que eu mais precisava era contra mim |
-| **não retrata o mapa nem o snapshot** | deny em **escrita** a `db/mapa-baseline.json` e a `docs/snapshots/` | agente que retrata apaga o próprio gatilho |
-| não usa `--sem-portao` | `PreToolUse` em Bash | a bandeira faz o mapa sair 0 mesmo com arquivo novo |
+| não reescreve histórico do git | `PreToolUse` em Bash + deny de permissão | **grafia** |
+| não edita migration já aplicada | `PreToolUse` `if: "Edit(db/migrations/*)"` | **forte** — Edit é chamada de ferramenta |
+| **não escreve no Supabase** | `PreToolUse` recusando Bash cujo `--env-file`/`DATABASE_URL` aponte para `supabase.com` · **mais** trava dentro do `migracoes.js` | grafia + **script** |
+| **não declara pronto com portão vermelho** | `SubagentStop` | **forte** |
+| não commita lixo | `PreToolUse` em `Bash(git commit *)` | **grafia** |
+| **não apaga prova** | `PreToolUse` em `Bash(rm *)` sobre pasta de prova | **grafia** |
+| **não retrata o mapa nem o snapshot** | **dentro do `mapa.js` e do `snapshot.js`**: recusam gravar sem a sentinela que só o fechamento define · `PreToolUse` em Bash como reforço · portão de commit sobre o diff do baseline | **script** (as outras duas são melhor esforço) |
+| não usa `--sem-portao` | dentro do `mapa.js`: a bandeira passa a exigir a mesma sentinela | **script** |
 
-**Os denys miram o EFEITO, não a grafia do comando.** Correção de 01/08: eu tinha escrito o deny do
-retrato como `Bash(node db/mapa.js retrato*)` — e **eu mesmo havia acrescentado `npm run mapa:retrato`
-ao `package.json` duas horas antes**. O atalho versionado passava por cima da regra. Regra geral: hook
-que bloqueia comando é contornável por qualquer alias novo; hook que bloqueia **escrita no arquivo**
-não é.
+**"Grafia" quer dizer contornável** — por alias novo, por script no `package.json`, por caminho
+diferente. Está escrito na tabela de propósito: regra marcada como grafia é **dissuasão, não garantia**,
+e quem depender dela como garantia vai se enganar. Foi o que aconteceu comigo: escrevi o deny do
+retrato contra `Bash(node db/mapa.js retrato*)` e **eu mesmo havia acrescentado `npm run mapa:retrato`
+ao `package.json` duas horas antes**.
 
-**O `SubagentStop` precisa de válvula.** Do jeito que estava escrito, portão vermelho por causa alheia
-prende o agente — e o impede até de escalar que está preso. É um impasse construído. Fica: ele avalia o
-portão **sobre a partição daquele agente**, e **libera a saída** quando o agente devolve um relatório
-de bloqueio classificado (o quê, desde quando, por que não é dele). O relatório vira evento "bloqueio"
-do ponto 6.
+**A sentinela do fechamento** é o que permite ao ato de fechamento fazer o que os agentes não podem:
+uma variável que o `fechar-onda` define e mais ninguém. Não é segredo — é declaração de contexto. Um
+agente decidido a contorná-la consegue; a diferença é que aí ele **escolheu** contornar, em vez de
+tropeçar sem perceber, e o portão de commit sobre o diff do baseline entrega a pegada.
+
+### O `SubagentStop` precisa de válvula — e de um segundo par de olhos
+
+Do jeito que estava escrito, portão vermelho por causa alheia prende o agente e o impede até de escalar
+que está preso: um impasse construído. Fica: ele **libera a saída** quando o agente devolve um
+relatório de bloqueio classificado (o quê, desde quando, por que não é dele), que vira o evento
+"bloqueio" do ponto 6.
+
+**Mas atenção ao que isso cria:** o próprio suspeito classificando a vermelhidão como "não é minha" é
+auto-absolvição — no mesmo documento que constrói hook para impedir auto-absolvição no mapa. Então o
+relatório de bloqueio **não fecha o assunto: ele abre um evento** que eu confiro. A saída é liberada
+para o agente não ficar preso; o veredito não é dele.
+
+*(A ideia original — "avalia o portão sobre a partição daquele agente" — não é implementável hoje: o
+`tsconfig.json` inclui `**/*.ts` e `**/*.tsx`, o tsc é do projeto inteiro, e a partição por dono de
+arquivo não está gravada em lugar nenhum legível por máquina.)*
 
 ---
 
@@ -743,28 +831,59 @@ branch por onda, bancada por frente, portão e fechamento — e nunca escrevemos
 isso que a onda I está parada em `onda-i` até hoje.
 
 **Fica assim:** `npm run fechar-onda` é o ato, rodado **pelo agente principal, depois do de-acordo do
-dono** — e é o único contexto em que os denys de retrato são liberados.
+dono** — e é o único contexto que define a sentinela que destrava o retrato e a escrita no Supabase.
 
-| # | Passo | Vem do ponto |
-|---|---|---|
-| 1 | `npm test` e `npm run test:e2e` verdes, com **snapshot** contra banco recém-semeado e data congelada | 3 |
-| 2 | `db/migracoes.js conferir` nos dois bancos (local e Supabase) | 2 |
-| 3 | Smoke contra o Supabase — **subida, migrations e o subconjunto somente-leitura** | 1, 2 |
-| 4 | Conferir que a bateria em arquivo e a do banco batem | 3 |
-| 5 | **`node db/mapa.js`** — o diff que decide se o adversarial roda | 3 |
-| 6 | **Camada adversarial**, se o passo 5 acusou eixo tocado | 3 |
-| 7 | Fechar `docs/achados/<onda>.md`: todo achado vira portão ou é aceito e assinado | 4 |
-| 8 | **Merge para a `main`** | 2 |
-| 9 | **`node db/mapa.js retrato`** — último, nunca antes do passo 6 | 3 |
-| 10 | `db/bancada.js destruir` das bancadas da onda, e `orfaos` para conferir | 2 |
-| 11 | Apagar `docs/onda-atual.md` e destruir worktree experimental | 2, 5 |
-| 12 | Relatório ao dono, no formato do ponto 6 | 6 |
+| # | Passo | Vem do ponto | Existe hoje? |
+|---|---|---|---|
+| 1 | `npm test` e `npm run test:e2e` verdes, com **snapshot** contra banco recém-semeado | 3 | **não** |
+| 2 | `db/migracoes.js conferir` nos dois bancos (local e Supabase) | 2 | **não** (há `db/migrar.js`) |
+| 3 | Smoke contra o Supabase — **subida, migrations e o subconjunto somente-leitura** | 1, 2 | **não** |
+| 4 | Conferir que a bateria em arquivo e a do banco batem | 3 | **não** |
+| 5 | **`node db/mapa.js`** — o diff que decide se o adversarial roda | 3 | **sim** |
+| 6 | **Camada adversarial**, se o passo 5 acusou eixo tocado | 3 | sim (agentes) |
+| 7 | Fechar `docs/achados/<onda>.md`: todo achado vira portão ou é aceito e assinado | 4 | pasta ainda não existe |
+| 8 | **Merge para a `main`** — se houver conflito, **voltar ao passo 1** | 2 | sim (git) |
+| 9 | **`node db/mapa.js retrato`** — último, nunca antes do passo 6 | 3 | **sim** |
+| 10 | `db/bancada.js destruir` das bancadas da onda, e `orfaos` para conferir | 2 | **não** |
+| 11 | Apagar `docs/onda-atual.md` e destruir worktree experimental | 2, 5 | sim (git) |
+| 12 | Relatório ao dono, no formato do ponto 6 | 6 | sim |
 
-A ordem dos passos 5, 6 e 9 é rígida: **conferir → julgar → retratar.** Retratar antes de julgar apaga
-a evidência que o adversarial consome.
+**Cinco dos doze chamam comando que não existe.** Isto é especificação do que será construído, não
+descrição do que roda hoje — e a coluna existe para que ninguém confunda as duas coisas. A ordem de
+execução coloca essas peças antes do fechamento, de propósito.
 
-O passo 8 vem antes do 9 de propósito: o retrato tem que descrever o estado que **de fato** entrou na
-`main`, não um estado que ainda podia mudar no merge.
+**Ordem rígida entre 5, 6 e 9: conferir → julgar → retratar.** Retratar antes de julgar apaga a
+evidência que o adversarial consome.
+
+**Ordem entre 8 e o resto — o mesmo raciocínio, aplicado até o fim.** O passo 8 vem antes do 9 porque o
+retrato tem que descrever o estado que **de fato** entrou na `main`. Mas o argumento vale para os
+passos 1 a 6 também: o que foi verificado na branch não é necessariamente o que entrou na `main`. Daí a
+cláusula do passo 8 — **conflito no merge devolve ao passo 1.** Merge limpo (fast-forward ou sem
+conflito) mantém o verificado válido.
+
+**A liberação do Supabase.** A regra de ouro diz "não escreve no Supabase", e os passos 2 e 3 mandam
+escrever lá. Sem exceção escrita, o fechamento seria proibido de fazer o que ele existe para fazer.
+Fica: **só o ato de fechamento escreve no Supabase, e só via `migracoes.js`.** Todo o resto — inclusive
+o `npm run db:migrar` que hoje aponta para o pooler no `.env` — é recusado.
+
+### O fechamento mínimo executável HOJE
+
+Sem esperar as seis ferramentas que faltam, e é ele que solta a onda I:
+
+```powershell
+npx tsc --noEmit
+npm run lint
+npm run build
+node --env-file=.env.local-db db/migrar.js     # local
+node --env-file=.env db/migrar.js              # Supabase
+node db/mapa.js                                 # confere; se acusar, adversarial antes de seguir
+# merge para a main
+node db/mapa.js retrato
+```
+
+Sete linhas. Não cobre bateria, smoke nem snapshot — porque eles não existem —, e **é honesto sobre
+isso**: o que ele prova é que compila, que passa no lint, que as migrations estão sincronizadas nos dois
+bancos e que nenhum eixo foi tocado sem julgamento.
 
 ---
 
