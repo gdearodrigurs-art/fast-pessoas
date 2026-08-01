@@ -32,3 +32,6 @@ fast-pessoas/.env.local-db
 fast-pessoas/.tmp-*/
 _verif-*
 fast-pessoas/_verif-*
+
+# Saída da compilação da suíte (tsconfig.testes.json) — regerada a cada npm test.
+fast-pessoas/.tmp-testes/

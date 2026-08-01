@@ -13,7 +13,8 @@
     "mapa": "node db/mapa.js",
     "mapa:retrato": "node db/mapa.js retrato",
     "dev:local": "node db/servidor.js dev",
-    "start:local": "node db/servidor.js start"
+    "start:local": "node db/servidor.js start",
+    "test": "tsc -p tsconfig.testes.json && node --test \".tmp-testes/tests/**/*.test.js\""
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

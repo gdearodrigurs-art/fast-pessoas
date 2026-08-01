@@ -1,0 +1,27 @@
+{
+  // Compila SÓ o que a suíte alcança. O tsc segue os imports sozinho, então incluir
+  // "tests/**" traz junto os motores puros e os esquemas de que eles dependem — e nada
+  // mais. É o que mantém o portão rápido: não é o projeto inteiro, é o alcance dos testes.
+  //
+  // Por que compilar, em vez de rodar o .ts direto: o Node 24 executa TypeScript nativamente,
+  // mas apaga tipos sem entender semântica, e o projeto importa TIPO junto com VALOR na mesma
+  // linha (`import { CODIGO_INSS, NaturezaRubrica }`). Em tempo de execução o Node procura um
+  // export chamado NaturezaRubrica, não acha, e quebra. Consertar isso seria trocar o estilo de
+  // import em 75 arquivos do domínio — mudança grande, arriscada e sem relação com o que a
+  // suíte existe para provar.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp-testes",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "jsx": "react-jsx",
+    "incremental": true,
+    "tsBuildInfoFile": ".tmp-testes/.tsbuildinfo",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["tests/**/*.ts", "tests/**/*.mts"],
+  "exclude": ["node_modules", ".next", ".tmp-testes"]
+}
