@@ -174,10 +174,24 @@ function ajudaSePedida(bandeiras, texto) {
   }
 }
 
-/** Erro de ferramenta: mensagem limpa e saída 1, sem pilha de chamada. */
+/**
+ * Erro de ferramenta: mensagem limpa e saída 1, sem pilha de chamada.
+ *
+ * Marca `process.exitCode` em vez de chamar `process.exit()`. A diferença não é estilo:
+ * no Windows, depois de dezenas de conexões de rede abertas, o encerramento abrupto dispara
+ * uma assertion do libuv (`!(handle->flags & UV_HANDLE_CLOSING)`) e o processo termina em
+ * **127** — a saída aparece inteira e correta na tela, e o código de saída mente. Código de
+ * saída errado é pior que nenhum, porque ele É o portão: quem lê é o `npm test`, o portão de
+ * commit e o fechamento.
+ *
+ * Medido pelo agente que escreveu o db/comparar-personas.js, rodando 63 sessões HTTP seguidas.
+ *
+ * Consequência para quem chama: `morrer()` agora RETORNA. Use como `.catch(morrer)` no topo,
+ * que é como as seis ferramentas usam, ou dê `return` logo depois de chamar.
+ */
 function morrer(erro) {
   console.error(String(erro.message || erro));
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 module.exports = {

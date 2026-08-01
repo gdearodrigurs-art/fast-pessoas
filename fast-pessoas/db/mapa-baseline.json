@@ -388,7 +388,9 @@
           "descricao": "now()/CURRENT_TIMESTAMP/clock_timestamp que NAO e DEFAULT de coluna e NAO esta convertido para Sao Paulo — e aqui que mora o now() usado como data civil.",
           "tipo": "grep",
           "arquivos": {
+            "db/bancada.js": 3,
             "db/codigo-2fa.js": 1,
+            "db/logar-como.js": 1,
             "db/migrations/0001_fundacao.sql": 1,
             "db/migrations/0022_pesquisas.sql": 1,
             "db/migrations/0051_beneficio_atravessa_a_transferencia.sql": 1,
@@ -415,7 +417,7 @@
             "src/dominios/sst/esquemas.ts": 1,
             "src/dominios/sst/repositorio.ts": 1
           },
-          "total": 42
+          "total": 46
         },
         {
           "descricao": "timestamptz castado para date sem AT TIME ZONE — o cast usa o TimeZone da SESSAO, que e UTC. Pega CHECKs e backfills.",
@@ -443,7 +445,9 @@
           "descricao": "Toda leitura de relogio em JS/TS — a lista completa de candidatos a 'hoje' do lado do Node e do navegador.",
           "tipo": "grep",
           "arquivos": {
+            "db/bancada.js": 3,
             "db/codigo-2fa.js": 1,
+            "db/logar-como.js": 1,
             "db/mapa.js": 1,
             "db/semear-demo.js": 2,
             "db/semear/01-base.js": 1,
@@ -451,6 +455,7 @@
             "db/semear/05-ferias-afastamentos.js": 1,
             "db/semear/06-ciclo-vida.js": 2,
             "db/semear/comum.js": 1,
+            "db/snapshot.js": 1,
             "src/app/beneficios/painel-beneficios.tsx": 1,
             "src/app/documentos/painel-documentos.tsx": 1,
             "src/app/metas/painel-metas.tsx": 1,
@@ -492,7 +497,7 @@
             "src/dominios/sst/esquemas.ts": 3,
             "src/dominios/sst/servico.ts": 2
           },
-          "total": 65
+          "total": 70
         },
         {
           "descricao": "Getters UTC de componente de data. Cruzado com a consulta anterior, isola quem deriva ano/mes/dia de HOJE em UTC.",
@@ -547,6 +552,7 @@
           "descricao": "Todos os pontos que declaram o fuso de negocio — o lado CERTO do eixo. Serve de denominador: quem faz data e nao aparece aqui e candidato a violacao.",
           "tipo": "grep",
           "arquivos": {
+            "db/logar-como.js": 1,
             "db/migrations/0003_demandas.sql": 1,
             "db/migrations/0016_indicadores_folha_sst.sql": 1,
             "db/migrations/0027_ponto.sql": 1,
@@ -622,7 +628,7 @@
             "src/dominios/sst/servico.ts": 2,
             "src/lib/vigencia.ts": 1
           },
-          "total": 166
+          "total": 167
         },
         {
           "descricao": "As copias da constante HOJE_SP nos repositorios e seus usos — a definicao de hoje duplicada que a 0049 se propos a reduzir a uma.",
@@ -1117,6 +1123,7 @@
           "descricao": "Todos os pontos que leem ou gravam o claim pendente_2fa. Cruzada com a anterior, revela qual guarda de modulo esqueceu a segunda tranca.",
           "tipo": "grep",
           "arquivos": {
+            "db/logar-como.js": 5,
             "db/migrations/0040_2fa_por_chave.sql": 1,
             "src/app/api/identidade/2fa/confirmar/route.ts": 2,
             "src/app/notificacoes/page.tsx": 1,
@@ -1131,7 +1138,7 @@
             "src/lib/sessao.ts": 2,
             "src/proxy.ts": 2
           },
-          "total": 17
+          "total": 22
         },
         {
           "descricao": "Guardas das paginas server-side: toda page.tsx de negocio tem que resolver a chave por SQL antes de renderizar.",
@@ -1188,17 +1195,19 @@
           "tipo": "grep",
           "arquivos": {
             "db/codigo-2fa.js": 2,
+            "db/logar-como.js": 12,
             "db/migrations/0040_2fa_por_chave.sql": 13,
             "db/migrations/0044_privacidade_e_chaves_sensiveis.sql": 6,
             "db/migrations/0045_piso_anonimato_alcanca_clima_e_pesquisas.sql": 1,
             "db/migrations/0048_transferencia_entre_empresas.sql": 2,
+            "db/snapshot.js": 1,
             "src/dominios/folha/servico.ts": 2,
             "src/dominios/identidade/repositorio.ts": 3,
             "src/dominios/identidade/servico.ts": 10,
             "src/dominios/usuarios/esquemas.ts": 8,
             "src/dominios/usuarios/servico.ts": 2
           },
-          "total": 49
+          "total": 62
         },
         {
           "descricao": "Comparacao com nome de papel no SQL das migrations.",
@@ -1437,6 +1446,7 @@
           "descricao": "Toda conversao minuto<->hora no projeto inteiro, incluindo SQL e semeador.",
           "tipo": "grep",
           "arquivos": {
+            "db/logar-como.js": 1,
             "db/migrations/0011_avaliacao.sql": 1,
             "db/semear/04-clima.js": 1,
             "db/semear/15-ponto.js": 13,
@@ -1454,7 +1464,7 @@
             "src/dominios/sst/servico.ts": 1,
             "src/lib/sessao.ts": 1
           },
-          "total": 39
+          "total": 40
         },
         {
           "descricao": "Constantes de jornada e de hora noturna literais no fonte: 220, 3600, 3150, 1440 e as formas float proibidas da hora noturna.",
@@ -2645,5 +2655,5 @@
       ]
     }
   },
-  "gerado_em": "2026-08-01T16:58:30.641Z"
+  "gerado_em": "2026-08-01T18:13:30.197Z"
 }
