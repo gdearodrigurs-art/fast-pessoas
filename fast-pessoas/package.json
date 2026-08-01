@@ -11,7 +11,9 @@
     "db:migrar": "node --env-file=.env db/migrar.js",
     "db:demo": "node --env-file=.env db/semear-demo.js",
     "mapa": "node db/mapa.js",
-    "mapa:retrato": "node db/mapa.js retrato"
+    "mapa:retrato": "node db/mapa.js retrato",
+    "dev:local": "node db/servidor.js dev",
+    "start:local": "node db/servidor.js start"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",
