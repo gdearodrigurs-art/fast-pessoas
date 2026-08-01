@@ -30,5 +30,15 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    // A suíte tem tsconfig próprio (tsconfig.testes.json), com target es2023. Este aqui é o
+    // do aplicativo e fica em ES2017, que é o que o Next entrega ao navegador. Sem esta
+    // linha, um teste usando recurso moderno de regex reprovava o `tsc --noEmit` do portão
+    // enquanto o `npm test` passava — dois portões discordando sobre o mesmo arquivo.
+    "tests",
+    ".tmp-testes",
+    ".tmp-prova",
+    ".tmp-prova-escala"
+  ]
 }

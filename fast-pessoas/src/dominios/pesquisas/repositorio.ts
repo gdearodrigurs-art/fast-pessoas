@@ -8,9 +8,13 @@ import { StatusPesquisa, StatusPlano, TipoPergunta, TipoPesquisa } from "./esque
  *   1. NENHUMA consulta cruza rh_clima.resposta_pesquisa com
  *      rh_clima.participacao_pesquisa — não existe caminho de volta da
  *      resposta para a pessoa, e não deve passar a existir;
- *   2. o k-anonimato é aplicado no SERVIÇO sobre as contagens que estas
- *      funções devolvem — aqui as contagens vêm cruas, para que o serviço possa
- *      decidir entre mostrar o número e dizer "amostra insuficiente".
+ *   2. a DECISÃO do k-anonimato é do SERVIÇO — aqui as contagens vêm cruas,
+ *      para que ele possa escolher entre mostrar o número e dizer "amostra
+ *      insuficiente". O que estas funções devolvem separado é QUAL contagem vai
+ *      ao piso: os campos `pessoas_*` são contagem de gente (menor contagem por
+ *      pergunta do recorte); os `respostas_*` são denominador de cálculo e não
+ *      servem de porta de publicação. Confundir os dois foi o defeito que
+ *      publicava a média de uma unidade de 3 pessoas sob um piso de 5.
  */
 
 // ------------------------------------------------------------------ tipos
@@ -77,6 +81,14 @@ export interface RecorteUnidade {
   respostas_nps: number;
   promotores: number;
   detratores: number;
+  /**
+   * O que vai ao PISO de anonimato: a menor contagem por pergunta da unidade
+   * (ver `pessoasDoRecorte` em esquemas.ts). Os campos `respostas_*` acima são
+   * denominador de cálculo, nunca porta de publicação — somar respostas de
+   * perguntas diferentes não conta gente.
+   */
+  pessoas_escala: number;
+  pessoas_nps: number;
 }
 
 export interface ComentarioLinha {
@@ -540,6 +552,11 @@ export async function contagensNps(pesquisaId: number): Promise<ContagemNps[]> {
  * tenha pergunta de nota 0–10 respondida. Soma todas as perguntas nps_0_10 da
  * pesquisa (o normal é haver exatamente uma). Sem trilha de pessoa — é
  * agregado puro.
+ *
+ * `pessoas` existe pelo mesmo motivo de `recortesPorUnidade`: quando a pesquisa
+ * tem MAIS DE UMA pergunta de nota, `respostas` é soma de perguntas e não conta
+ * gente. A Central de Metas não pode ser a porta dos fundos do que a tela de
+ * resultado esconde, então o piso dela recebe a menor contagem por pergunta.
  */
 export async function ultimaContagemEnpsEncerrada(): Promise<{
   pesquisa_id: number;
@@ -547,6 +564,7 @@ export async function ultimaContagemEnpsEncerrada(): Promise<{
   respostas: number;
   promotores: number;
   detratores: number;
+  pessoas: number;
 } | null> {
   const linhas = await consultar<{
     pesquisa_id: string;
@@ -554,20 +572,33 @@ export async function ultimaContagemEnpsEncerrada(): Promise<{
     respostas: number;
     promotores: number;
     detratores: number;
+    pessoas: number;
   }>(
-    `SELECT p.id AS pesquisa_id,
-            p.titulo,
-            COUNT(*)::int AS respostas,
-            COUNT(*) FILTER (WHERE r.valor_numerico >= 9)::int AS promotores,
-            COUNT(*) FILTER (WHERE r.valor_numerico <= 6)::int AS detratores
-       FROM rh_clima.pesquisa p
-       JOIN rh_clima.pergunta_pesquisa q ON q.pesquisa_id = p.id
-       JOIN rh_clima.resposta_pesquisa r ON r.pergunta_id = q.id
-      WHERE p.status = 'encerrada'
-        AND q.tipo = 'nps_0_10'
-        AND r.valor_numerico IS NOT NULL
-      GROUP BY p.id, p.titulo, p.encerrada_em
-      ORDER BY p.encerrada_em DESC, p.id DESC
+    `WITH por_pergunta AS (
+       SELECT p.id AS pesquisa_id,
+              p.titulo,
+              p.encerrada_em,
+              q.id AS pergunta_id,
+              COUNT(*)::int AS respostas,
+              COUNT(*) FILTER (WHERE r.valor_numerico >= 9)::int AS promotores,
+              COUNT(*) FILTER (WHERE r.valor_numerico <= 6)::int AS detratores
+         FROM rh_clima.pesquisa p
+         JOIN rh_clima.pergunta_pesquisa q ON q.pesquisa_id = p.id
+         JOIN rh_clima.resposta_pesquisa r ON r.pergunta_id = q.id
+        WHERE p.status = 'encerrada'
+          AND q.tipo = 'nps_0_10'
+          AND r.valor_numerico IS NOT NULL
+        GROUP BY p.id, p.titulo, p.encerrada_em, q.id
+     )
+     SELECT pesquisa_id,
+            titulo,
+            SUM(respostas)::int  AS respostas,
+            SUM(promotores)::int AS promotores,
+            SUM(detratores)::int AS detratores,
+            MIN(respostas)::int  AS pessoas
+       FROM por_pergunta
+      GROUP BY pesquisa_id, titulo, encerrada_em
+      ORDER BY encerrada_em DESC, pesquisa_id DESC
       LIMIT 1`
   );
   if (linhas.length === 0) return null;
@@ -604,6 +635,24 @@ export async function contagensEscolha(
  * Recorte por unidade: escala e eNPS numa passada. Unidade NULL (colaborador
  * sem lotação vigente na hora da resposta) vira o rótulo "Sem unidade" — e
  * passa pelo mesmo k-anonimato das outras.
+ *
+ * DOIS NÍVEIS DE AGRUPAMENTO, de propósito. O primeiro (`por_pergunta`) conta
+ * por unidade E por pergunta; o segundo dobra isso na unidade. É essa passada
+ * a mais que separa as duas grandezas que estavam coladas:
+ *
+ *   respostas_escala / soma_escala  -> denominador e numerador da MÉDIA
+ *   pessoas_escala                  -> o que vai ao PISO de anonimato
+ *
+ * Enquanto o piso era aplicado sobre a soma, 3 pessoas respondendo 2 perguntas
+ * produziam 6 respostas e a unidade era publicada sob um piso de 5 — medido na
+ * bancada, pesquisa 5 / unidade 1: respostas_escala 6, pessoas_escala 3. A
+ * menor contagem por pergunta é limite inferior do número de pessoas do
+ * recorte (uma pessoa responde cada pergunta no máximo uma vez); o porquê de
+ * não ser `COUNT(DISTINCT pessoa_id)` está em `pessoasDoRecorte`, em
+ * esquemas.ts — a resposta não tem pessoa, e não pode passar a ter.
+ *
+ * `MIN(...) FILTER` ignora pergunta sem NENHUMA resposta na unidade: ela não
+ * entra no agregado, então não teria por que derrubá-lo a zero.
  */
 export async function recortesPorUnidade(
   pesquisaId: number
@@ -616,25 +665,44 @@ export async function recortesPorUnidade(
     respostas_nps: number;
     promotores: number;
     detratores: number;
+    pessoas_escala: number;
+    pessoas_nps: number;
   }>(
-    `SELECT r.unidade_id,
+    `WITH por_pergunta AS (
+       SELECT r.unidade_id,
+              r.pergunta_id,
+              q.tipo,
+              COUNT(*)::int                          AS respostas,
+              COALESCE(SUM(r.valor_numerico), 0)::int AS soma,
+              COUNT(*) FILTER (WHERE r.valor_numerico >= 9)::int AS promotores,
+              COUNT(*) FILTER (WHERE r.valor_numerico <= 6)::int AS detratores
+         FROM rh_clima.resposta_pesquisa r
+         JOIN rh_clima.pergunta_pesquisa q ON q.id = r.pergunta_id
+        WHERE r.pesquisa_id = $1
+          AND r.valor_numerico IS NOT NULL
+          AND q.tipo IN ('escala_1_5','nps_0_10')
+        GROUP BY r.unidade_id, r.pergunta_id, q.tipo
+     )
+     SELECT p.unidade_id,
             COALESCE(ev.unidade, 'Sem unidade') AS unidade,
-            COUNT(*) FILTER (WHERE q.tipo = 'escala_1_5')::int AS respostas_escala,
-            COALESCE(SUM(r.valor_numerico) FILTER (WHERE q.tipo = 'escala_1_5'), 0)::int
+            COALESCE(SUM(p.respostas) FILTER (WHERE p.tipo = 'escala_1_5'), 0)::int
+              AS respostas_escala,
+            COALESCE(SUM(p.soma) FILTER (WHERE p.tipo = 'escala_1_5'), 0)::int
               AS soma_escala,
-            COUNT(*) FILTER (WHERE q.tipo = 'nps_0_10')::int AS respostas_nps,
-            COUNT(*) FILTER (WHERE q.tipo = 'nps_0_10' AND r.valor_numerico >= 9)::int
+            COALESCE(MIN(p.respostas) FILTER (WHERE p.tipo = 'escala_1_5'), 0)::int
+              AS pessoas_escala,
+            COALESCE(SUM(p.respostas) FILTER (WHERE p.tipo = 'nps_0_10'), 0)::int
+              AS respostas_nps,
+            COALESCE(SUM(p.promotores) FILTER (WHERE p.tipo = 'nps_0_10'), 0)::int
               AS promotores,
-            COUNT(*) FILTER (WHERE q.tipo = 'nps_0_10' AND r.valor_numerico <= 6)::int
-              AS detratores
-       FROM rh_clima.resposta_pesquisa r
-       JOIN rh_clima.pergunta_pesquisa q ON q.id = r.pergunta_id
+            COALESCE(SUM(p.detratores) FILTER (WHERE p.tipo = 'nps_0_10'), 0)::int
+              AS detratores,
+            COALESCE(MIN(p.respostas) FILTER (WHERE p.tipo = 'nps_0_10'), 0)::int
+              AS pessoas_nps
+       FROM por_pergunta p
        LEFT JOIN rh.estabelecimento_versao ev
-              ON ev.estabelecimento_id = r.unidade_id AND ev.status = 'ativa'
-      WHERE r.pesquisa_id = $1
-        AND r.valor_numerico IS NOT NULL
-        AND q.tipo IN ('escala_1_5','nps_0_10')
-      GROUP BY r.unidade_id, ev.unidade
+              ON ev.estabelecimento_id = p.unidade_id AND ev.status = 'ativa'
+      GROUP BY p.unidade_id, ev.unidade
       ORDER BY COALESCE(ev.unidade, 'Sem unidade')`,
     [pesquisaId]
   );

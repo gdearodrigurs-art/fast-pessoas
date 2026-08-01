@@ -25,9 +25,15 @@ const eslintConfig = defineConfig([
     // `npm run lint` lê. Os dois portões não são independentes — rodar um sujava o
     // outro. Esta linha resolve hoje; se aparecer outro acoplamento assim, a saída é
     // tirar o outDir de dentro do projeto.
-    ".tmp-testes/**",
-    // Rascunho solto de agente na raiz. O .gitignore cobre `.tmp-*/` (pasta) e
-    // deixava passar `.tmp-scan.js` (arquivo).
+    // O PADRÃO, não o nome. Eu tinha escrito `.tmp-testes/**` — o nome específico — e a
+    // sessão seguinte produziu `.tmp-prova/` e `.tmp-prova-escala/`, duas pastas de
+    // compilação que agentes criaram para rodar prova contra banco. O lint pegou 107 erros
+    // de `require()` em JavaScript que o tsc tinha acabado de emitir.
+    //
+    // É o mesmo erro que o ponto 1 do arnês registra sobre o .gitignore: nome específico
+    // resolve o caso de hoje, padrão resolve a família. O .gitignore já usa `.tmp-*/`; o
+    // lint estava uma lição atrás.
+    ".tmp-*/**",
     ".tmp-*.js",
   ]),
   // Scripts CLI CommonJS: db/ (ferramentas, migrations, semeadores), provas/ e o

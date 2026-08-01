@@ -10,6 +10,7 @@ import {
   CriacaoPesquisa,
   EnvioRespostas,
   FAIXA_NUMERICA,
+  pessoasDoRecorte,
   PlanoNovo,
   ROTULOS_STATUS_PLANO,
   ROTULOS_TIPO_PERGUNTA,
@@ -853,15 +854,24 @@ export async function obterResultado(
   const promotores = nps.reduce((soma, linha) => soma + linha.promotores, 0);
   const neutros = nps.reduce((soma, linha) => soma + linha.neutros, 0);
   const detratores = nps.reduce((soma, linha) => soma + linha.detratores, 0);
-  const corteEnps = recorte(totalNps, minimoAmostra, () =>
-    calcularEnps(promotores, detratores, totalNps)
+  // O piso recebe PESSOAS, não a soma das perguntas de nota: `totalNps` é o
+  // denominador do eNPS e continua sendo, mas com duas perguntas de nota ele
+  // vale o dobro do número de gente — e era assim que 3 pessoas passavam por 5.
+  const corteEnps = recorte(
+    pessoasDoRecorte(nps.map((linha) => linha.respostas)),
+    minimoAmostra,
+    () => calcularEnps(promotores, detratores, totalNps)
   );
 
   const porUnidade: ResultadoUnidade[] = unidades.map((linha) => {
-    const corteEscala = recorte(linha.respostas_escala, minimoAmostra, () =>
+    // O piso recebe `pessoas_*` (a menor contagem por pergunta da unidade); o
+    // CÁLCULO segue usando `respostas_*`, que é o denominador da média e do
+    // eNPS. Enquanto as duas grandezas eram a mesma, uma unidade de 3 pessoas
+    // com 2 perguntas somava 6 e era publicada sob um piso de 5.
+    const corteEscala = recorte(linha.pessoas_escala, minimoAmostra, () =>
       arredondar(linha.soma_escala / linha.respostas_escala, 2)
     );
-    const corteUnidadeNps = recorte(linha.respostas_nps, minimoAmostra, () =>
+    const corteUnidadeNps = recorte(linha.pessoas_nps, minimoAmostra, () =>
       calcularEnps(linha.promotores, linha.detratores, linha.respostas_nps)
     );
     const suficiente =
@@ -873,7 +883,8 @@ export async function obterResultado(
       // Soma das respostas apenas quando algum recorte da unidade é
       // divulgável; abaixo do mínimo nem a contagem sai.
       respostas: suficiente
-        ? (corteEscala.respostas ?? 0) + (corteUnidadeNps.respostas ?? 0)
+        ? (corteEscala.amostra_suficiente ? linha.respostas_escala : 0) +
+          (corteUnidadeNps.amostra_suficiente ? linha.respostas_nps : 0)
         : null,
       media: corteEscala.valor,
       enps: corteUnidadeNps.valor,
@@ -896,7 +907,10 @@ export async function obterResultado(
         ? null
         : {
             valor: corteEnps.valor,
-            respostas: corteEnps.respostas,
+            // Divulgável, a contagem que a tela mostra segue sendo a de
+            // RESPOSTAS (é o denominador do eNPS). O que mudou é quem abre a
+            // porta: o piso agora recebe pessoas.
+            respostas: corteEnps.amostra_suficiente ? totalNps : null,
             promotores: corteEnps.amostra_suficiente ? promotores : null,
             neutros: corteEnps.amostra_suficiente ? neutros : null,
             detratores: corteEnps.amostra_suficiente ? detratores : null,
@@ -1108,7 +1122,10 @@ export async function valorIndicadorEnps(): Promise<number | null> {
     ultimaContagemEnpsEncerrada(),
     lerMinimoPorRecorte(),
   ]);
-  if (!contagem || contagem.respostas < minimoAmostra) return null;
+  // O piso lê `pessoas` (menor contagem por pergunta de nota), não `respostas`:
+  // com duas perguntas nps_0_10 a soma dobra o número de gente, e a Central
+  // publicaria o que a tela de resultado esconde.
+  if (!contagem || contagem.pessoas < minimoAmostra) return null;
   return calcularEnps(
     contagem.promotores,
     contagem.detratores,

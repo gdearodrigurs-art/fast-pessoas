@@ -105,14 +105,46 @@ export const ROTULOS_STATUS_PLANO: Record<StatusPlano, string> = {
  * dono mexe em um, acredita ter mudado a política inteira, e metade dela
  * segue publicando o que ele acabou de mandar esconder.
  *
- * RESSALVA MEDIDA, registrada de propósito: em `recortesPorUnidade` a
- * contagem é de RESPOSTAS somadas por unidade, não de pessoas — numa pesquisa
- * com 2 perguntas de escala, 3 pessoas produzem 6 respostas e passam por um
- * piso de 5. Isso é defeito do DENOMINADOR, não do piso, e está descrito no
- * relatório desta frente; corrigi-lo muda o que a tela publica hoje e por isso
- * não foi embutido nesta mudança, que é de parametrização.
+ * A RESSALVA QUE ESTAVA AQUI FOI CORRIGIDA (ver `pessoasDoRecorte` abaixo).
+ * O piso era aplicado sobre a SOMA das respostas do recorte: 3 pessoas em 2
+ * perguntas produziam 6 respostas e passavam por um piso de 5. Agora o piso
+ * recebe a MENOR contagem por pergunta do recorte, que é contagem de gente.
  */
 export const MINIMO_AMOSTRA_PADRAO = 5;
+
+/**
+ * Quantas PESSOAS sustentam um agregado que mistura várias perguntas — o
+ * número que vai ao piso de anonimato, e nunca a soma das respostas.
+ *
+ * POR QUE A MENOR. Uma pessoa responde uma pergunta no máximo uma vez (a trava
+ * `participacao_pesquisa_unica_por_pessoa` da 0052 e a recusa de pergunta
+ * repetida em `prepararRespostas`), então a contagem de UMA pergunta já é
+ * contagem de gente. O agregado do recorte — a média da unidade, o eNPS da
+ * pesquisa — mistura as perguntas, então ele vale o elo mais fraco: se a
+ * pergunta B foi respondida por 3, publicar a média porque a A teve 40 é
+ * publicar um número que 3 pessoas conseguem desfazer entre si.
+ *
+ * SOMAR ERA O DEFEITO. Com a soma, o piso é alcançado por
+ * `k / nº de perguntas` pessoas: numa pesquisa de 20 perguntas, k=5 vira UMA
+ * pessoa — o anonimato prometido ao respondente valendo menos que o número
+ * anunciado a ele em `avisoAnonimato`.
+ *
+ * POR QUE NÃO `COUNT(DISTINCT pessoa_id)`, que seria exato: porque
+ * `rh_clima.resposta_pesquisa` NÃO TEM pessoa, de propósito (0022) — não
+ * existe caminho de volta da resposta para quem respondeu. Criar a coluna
+ * daria o número exato destruindo justamente o segredo que o piso existe para
+ * defender: cada resposta passaria a ser atribuível a uma pessoa com nome por
+ * qualquer um com SELECT na tabela. A menor contagem por pergunta é um limite
+ * INFERIOR do número de pessoas do recorte — erra sempre para o lado de
+ * esconder, que é o lado certo de errar.
+ *
+ * Recorte sem nenhuma pergunta respondida vale 0, não `Math.min()` vazio:
+ * Infinity passaria por qualquer piso e publicaria o vazio.
+ */
+export function pessoasDoRecorte(respostasPorPergunta: number[]): number {
+  if (respostasPorPergunta.length === 0) return 0;
+  return Math.min(...respostasPorPergunta);
+}
 
 export const TEXTO_AMOSTRA_INSUFICIENTE = "Amostra insuficiente";
 

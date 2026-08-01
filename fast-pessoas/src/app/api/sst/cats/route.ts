@@ -12,7 +12,7 @@ export async function GET() {
     const sessao = await exigirPermissao("sst.ver");
     const [pode, cats] = await Promise.all([
       permissoesSst(sessao),
-      listarCatsVisao(),
+      listarCatsVisao(sessao),
     ]);
     return Response.json({ pode, cats });
   } catch (erro) {

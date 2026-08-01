@@ -3,6 +3,7 @@ import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { exigirVigenciaNaoFutura } from "../../lib/vigencia";
 import {
   ROTULOS_VINCULO,
   StatusColaborador,
@@ -449,6 +450,15 @@ export async function criarVersaoRegra(
         );
       }
     }
+    // As DUAS pontas da janela, e elas são independentes. Para trás quem
+    // responde é a versão vigente (logo abaixo); para a FRENTE quem responde é
+    // o calendário, porque a elegibilidade é lida por `status = 'ativa'` e não
+    // por data — ver o join de `SELECT_BENEFICIO` no repositório. Sem esta
+    // linha, a regra de 2027 cadastrada em agosto decide hoje: o estagiário
+    // leva 403 num benefício a que tem direito, e a transferência entre CNPJs
+    // deixa de recriar o plano por um critério que ainda não começou.
+    // É a mesma guarda de `criarVersaoEstabelecimento` e `criarVersaoEmpresa`.
+    await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
     const anterior = await buscarRegraAtivaParaAtualizar(cliente, beneficioId);
     if (anterior && dados.inicio_vigencia <= anterior.inicio_vigencia) {
       throw new ErroHttpCampo(

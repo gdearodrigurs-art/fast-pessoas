@@ -283,6 +283,33 @@ export async function listarColaboradores(
   };
 }
 
+/**
+ * A chave que DE FATO ampliou a ficha — eixo 8, e o "de fato" é o ponto.
+ *
+ * A ficha entrega CPF, data de nascimento, e-mail e a lista de vínculos da
+ * pessoa em TODAS as empresas do grupo. Percorrer `/api/colaboradores/1..N`
+ * extraía o CPF e o nascimento do quadro inteiro sem deixar uma linha em
+ * `audit.leitura_sensivel`. Duas chaves compõem o alcance (ver `resolverEscopo`)
+ * e a trilha tem que citar a que abriu o payload naquela leitura, não a mais
+ * ampla nem a "chave da porta": gravar `rh.colaborador.ver.todos` para um gestor
+ * que só alcança a própria equipe é trilha que MENTE, e o projeto já pagou por
+ * uma dessas.
+ *
+ * `null` = nada a registrar. Ler a PRÓPRIA ficha não é leitura de terceiro, e a
+ * conta é a mesma em todos os vínculos da pessoa (a admissão de segundo vínculo
+ * reaproveita a conta), então `ficha.usuario_id` responde por todos eles sem
+ * uma consulta a mais.
+ */
+export function chaveQueAmpliouAFicha(
+  escopo: Escopo,
+  ehAPropriaFicha: boolean
+): string | null {
+  if (ehAPropriaFicha || escopo.alcance === "proprio") return null;
+  return escopo.alcance === "todos"
+    ? "rh.colaborador.ver.todos"
+    : "rh.colaborador.ver";
+}
+
 export async function obterColaborador(
   sessao: PayloadSessao,
   id: number
@@ -294,6 +321,18 @@ export async function obterColaborador(
   const ficha = await buscarFicha(id, escopo);
   if (!ficha) {
     throw new ErroHttp(404, "Colaborador não encontrado.");
+  }
+  const chaveDaLeitura = chaveQueAmpliouAFicha(
+    escopo,
+    ficha.usuario_id === sessao.usuario_id
+  );
+  if (chaveDaLeitura !== null) {
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: chaveDaLeitura,
+      recurso: "colaborador.ficha",
+      registroId: String(id),
+    });
   }
   const podeVerRestritas = await temPermissao(
     sessao.usuario_id,
@@ -1840,6 +1879,13 @@ export async function criarFaixaSalarial(
     if (!(await existeCargo(cliente, cargoId))) {
       throw new ErroHttp(404, "Cargo não encontrado.");
     }
+    // Mesma trava do estabelecimento e da empresa, e aqui ela mexe em DINHEIRO:
+    // a faixa é o gate da promoção e quem a lê pergunta por `status = 'ativa'`,
+    // não por data. A tabela de 2027 cadastrada em agosto de 2026 encerrava a
+    // de 2026 na hora e virava a régua de toda promoção do ano corrente.
+    // A borda (`esquemaNovaFaixaSalarial`) já recusa; esta é a guarda do
+    // servidor, que vale para qualquer chamador e lê "hoje" da MESMA transação.
+    await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
     const ativa = await buscarFaixaAtivaParaAtualizar(cliente, cargoId);
     if (ativa) {
       if (dados.inicio_vigencia <= ativa.inicio_vigencia) {

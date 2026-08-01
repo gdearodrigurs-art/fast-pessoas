@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp-prova",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "jsx": "react-jsx",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["tests/colaboradores.test.ts", "src/dominios/colaboradores/servico.ts"],
+  "exclude": ["node_modules", ".next", ".tmp-testes", ".tmp-prova"]
+}

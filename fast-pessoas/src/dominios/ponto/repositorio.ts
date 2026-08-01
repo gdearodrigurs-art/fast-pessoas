@@ -2137,22 +2137,58 @@ export interface ColaboradorPonto {
   matricula: string;
 }
 
+/**
+ * Quem está na rodada de uma competência: VÍNCULO VIVO em algum dia da janela,
+ * com escala que cobre algum dia dela. Não é "quem está de pé hoje".
+ *
+ * O que muda, e por que é caro: aqui havia `c.status <> 'desligado'`, bandeira
+ * de HOJE decidindo um mês que já passou. Quem era desligado no dia 20 não
+ * gerava apuração NENHUMA — o mês final não virava hora extra, nem adicional
+ * noturno, nem DSR, e a folha importava um mês que o ponto nunca apurou. E
+ * reapurar uma competência antiga depois de qualquer desligamento apagava a
+ * pessoa do próprio mês em que ela trabalhou. Medido na bancada sobre 07/2026,
+ * com uma desligada em 20/07 e outra em 01/08: 60 alvos contra os 62 corretos.
+ *
+ * A régua do vínculo é a da transferência entre CNPJs (migração 0048): o
+ * vínculo velho tem `data_desligamento = D` e o novo nasce em D, então quem
+ * vale para a janela é `data_desligamento > desde` — `>=` contaria a pessoa
+ * duas vezes no dia da virada.
+ *
+ * A JANELA, e por que ela tem padrão: os três chamadores passam o ÚLTIMO DIA de
+ * uma competência, e a pergunta do DP é sempre "quem trabalhou este mês". Sem
+ * `desde` a janela é o mês civil de `ate`, resolvido pelo próprio Postgres
+ * (`date_trunc`) sobre uma coluna `date` — aritmética de calendário, sem
+ * relógio e sem fuso no meio. Quem precisar de outra janela (uma quinzena, um
+ * período de rescisão) passa `desde` explicitamente.
+ *
+ * QUEM SOBRA DA JANELA CONTINUA APARECENDO PELO NOME: o desligado que entra
+ * aqui é reconferido dentro da transação por `conferirCadastroParaApuracao` e
+ * sai em `avisos_cadastro` com nome e matrícula. O que ainda é só CONTAGEM é o
+ * `sem_escala` do serviço — está no relatório da frente como pedido.
+ */
 export async function listarColaboradoresComEscala(
-  dataReferencia: string
+  ate: string,
+  desde?: string
 ): Promise<ColaboradorPonto[]> {
   const linhas = await consultar<{
     id: string;
     nome_completo: string;
     matricula: string;
   }>(
-    `SELECT DISTINCT c.id, c.nome_completo, c.matricula
+    `WITH janela AS (
+       SELECT $1::date AS ate,
+              COALESCE($2::date, date_trunc('month', $1::date)::date) AS desde
+     )
+     SELECT DISTINCT c.id, c.nome_completo, c.matricula
        FROM rh.colaborador c
        JOIN rh.escala_colaborador e ON e.colaborador_id = c.id
-      WHERE c.status <> 'desligado'
-        AND e.inicio_vigencia <= $1::date
-        AND (e.fim_vigencia IS NULL OR e.fim_vigencia >= $1::date)
+      CROSS JOIN janela j
+      WHERE c.data_admissao <= j.ate
+        AND (c.data_desligamento IS NULL OR c.data_desligamento > j.desde)
+        AND e.inicio_vigencia <= j.ate
+        AND (e.fim_vigencia IS NULL OR e.fim_vigencia >= j.desde)
       ORDER BY c.nome_completo`,
-    [dataReferencia]
+    [ate, desde ?? null]
   );
   return linhas.map((linha) => ({
     id: paraNumero(linha.id),

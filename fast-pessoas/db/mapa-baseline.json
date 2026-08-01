@@ -166,9 +166,9 @@
           "arquivos": {
             "src/dominios/clima/repositorio.ts": 3,
             "src/dominios/painel-executivo/repositorio.ts": 9,
-            "src/dominios/pesquisas/repositorio.ts": 2
+            "src/dominios/pesquisas/repositorio.ts": 6
           },
-          "total": 14
+          "total": 18
         },
         {
           "descricao": "Comparacao de igualdade envolvendo nome, rotulo, escopo ou codigo de lugar — a forma mais direta de decidir por nome.",
@@ -438,9 +438,9 @@
             "db/semear/13-pesquisas.js": 3,
             "src/dominios/folha/repositorio.ts": 2,
             "src/dominios/painel-executivo/repositorio.ts": 9,
-            "src/dominios/ponto/repositorio.ts": 1
+            "src/dominios/ponto/repositorio.ts": 2
           },
-          "total": 18
+          "total": 19
         },
         {
           "descricao": "Toda leitura de relogio em JS/TS — a lista completa de candidatos a 'hoje' do lado do Node e do navegador.",
@@ -658,9 +658,10 @@
           "arquivos": {
             "db/exportar-baterias.js": 2,
             "db/migrations/0049_hoje_em_sao_paulo.sql": 12,
+            "db/prova-escala-transferencia.js": 1,
             "src/dominios/folha/repositorio.ts": 2
           },
-          "total": 16
+          "total": 17
         },
         {
           "descricao": "As funcoes que derivam hoje via Intl — separar as que passam year/month/day explicitos das que confiam no formato padrao de en-CA.",
@@ -1297,8 +1298,10 @@
         {
           "descricao": "Aritmetica com literal decimal (fator ou aliquota chumbada) dentro de src/dominios. Esperado: zero.",
           "tipo": "grep",
-          "arquivos": {},
-          "total": 0
+          "arquivos": {
+            "src/dominios/folha/repositorio.ts": 1
+          },
+          "total": 1
         },
         {
           "descricao": "Divisao ou multiplicacao pelos divisores classicos de folha (220, 180, 30, 12, 13, 6) — o defeito original.",
@@ -1387,10 +1390,10 @@
           "arquivos": {
             "src/dominios/ferias/repositorio.ts": 1,
             "src/dominios/painel-executivo/repositorio.ts": 7,
-            "src/dominios/pesquisas/repositorio.ts": 2,
+            "src/dominios/pesquisas/repositorio.ts": 10,
             "src/dominios/ponto/repositorio.ts": 10
           },
-          "total": 20
+          "total": 28
         },
         {
           "descricao": "Esquemas zod de campo monetario: os que arredondam para 2 casas na borda e os que NAO arredondam.",
@@ -1932,7 +1935,7 @@
             "src/dominios/clima/repositorio.ts": 1,
             "src/dominios/clima/servico.ts": 2,
             "src/dominios/colaboradores/repositorio.ts": 1,
-            "src/dominios/colaboradores/servico.ts": 4,
+            "src/dominios/colaboradores/servico.ts": 5,
             "src/dominios/demandas/servico.ts": 2,
             "src/dominios/desligamento/repositorio.ts": 1,
             "src/dominios/desligamento/servico.ts": 2,
@@ -1944,10 +1947,10 @@
             "src/dominios/ponto/servico.ts": 1,
             "src/dominios/recrutamento/servico.ts": 2,
             "src/dominios/sst/repositorio.ts": 1,
-            "src/dominios/sst/servico.ts": 2,
+            "src/dominios/sst/servico.ts": 4,
             "src/dominios/usuarios/esquemas.ts": 1
           },
-          "total": 33
+          "total": 36
         },
         {
           "descricao": "Definicoes e chamadas da funcao de trilha de leitura — separa os repositorios que a implementam dos servicos que a chamam.",
@@ -1961,7 +1964,7 @@
             "src/dominios/clima/repositorio.ts": 1,
             "src/dominios/clima/servico.ts": 3,
             "src/dominios/colaboradores/repositorio.ts": 1,
-            "src/dominios/colaboradores/servico.ts": 5,
+            "src/dominios/colaboradores/servico.ts": 6,
             "src/dominios/demandas/servico.ts": 3,
             "src/dominios/desligamento/repositorio.ts": 1,
             "src/dominios/desligamento/servico.ts": 3,
@@ -1973,9 +1976,9 @@
             "src/dominios/ponto/servico.ts": 2,
             "src/dominios/recrutamento/servico.ts": 3,
             "src/dominios/sst/repositorio.ts": 1,
-            "src/dominios/sst/servico.ts": 3
+            "src/dominios/sst/servico.ts": 4
           },
-          "total": 44
+          "total": 46
         },
         {
           "descricao": "Os INSERTs fisicos na trilha de leitura — prova de quantos escritores existem e de que todos gravam as quatro colunas.",
@@ -2458,10 +2461,10 @@
             "src/dominios/painel-executivo/esquemas.ts": 2,
             "src/dominios/portais/colaborador-servico.ts": 6,
             "src/dominios/portais/servico.ts": 1,
-            "src/dominios/sst/servico.ts": 2,
+            "src/dominios/sst/servico.ts": 3,
             "src/dominios/usuarios/esquemas.ts": 1
           },
-          "total": 19
+          "total": 20
         },
         {
           "descricao": "Tabelas de dominio que so recebem INSERT por migration — indicio de tabela sem tela de administracao.",
@@ -2567,10 +2570,13 @@
           "arquivos": {
             "src/dominios/admissao/repositorio.ts": 1,
             "src/dominios/avaliacao/repositorio.ts": 2,
+            "src/dominios/beneficios/esquemas.ts": 1,
             "src/dominios/beneficios/repositorio.ts": 5,
+            "src/dominios/beneficios/servico.ts": 1,
             "src/dominios/clima/repositorio.ts": 2,
+            "src/dominios/colaboradores/esquemas.ts": 1,
             "src/dominios/colaboradores/repositorio.ts": 13,
-            "src/dominios/colaboradores/servico.ts": 1,
+            "src/dominios/colaboradores/servico.ts": 2,
             "src/dominios/demandas/repositorio.ts": 13,
             "src/dominios/desligamento/repositorio.ts": 3,
             "src/dominios/estrutura/repositorio.ts": 8,
@@ -2583,17 +2589,19 @@
             "src/dominios/recrutamento/repositorio.ts": 8,
             "src/lib/vigencia.ts": 2
           },
-          "total": 77
+          "total": 81
         },
         {
           "descricao": "Quem chama a guarda contra vigencia futura. Cruzar com a anterior: os catalogos lidos por status cujo servico NAO aparece aqui sao as violacoes.",
           "tipo": "grep",
           "arquivos": {
-            "src/dominios/colaboradores/servico.ts": 2,
+            "src/dominios/beneficios/esquemas.ts": 1,
+            "src/dominios/beneficios/servico.ts": 2,
+            "src/dominios/colaboradores/servico.ts": 3,
             "src/dominios/estrutura/servico.ts": 3,
             "src/lib/vigencia.ts": 1
           },
-          "total": 6
+          "total": 10
         },
         {
           "descricao": "O padrao 'pega a mais recente e torce'. Ler cada acerto no arquivo para ver se HA filtro de data acima; sem ele, e leitura de hoje respondendo por outra epoca.",
@@ -2658,5 +2666,5 @@
       ]
     }
   },
-  "gerado_em": "2026-08-01T19:53:38.883Z"
+  "gerado_em": "2026-08-01T23:03:04.970Z"
 }

@@ -475,7 +475,13 @@ export const esquemaNovaFaixaSalarial = z
   .object({
     faixa_min: esquemaSalario,
     faixa_max: esquemaSalario,
-    inicio_vigencia: esquemaData,
+    // Não futura: a faixa salarial é o GATE da promoção, e quem a lê
+    // (`faixaVigenteDoCargo`, demandas/servico.ts:1173) pergunta por
+    // `status = 'ativa'`, sem data. Cadastrar em agosto a tabela de 2027
+    // encerrava a de 2026 na hora e passava a medir TODA promoção de 2026
+    // contra a faixa do ano que vem — cobrando justificativa de exceção que
+    // não deveria existir. Ver esquemaVigenciaNaoFutura.
+    inicio_vigencia: esquemaVigenciaNaoFutura,
   })
   .refine((dados) => dados.faixa_max >= dados.faixa_min, {
     path: ["faixa_max"],

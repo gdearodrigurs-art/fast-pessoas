@@ -1,0 +1,25 @@
+{
+  // Bancada da frente "escala na transferência entre CNPJs". Compila o serviço
+  // de demandas para JS chamável de dentro do Node, porque o defeito é de
+  // BANCO: só rodando o ato de verdade contra uma bancada as duas escalas
+  // aparecem (a velha aberta para sempre, a nova inexistente).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp-prova-escala",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "jsx": "react-jsx",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/dominios/demandas/servico.ts"],
+  "exclude": [
+    "node_modules",
+    ".next",
+    ".tmp-testes",
+    ".tmp-prova",
+    ".tmp-prova-escala"
+  ]
+}

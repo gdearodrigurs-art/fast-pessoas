@@ -646,6 +646,21 @@ export async function excluirVariaveisDePonto(
  * (rh.apuracao_ponto.jornada_versao_id), nunca da jornada "atual" — é ela que
  * transforma minutos de falta em DIAS de falta, e trocar de jornada em agosto
  * não pode mexer no que junho apurou.
+ *
+ * SEM FILTRO DE VÍNCULO, e isso é a correção: aqui havia `c.status = 'ativo'`,
+ * bandeira de HOJE decidindo o passado — o mesmo defeito que `VINCULO_NA_DATA`
+ * declara corrigido 400 linhas acima. Reimportar uma competência antiga depois
+ * de um desligamento apagava as horas extras e o adicional noturno do mês final
+ * de quem saiu: medido na bancada sobre 07/2026 com duas desligadas (uma em
+ * 20/07, outra em 01/08), sumiam 14.400 min de adicional noturno (240 h) e
+ * 1.800 min de HE 50% — 60 pessoas importadas onde a apuração tinha 62.
+ *
+ * Não entrou `VINCULO_NA_DATA` no lugar porque aqui ele seria redundante e
+ * perigoso: a EXISTÊNCIA da linha em rh.apuracao_ponto para (ano, mes) já é a
+ * prova de que a pessoa trabalhou a competência — foi o motor do ponto que a
+ * escreveu, depois de resolver escala e vínculo dia a dia. Filtrar de novo por
+ * data aqui seria uma segunda régua sobre o mesmo fato, e a segunda régua é
+ * exatamente o que produz holerite que não fecha com o espelho.
  */
 export interface ApuracaoParaFolha {
   colaborador_id: number;
@@ -683,7 +698,6 @@ export async function listarApuracaoDePontoDaCompetencia(
        JOIN rh.colaborador c ON c.id = a.colaborador_id
        JOIN rh.jornada_versao j ON j.id = a.jornada_versao_id
       WHERE a.ano = $1 AND a.mes = $2
-        AND c.status = 'ativo'
       ORDER BY c.nome_completo, a.colaborador_id`,
     [ano, mes]
   );
@@ -736,9 +750,41 @@ export interface AdesaoDesconto {
   beneficio_nome: string;
 }
 
-/** Adesões vigentes e ativas com desconto — insumo do botão "importar descontos". */
+/**
+ * As adesões que valiam NA DATA da competência — insumo do botão "importar
+ * descontos".
+ *
+ * Era a ÚNICA consulta deste arquivo que não recebia data, num arquivo cujo
+ * cabeçalho diz em maiúsculas que tudo se resolve na data da competência. Lia
+ * `a.fim IS NULL AND a.status = 'ativa' AND c.status = 'ativo'` — três
+ * bandeiras de HOJE decidindo um mês passado, e errando nas duas direções:
+ *
+ *   • quem CANCELOU o benefício depois do fechamento (fim em 15/08) perdia o
+ *     desconto de julho, que era devido — a adesão valeu o mês inteiro;
+ *   • quem ADERIU depois (início em 05/08) era descontado ao reimportar julho,
+ *     de um benefício que ainda não tinha;
+ *   • quem foi DESLIGADO em 01/08 perdia os quatro descontos do último mês.
+ *
+ * Medido na bancada sobre 07/2026: 274 linhas / R$ 20.804,70 pela leitura de
+ * hoje contra 277 / R$ 21.008,70 na data — 5 linhas que faltavam e 2 que
+ * sobravam.
+ *
+ * `status <> 'suspensa'` no lugar de `= 'ativa'`: 'cancelada' já é resolvida
+ * pela janela (o CHECK do banco garante que cancelada tem `fim`), e é
+ * justamente ela que a leitura antiga jogava fora. RESÍDUO CONHECIDO, na mesma
+ * linha do que `VINCULO_NA_DATA` documenta para 'afastado': suspensão não tem
+ * par de datas em rh.adesao, então 'suspensa' continua sendo bandeira de hoje.
+ * Suspender em agosto ainda apaga o desconto de julho numa reimportação.
+ * Resolver isso é dar janela à suspensão — decisão de negócio, não conserto
+ * mecânico, e está registrada em docs/pendencias.md.
+ *
+ * O vínculo entra por `VINCULO_NA_DATA`, a mesma régua de quem é calculado na
+ * competência: importar desconto para quem a folha não calcula seria criar
+ * variável órfã.
+ */
 export async function listarDescontosDeAdesao(
-  cliente: PoolClient
+  cliente: PoolClient,
+  dataRef: string
 ): Promise<AdesaoDesconto[]> {
   const { rows } = await cliente.query<{
     colaborador_id: string;
@@ -751,10 +797,12 @@ export async function listarDescontosDeAdesao(
        FROM rh.adesao a
        JOIN rh.colaborador c ON c.id = a.colaborador_id
        JOIN rh.beneficio b ON b.id = a.beneficio_id
-      WHERE a.fim IS NULL AND a.status = 'ativa'
+      WHERE a.inicio <= $1 AND (a.fim IS NULL OR a.fim >= $1)
+        AND a.status <> 'suspensa'
         AND a.desconto IS NOT NULL AND a.desconto > 0
-        AND c.status = 'ativo'
-      ORDER BY c.nome_completo, b.nome, a.id`
+        AND ${VINCULO_NA_DATA}
+      ORDER BY c.nome_completo, b.nome, a.id`,
+    [dataRef]
   );
   return rows.map((linha) => ({
     colaborador_id: Number(linha.colaborador_id),

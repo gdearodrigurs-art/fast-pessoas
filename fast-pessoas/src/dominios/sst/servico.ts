@@ -70,6 +70,11 @@ const TABELA_CAT = "rh.cat";
 const TABELA_CIENCIA = "rh.ciencia";
 const CHAVE_GERIR = "sst.gerir";
 const CHAVE_SAUDE_VER = "sst.saude.ver";
+// Chave da PORTA do painel de SST — e, no caso da CAT, a permissão que de
+// fato autoriza a leitura: não há chave mais fina sobre a CAT, então é ela
+// que vai para a trilha (eixo 8: a chave gravada é a que autorizou, não a
+// mais bonita).
+const CHAVE_VER = "sst.ver";
 const RECURSO_RESTRICOES = "rh.aso.restricoes";
 const RECURSO_PSICOSSOCIAL = "rh.avaliacao_psicossocial.observacoes";
 
@@ -968,13 +973,62 @@ export interface CatVisao {
   registrada_em: string;
 }
 
-export async function listarCatsVisao(): Promise<CatVisao[]> {
+/** Uma linha de `audit.leitura_sensivel`, antes de ir ao banco. */
+export interface EntradaTrilhaLeitura {
+  usuarioId: number;
+  chavePermissao: string;
+  recurso: string;
+  registroId: string;
+}
+
+/**
+ * A trilha da CAT: **uma linha por CAT devolvida**, sempre — e não só quando
+ * algum campo está cifrado. A CAT não tem campo cifrado nenhum, e mesmo assim
+ * é o pior payload de saúde do módulo: nome, matrícula, tipo do acidente,
+ * data e a `descricao` livre de até 4.000 caracteres, que é onde o médico do
+ * trabalho escreve o quadro clínico. Amarrar a trilha ao dado DEVOLVIDO (e
+ * não à existência de um cifrado) é o ponto do eixo 8.
+ *
+ * Puro de propósito: é o que a suíte consegue provar sem abrir banco.
+ */
+export function entradasTrilhaCat(
+  usuarioId: number,
+  cats: { id: number }[]
+): EntradaTrilhaLeitura[] {
+  return cats.map((cat) => ({
+    usuarioId,
+    chavePermissao: CHAVE_VER,
+    recurso: TABELA_CAT,
+    registroId: String(cat.id),
+  }));
+}
+
+/**
+ * Lista das CATs para o painel. Recebe a sessão porque **precisa** dela: sem
+ * saber quem está lendo, a função seria estruturalmente incapaz de deixar
+ * rastro — foi assim que a empresa inteira de acidentes nominados saía por
+ * `GET /api/sst/cats` com `audit.leitura_sensivel` parado em zero.
+ */
+export async function listarCatsVisao(
+  sessao: PayloadSessao
+): Promise<CatVisao[]> {
   const linhas = await listarCats();
-  return linhas.map((linha) => ({
+  const cats: CatVisao[] = linhas.map((linha) => ({
     ...linha,
     tipo_rotulo: ROTULOS_TIPO_CAT[linha.tipo],
     status_rotulo: ROTULOS_STATUS_CAT[linha.status],
   }));
+
+  const trilha = entradasTrilhaCat(sessao.usuario_id, cats);
+  if (trilha.length > 0) {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      for (const entrada of trilha) {
+        await registrarLeituraSensivel(cliente, entrada);
+      }
+    });
+  }
+
+  return cats;
 }
 
 export async function registrarCat(

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { cpfValido, TIPOS_VINCULO, TipoVinculo } from "../colaboradores/esquemas";
+import {
+  cpfValido,
+  hojeNaOperacao,
+  TIPOS_VINCULO,
+  TipoVinculo,
+} from "../colaboradores/esquemas";
 
 // ------------------------------------------------------------------ benefício
 
@@ -143,11 +148,31 @@ export function descreverCriterio(
   return partes.length > 0 ? partes.join(" · ") : "Todos os colaboradores";
 }
 
+// A regra de elegibilidade é lida por STATUS, não por data: o `LEFT JOIN` de
+// `SELECT_BENEFICIO` (repositorio.ts) casa por `r.status = 'ativa'`, e é esse
+// mesmo join que alimenta o catálogo do colaborador, `solicitarAdesao`,
+// `efetivarAdesao` e o critério que decide o que atravessa a transferência
+// entre CNPJs. Logo, versão gravada hoje com início em 2027 passa a mandar
+// HOJE — e ainda encerra a versão que de fato vale com `fim_vigencia` em
+// 2026-12-31, abrindo um buraco de meses na leitura por data.
+//
+// A guarda que vale é a do serviço (`exigirVigenciaNaoFutura`, dentro da mesma
+// transação da escrita, lendo o "hoje" do banco no fuso da operação). Esta
+// aqui é a borda: recusa antes de abrir transação e dá o campo ao formulário.
+const esquemaInicioVigencia = esquemaData.refine(
+  (valor) => valor <= hojeNaOperacao(),
+  {
+    message:
+      "O início da vigência não pode ser no futuro: a versão nova passa a " +
+      "valer assim que é gravada, e o sistema não tem regra agendada.",
+  }
+);
+
 export const esquemaNovaRegra = z.object({
   criterio: esquemaCriterio.optional().default({}),
   valor_padrao: esquemaValor.nullable().optional(),
   desconto_padrao: esquemaValor.nullable().optional(),
-  inicio_vigencia: esquemaData,
+  inicio_vigencia: esquemaInicioVigencia,
 });
 
 export type NovaRegra = z.infer<typeof esquemaNovaRegra>;

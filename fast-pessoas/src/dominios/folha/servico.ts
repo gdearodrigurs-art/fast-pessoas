@@ -589,7 +589,14 @@ export async function importarDescontosBeneficios(
     }
     // Reimportação idempotente: apaga o lote anterior e regrava das adesões.
     const removidas = await excluirVariaveisDeBeneficio(cliente, competenciaId);
-    const adesoes = await listarDescontosDeAdesao(cliente);
+    // NA DATA DA COMPETÊNCIA, a mesma que foi para listarRubricasVigentes três
+    // linhas acima. A data sempre esteve aqui e não descia: reimportar julho em
+    // agosto descontava benefício de quem aderiu em agosto e deixava de
+    // descontar de quem cancelou depois do fechamento.
+    const adesoes = await listarDescontosDeAdesao(
+      cliente,
+      dataReferenciaCompetencia(competencia.ano, competencia.mes)
+    );
     for (const adesao of adesoes) {
       await inserirVariavel(cliente, {
         competencia_id: competenciaId,
