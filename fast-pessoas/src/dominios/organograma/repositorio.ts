@@ -1,4 +1,5 @@
 import { consultar } from "../../lib/banco";
+import { VINCULO_ATUAL } from "../../lib/sql-vinculo";
 import { OpcaoOrganograma, STATUS_VAGA_EM_ABERTO } from "./esquemas";
 
 // ------------------------------------------------------------------ leitura plana
@@ -137,8 +138,15 @@ export async function listarVagasEmAberto(): Promise<LinhaVagaEmAberto[]> {
        JOIN rh.requisicao_vaga r ON r.id = v.requisicao_id
        JOIN rh.cargo_versao cv ON cv.id = r.cargo_versao_id
        LEFT JOIN rh.estabelecimento_versao ev ON ev.id = r.estabelecimento_versao_id
+       -- Pela FUNÇÃO, nunca por usuario_id. A 0046 derrubou
+       -- colaborador_usuario_id_key: a conta de acesso passou a ser da PESSOA
+       -- e é projetada para todos os vínculos dela, então
+       -- "ON solicitante.usuario_id = ..." devolve N linhas depois de uma
+       -- transferência — a mesma vaga aparecia duas vezes na árvore, com a
+       -- mesma chave React, e a linha do vínculo desligado ainda disparava o
+       -- aviso "vaga sem gestor identificado" para um gestor que está na tela.
        LEFT JOIN rh.colaborador solicitante
-              ON solicitante.usuario_id = r.solicitante_usuario_id
+              ON solicitante.id = ${VINCULO_ATUAL("r.solicitante_usuario_id")}
       WHERE r.status = 'aprovada'
         AND v.status = ANY ($1::text[])
       ORDER BY v.prazo_alvo, v.id`,

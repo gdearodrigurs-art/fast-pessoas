@@ -2,6 +2,7 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
+import { exigirVigenciaNaoFutura } from "../../lib/vigencia";
 import { PayloadSessao } from "../identidade/esquemas";
 import {
   CriacaoCentroCusto,
@@ -125,6 +126,7 @@ export async function criarVersaoEmpresa(
     await comTransacao(sessao.usuario_id, async (cliente) => {
       const empresa = await buscarEmpresa(cliente, empresaId);
       if (!empresa) throw new ErroHttp(404, "Empresa não encontrada.");
+      await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
       const ativa = await buscarVersaoEmpresaAtiva(cliente, empresaId, true);
       if (ativa) {
         if (dados.inicio_vigencia <= ativa.inicio_vigencia) {
@@ -281,6 +283,7 @@ export async function criarVersaoCentroCusto(
   await comTransacao(sessao.usuario_id, async (cliente) => {
     const centro = await buscarCentroCusto(cliente, centroCustoId);
     if (!centro) throw new ErroHttp(404, "Centro de custo não encontrado.");
+    await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
     const ativa = await buscarVersaoCentroCustoAtiva(
       cliente,
       centroCustoId,

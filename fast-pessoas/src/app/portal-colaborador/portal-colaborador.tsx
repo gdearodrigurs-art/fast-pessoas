@@ -127,6 +127,34 @@ function CartaoMeusDados({ dados }: { dados: MeusDados }) {
           <dt>Gestor</dt>
           <dd>{dados.gestor_nome ?? "—"}</dd>
         </div>
+        {/* O contrato anterior no mesmo grupo existe e é DELE: a ficha de cada
+            um abre pelo mesmo alcance que já libera o próprio ponto e os
+            próprios documentos. Calar sobre ele era o portal negar ao
+            trabalhador a única coisa que a Onda I prometeu guardar — o
+            histórico. */}
+        {dados.contratos_anteriores.length > 0 && (
+          <div className={estilos.dado}>
+            <dt>Contratos anteriores no grupo</dt>
+            <dd>
+              {dados.contratos_anteriores.map((contrato) => (
+                <div key={contrato.colaborador_id}>
+                  <Link
+                    className={estilos.ligacao}
+                    href={`/colaboradores/${contrato.colaborador_id}`}
+                  >
+                    {contrato.empresa_nome ?? "Empresa do grupo"} — matrícula{" "}
+                    {contrato.matricula}
+                  </Link>{" "}
+                  ({formatarData(contrato.data_admissao)} a{" "}
+                  {contrato.data_desligamento === null
+                    ? "hoje"
+                    : formatarData(contrato.data_desligamento)}
+                  )
+                </div>
+              ))}
+            </dd>
+          </div>
+        )}
       </dl>
       {/* Transparência sobre o que NÃO está aqui: remuneração é assunto do
           holerite e da folha, com chave própria (rh.posicao.ver). */}

@@ -16,6 +16,10 @@ import {
   registrarLeituraSensivel,
   temPermissao,
 } from "../colaboradores/repositorio";
+import {
+  FiltroEstrutura,
+  OpcoesFiltroEstrutura,
+} from "../estrutura/esquemas";
 import { PayloadSessao } from "../identidade/esquemas";
 import { validarTotpDoUsuario } from "../identidade/servico";
 import { calcularFolha, EntradaMotor, ErroMotor, VariavelMotor } from "./calculo";
@@ -30,6 +34,7 @@ import {
   CODIGOS_DO_MOTOR,
   competenciaCorrente,
   competenciaEhRetroativa,
+  dataReferenciaCompetencia,
   EncerramentoRubrica,
   esquemaEntradaCasoTeste,
   esquemaSaidaCasoTeste,
@@ -73,6 +78,9 @@ import {
   registrarCalculadaPor,
   FolhaResumo,
   ImpedidoCalculo,
+  AvisoProporcional,
+  listarAvisosProporcional,
+  hojeParaFolha,
   indicadorFolhaNoPrazo,
   inserirCompetencia,
   inserirFolhaColaborador,
@@ -100,6 +108,7 @@ import {
   listarVersoesParametros,
   marcarVersaoConferida,
   mudarEstado,
+  resumoEstruturaDaCompetencia,
   RubricaVigente,
   SituacaoConferencia,
   situacaoConferenciaTabelas,
@@ -257,11 +266,23 @@ export interface VisaoCompetencia {
   pode: PermissoesFolha;
   competencia: CompetenciaResumo;
   impedidos: ImpedidoCalculo[];
+  /**
+   * Quem mudou de estado dentro do mês (admissão, desligamento ou
+   * transferência entre CNPJs). Não impede o cálculo — cobra tratamento
+   * manual, porque a F1 não faz proporcional.
+   */
+  avisos_proporcional: AvisoProporcional[];
   variaveis: VariavelResumo[];
   rubricas_lancaveis: RubricaLancavel[];
   colaboradores: ColaboradorOpcao[];
   tabelas_conferidas: SituacaoConferencia[];
+  /** JÁ RECORTADAS pelos três campos, quando o recorte veio na consulta. */
   folhas: FolhaComItens[];
+  /** Quantas linhas a competência tem SEM recorte — o "de N" do cabeçalho. */
+  folhas_na_competencia: number;
+  /** Sempre da competência inteira: filtrar não pode apagar os seletores. */
+  opcoes_estrutura: OpcoesFiltroEstrutura;
+  /** Os totais são DO RECORTE — soma exatamente as linhas devolvidas acima. */
   totais: {
     total_proventos_centavos: number;
     total_descontos_centavos: number;
@@ -295,32 +316,47 @@ function classificarLancavel(
   return null;
 }
 
+/**
+ * @param filtro recorte por registro/lotação/centro de custo. Ele vale NO SQL —
+ * o que não cai no recorte nem sai do banco. Filtrar no navegador seria mandar
+ * a folha inteira (salário e memória de cálculo de cada um) para esconder a
+ * maior parte dela, e ainda deixaria o total sendo o total geral.
+ */
 export async function montarVisaoCompetencia(
   sessao: PayloadSessao,
-  competenciaId: number
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
 ): Promise<VisaoCompetencia> {
   const competencia = await buscarCompetencia(competenciaId);
   if (!competencia) {
     throw new ErroHttp(404, "Competência não encontrada.");
   }
+  // A tela mostra o que o cálculo VAI usar — então pergunta pela MESMA data que
+  // ele. Ler "vigente hoje" aqui deixaria a conferência olhando uma rubrica e o
+  // motor usando outra, sem nada na tela denunciando a diferença.
+  const dataRef = dataReferenciaCompetencia(competencia.ano, competencia.mes);
   const [
     pode,
     impedidos,
+    avisosProporcional,
     variaveis,
     rubricas,
     colaboradores,
     conferencia,
     folhas,
     itens,
+    estrutura,
   ] = await Promise.all([
     permissoesFolha(sessao.usuario_id),
-    listarImpedidos(),
+    listarImpedidos(dataRef),
+    listarAvisosProporcional(competencia.ano, competencia.mes),
     listarVariaveis(competenciaId),
-    listarRubricasVigentes(),
+    listarRubricasVigentes(dataRef),
     listarColaboradoresAtivos(),
-    situacaoConferenciaTabelas(),
-    listarFolhasDaCompetencia(competenciaId),
-    listarItensDaCompetencia(competenciaId),
+    situacaoConferenciaTabelas(dataRef),
+    listarFolhasDaCompetencia(competenciaId, filtro),
+    listarItensDaCompetencia(competenciaId, filtro),
+    resumoEstruturaDaCompetencia(competenciaId),
   ]);
 
   if (folhas.length > 0) {
@@ -360,6 +396,7 @@ export async function montarVisaoCompetencia(
     pode,
     competencia,
     impedidos,
+    avisos_proporcional: avisosProporcional,
     variaveis,
     rubricas_lancaveis: rubricas
       .map(classificarLancavel)
@@ -370,6 +407,8 @@ export async function montarVisaoCompetencia(
       ...folha,
       itens: itensPorFolha.get(folha.id) ?? [],
     })),
+    folhas_na_competencia: estrutura.total_folhas,
+    opcoes_estrutura: estrutura.opcoes,
     totais,
   };
 }
@@ -399,7 +438,7 @@ export async function lancarVariavel(
   dados: LancarVariavel
 ): Promise<VariavelResumo[]> {
   await comTransacao(sessao.usuario_id, async (cliente) => {
-    await exigirCompetenciaAberta(cliente, competenciaId);
+    const competencia = await exigirCompetenciaAberta(cliente, competenciaId);
     const perfil = await perfilPorColaborador(dados.colaborador_id, cliente);
     if (!perfil) {
       throw new ErroHttpCampo(404, "Colaborador não encontrado.", "colaborador_id");
@@ -411,7 +450,13 @@ export async function lancarVariavel(
         "colaborador_id"
       );
     }
-    const rubricas = await listarRubricasVigentes(cliente);
+    // A versão que o CÁLCULO vai usar. Validar o lançamento contra a versão de
+    // hoje e calcular com a da competência aceitaria lançamento em rubrica que
+    // não existia no mês — ou recusaria a que existia.
+    const rubricas = await listarRubricasVigentes(
+      dataReferenciaCompetencia(competencia.ano, competencia.mes),
+      cliente
+    );
     const rubrica = rubricas.find((item) => item.rubrica_id === dados.rubrica_id);
     if (!rubrica) {
       throw new ErroHttpCampo(
@@ -528,8 +573,11 @@ export async function importarDescontosBeneficios(
   competenciaId: number
 ): Promise<{ importadas: number; removidas: number; variaveis: VariavelResumo[] }> {
   const resultado = await comTransacao(sessao.usuario_id, async (cliente) => {
-    await exigirCompetenciaAberta(cliente, competenciaId);
-    const rubricas = await listarRubricasVigentes(cliente);
+    const competencia = await exigirCompetenciaAberta(cliente, competenciaId);
+    const rubricas = await listarRubricasVigentes(
+      dataReferenciaCompetencia(competencia.ano, competencia.mes),
+      cliente
+    );
     const rubricaBeneficio = rubricas.find(
       (item) => item.codigo === CODIGO_DESCONTO_BENEFICIO
     );
@@ -631,7 +679,10 @@ export async function importarVariaveisDoPonto(
 ): Promise<ResultadoImportacaoPonto> {
   const resultado = await comTransacao(sessao.usuario_id, async (cliente) => {
     const competencia = await exigirCompetenciaAberta(cliente, competenciaId);
-    const rubricas = await listarRubricasVigentes(cliente);
+    const rubricas = await listarRubricasVigentes(
+      dataReferenciaCompetencia(competencia.ano, competencia.mes),
+      cliente
+    );
     const porCodigo = new Map(rubricas.map((item) => [item.codigo, item]));
     const exigir = (codigo: string): RubricaVigente => {
       const rubrica = porCodigo.get(codigo);
@@ -892,20 +943,29 @@ export async function calcularCompetencia(
     const estadoAnterior: EstadoCompetencia = competencia.estado;
     await mudarEstado(cliente, competenciaId, estadoAnterior, "calculo");
 
-    const { tabelas, faltantes } = await tabelasVigentes(cliente);
+    // A ÚNICA data deste cálculo. Todo insumo com vigência — salário, jornada,
+    // dependentes, versão de rubrica e as três tabelas legais — se resolve nela.
+    // Antes, só `listarVariaveis` sabia de que mês era a folha; o resto lia o
+    // cadastro de AGORA, então calcular julho em agosto pagava o salário de
+    // agosto e RECALCULAR devolvia outro número a cada dia que passasse. É a
+    // mesma régua com que a apropriação (0047) decide onde o custo cai: o
+    // sistema já usava a competência para saber ONDE, faltava para saber QUANTO.
+    const dataRef = dataReferenciaCompetencia(competencia.ano, competencia.mes);
+
+    const { tabelas, faltantes } = await tabelasVigentes(dataRef, cliente);
     if (!tabelas) {
       throw new ErroHttp(
         409,
-        `Sem tabela legal vigente: ${faltantes
+        `Sem tabela legal vigente em ${formatarCompetencia(competencia.ano, competencia.mes)}: ${faltantes
           .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
           .join(", ")} — cadastre em Parâmetros antes de calcular.`
       );
     }
     const [rubricas, colaboradores, variaveis, impedidos] = await Promise.all([
-      listarRubricasVigentes(cliente),
-      listarColaboradoresParaCalculo(cliente),
+      listarRubricasVigentes(dataRef, cliente),
+      listarColaboradoresParaCalculo(cliente, dataRef),
       listarVariaveis(competenciaId, cliente),
-      listarImpedidos(cliente),
+      listarImpedidos(dataRef, cliente),
     ]);
 
     const variaveisPorColaborador = new Map<number, VariavelMotor[]>();
@@ -1042,7 +1102,13 @@ export async function aprovarCompetencia(
         "Segregação de funções: quem calculou não pode aprovar a mesma competência — outro usuário com a permissão de aprovação precisa fazê-lo."
       );
     }
-    const situacao = await situacaoConferenciaTabelas(cliente);
+    // A conferência tem que ser a das versões QUE CALCULARAM esta competência.
+    // Conferir a tabela de 2027 não diz nada sobre a folha de 2026, e era isso
+    // que o gate aceitava enquanto lia por "ativa".
+    const situacao = await situacaoConferenciaTabelas(
+      dataReferenciaCompetencia(competencia.ano, competencia.mes),
+      cliente
+    );
     const pendentes = situacao.filter(
       (item) => item.versao_id === null || !item.conferido_dp
     );
@@ -1240,9 +1306,14 @@ export interface ResultadoSuite {
  * alarme desenhado — os casos devem ser revisados junto da tabela.
  */
 export async function executarSuite(): Promise<ResultadoSuite> {
+  // Aqui HOJE é a data certa, e é a única parte da folha em que é: a suite não
+  // fala de competência nenhuma, ela pergunta "as tabelas que estão no ar agora
+  // ainda produzem os números esperados?". É por isso que a tabela nova faz a
+  // suite falhar — o alarme é o objetivo.
+  const dataRef = await hojeParaFolha();
   const [{ tabelas, faltantes }, rubricas, casos] = await Promise.all([
-    tabelasVigentes(),
-    listarRubricasVigentes(),
+    tabelasVigentes(dataRef),
+    listarRubricasVigentes(dataRef),
     listarCasosTesteAtivos(),
   ]);
   if (!tabelas) {
@@ -1274,12 +1345,15 @@ export interface VisaoParametros {
 }
 
 export async function montarVisaoParametros(): Promise<VisaoParametros> {
+  // Tela de catálogo: mostra o que vale HOJE, e não fala de competência. O gate
+  // da aprovação é que confere na data da competência (aprovarCompetencia).
+  const hoje = await hojeParaFolha();
   const [rubricas, inss, irrf, gerais, conferencia] = await Promise.all([
     listarCatalogoRubricas(),
     listarVersoesInss(),
     listarVersoesIrrf(),
     listarVersoesParametros(),
-    situacaoConferenciaTabelas(),
+    situacaoConferenciaTabelas(hoje),
   ]);
   return { rubricas, inss, irrf, gerais, conferencia };
 }

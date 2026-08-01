@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 import { ReactNode } from "react";
+import { ROTULOS_VINCULO } from "@/dominios/colaboradores/esquemas";
 import {
   ROTULOS_NIVEL_APROVACAO,
   ROTULOS_TIPO_MOVIMENTACAO,
   rotuloEstagioCadeia,
+  rotuloSituacaoEfeito,
+  situacaoDoEfeito,
 } from "@/dominios/demandas/esquemas";
 import comum from "./comum.module.css";
 import { formatarData, formatarDataHora } from "./formato";
@@ -66,6 +69,15 @@ export function CartaoMovimentacao({
 }) {
   const { demanda, movimentacao, etapas } = dados;
   const estagio = rotuloEstagioCadeia(etapas);
+  // Aprovar e aplicar são dois momentos: o selo diz em qual deles o pedido
+  // está, e a data pretendida aparece por extenso para não haver dúvida sobre
+  // quando a vida da pessoa muda.
+  const situacaoEfeito = situacaoDoEfeito({
+    status_demanda: demanda.status,
+    aplicada_em: movimentacao.aplicada_em,
+    efeito_vencido: movimentacao.efeito_vencido,
+    etapas,
+  });
   const promocao = movimentacao.tipo === "promocao";
   // A transferência entre empresas do grupo (0048) mostra o par de REGISTRO
   // (o CNPJ), não o de cargo nem o de local: é o que muda nela.
@@ -99,16 +111,19 @@ export function CartaoMovimentacao({
         ) : (
           <span
             className={`${comum.badge} ${
-              demanda.status === "recusada"
+              situacaoEfeito === "cancelado"
                 ? comum.badgeDanger
-                : comum.badgeSuccess
+                : situacaoEfeito === "a_aplicar"
+                  ? comum.badgeWarning
+                  : comum.badgeSuccess
             }`}
           >
-            {demanda.status === "recusada"
+            {situacaoEfeito === "cancelado"
               ? "Reprovada na cadeia"
-              : movimentacao.aplicada_em
-                ? "Aprovada e aplicada"
-                : "Aprovada"}
+              : rotuloSituacaoEfeito(
+                  situacaoEfeito,
+                  formatarData(movimentacao.data_pretendida)
+                )}
           </span>
         )}
         {movimentacao.dentro_faixa === false && (
@@ -125,6 +140,19 @@ export function CartaoMovimentacao({
           ? ` · aplicada em ${formatarDataHora(movimentacao.aplicada_em)}`
           : ""}
       </div>
+      {situacaoEfeito === "programado" && (
+        <div className={comum.meta}>
+          Nada muda no cadastro até{" "}
+          {formatarData(movimentacao.data_pretendida)}: o efeito é aplicado na
+          data, pelo próprio pedido.
+        </div>
+      )}
+      {situacaoEfeito === "a_aplicar" && (
+        <div className={comum.avisoFaixa}>
+          A vigência aprovada já chegou e o efeito ainda não foi aplicado no
+          cadastro.
+        </div>
+      )}
       <div className={comum.descricao}>
         {rotuloPar}: <b>{de ?? "—"}</b> → <b>{para ?? "—"}</b>
         {!promocao && movimentacao.centro_custo_destino
@@ -139,13 +167,28 @@ export function CartaoMovimentacao({
           Encerra o vínculo atual e abre outro com a matrícula{" "}
           <b>{movimentacao.matricula_destino ?? "—"}</b>
           {movimentacao.tipo_vinculo_destino
-            ? ` (${movimentacao.tipo_vinculo_destino})`
+            ? ` (${ROTULOS_VINCULO[movimentacao.tipo_vinculo_destino]})`
             : ""}
           . A pessoa é a mesma: mesmo CPF, mesma conta de acesso e histórico
           preservado.
           {movimentacao.vinculo_destino_matricula
             ? ` Vínculo já aberto: matrícula ${movimentacao.vinculo_destino_matricula}.`
             : ""}
+          {/* Quem vai liderar do outro lado é decisão do pedido, e quem aprova
+              precisa vê-la — inclusive quando ela é "ninguém ainda". */}
+          {movimentacao.gestor_destino_nome ? (
+            <>
+              {" "}
+              Líder na empresa destino: <b>{movimentacao.gestor_destino_nome}</b>
+              .
+            </>
+          ) : (
+            <>
+              {" "}
+              <b>Sem líder definido na empresa destino</b> — o vínculo novo
+              nasce sem liderança e o DP precisa designar.
+            </>
+          )}
         </div>
       )}
       <div className={comum.descricao}>

@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import {
-  esquemaCriacaoColaborador,
+  analisarCriacaoColaborador,
   esquemaFiltroColaboradores,
 } from "@/dominios/colaboradores/esquemas";
 import {
@@ -43,7 +43,10 @@ export async function POST(request: Request) {
   try {
     const sessao = await exigirPermissao("rh.colaborador.editar");
     const corpo = await request.json().catch(() => null);
-    const analise = esquemaCriacaoColaborador.safeParse(corpo);
+    // Dois caminhos, um endpoint: pessoa nova (formulário completo) e novo
+    // vínculo de quem já é do grupo (só o contrato, com a pessoa confirmada).
+    // Quem escolhe o esquema é o próprio corpo — ver `analisarCriacaoColaborador`.
+    const analise = analisarCriacaoColaborador(corpo);
     if (!analise.success) {
       return Response.json(
         { erro: analise.error.issues[0]?.message ?? "Dados inválidos" },

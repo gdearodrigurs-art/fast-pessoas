@@ -77,7 +77,10 @@ export function DetalheAvaliacao({ id }: { id: number }) {
   const [avisoSalvo, setAvisoSalvo] = useState<string | null>(null);
   const [dialogoEnvio, setDialogoEnvio] = useState(false);
 
-  const [decisao, setDecisao] = useState<Decisao>("manter");
+  // Nasce VAZIA: qual das decisões é a certa é exatamente o que a avaliação
+  // existe para produzir. Semear "manter" ainda dispensava a justificativa em
+  // 3 das 4 faixas, porque "manter" é decisão alinhada quase sempre.
+  const [decisao, setDecisao] = useState<Decisao | "">("");
   const [justificativa, setJustificativa] = useState("");
   const [decidindo, setDecidindo] = useState(false);
   const [erroDecisao, setErroDecisao] = useState<string | null>(null);
@@ -300,7 +303,7 @@ export function DetalheAvaliacao({ id }: { id: number }) {
   }
 
   const divergenciaPrevista =
-    detalhe?.resultado != null
+    detalhe?.resultado != null && decisao !== ""
       ? decisaoDiverge(detalhe.resultado.recomendacao, decisao)
       : false;
 
@@ -518,9 +521,13 @@ export function DetalheAvaliacao({ id }: { id: number }) {
                   <select
                     className={comum.campo}
                     id="decisao"
+                    required
                     value={decisao}
-                    onChange={(e) => setDecisao(e.target.value as Decisao)}
+                    onChange={(e) => setDecisao(e.target.value as Decisao | "")}
                   >
+                    <option value="" disabled>
+                      Escolha a decisão…
+                    </option>
                     {DECISOES.map((opcao) => (
                       <option key={opcao} value={opcao}>
                         {ROTULOS_DECISAO[opcao]}
@@ -562,6 +569,7 @@ export function DetalheAvaliacao({ id }: { id: number }) {
                       type="submit"
                       disabled={
                         decidindo ||
+                        decisao === "" ||
                         (divergenciaPrevista && !justificativa.trim())
                       }
                     >

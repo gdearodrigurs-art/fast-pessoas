@@ -115,7 +115,17 @@ export interface ItemEquipe {
   nome_completo: string;
   matricula: string;
   cargo_nome: string | null;
+  /** Lotação — o local físico. */
   unidade: string | null;
+  /**
+   * Registro — a empresa do grupo do contrato. A liderança atravessa a
+   * transferência entre CNPJs (0048 item e), então a equipe do gestor mistura
+   * empresas; sem esta coluna ele aprova férias, dá feedback e lê ASO de gente
+   * de outro CNPJ sem saber que é de outro CNPJ.
+   */
+  empresa_nome: string | null;
+  /** TRUE quando o contrato do liderado está em empresa diferente da do gestor. */
+  outra_empresa: boolean;
   data_admissao: string;
   tempo_de_casa: string;
   /** Só o FATO — sem tipo, sem motivo, sem CID (regra de sigilo do 0007). */
@@ -301,7 +311,7 @@ export async function montarPortalGestor(
     seletor: opcoes,
     proprio,
     pode,
-    equipe: montarEquipe(equipe),
+    equipe: montarEquipe(equipe, gestor.empresa_id),
     ferias,
     avaliacoes,
     pendencias,
@@ -350,7 +360,10 @@ function montarPermissoes(
 
 // ------------------------------------------------------------------ bloco 1
 
-function montarEquipe(linhas: LinhaEquipe[]): BlocoEquipe {
+function montarEquipe(
+  linhas: LinhaEquipe[],
+  empresaDoGestor: number | null
+): BlocoEquipe {
   return {
     total: linhas.length,
     afastados: linhas.filter((linha) => linha.afastado_hoje).length,
@@ -361,6 +374,11 @@ function montarEquipe(linhas: LinhaEquipe[]): BlocoEquipe {
       matricula: linha.matricula,
       cargo_nome: linha.cargo_nome,
       unidade: linha.unidade,
+      empresa_nome: linha.empresa_nome,
+      outra_empresa:
+        linha.empresa_id !== null &&
+        empresaDoGestor !== null &&
+        linha.empresa_id !== empresaDoGestor,
       data_admissao: linha.data_admissao,
       tempo_de_casa: tempoDeCasa(linha.dias_desde_admissao),
       afastado_hoje: linha.afastado_hoje,
@@ -582,7 +600,11 @@ function paraAlertaExperiencia(marco: MarcoExperiencia): AlertaExperiencia {
 function paraAlertaAso(vencimento: VencimentoAso): AlertaAso {
   return {
     ...vencimento,
-    gravidade: vencimento.dias_ate_validade < 0 ? "critico" : "atencao",
+    // Sem nenhum ASO é pior que vencido: não há sequer exame admissional.
+    gravidade:
+      vencimento.dias_ate_validade === null || vencimento.dias_ate_validade < 0
+        ? "critico"
+        : "atencao",
   };
 }
 

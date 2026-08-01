@@ -40,6 +40,27 @@ interface ColaboradorListado {
   feedback_vencido: boolean;
 }
 
+/**
+ * O que o servidor devolve no 409 quando o CPF digitado já é de gente do grupo.
+ * A tela existe para MOSTRAR isto antes de perguntar — confirmar "é a mesma
+ * pessoa?" sem ver de quem se fala é o mesmo que juntar duas pessoas no escuro.
+ */
+interface PessoaReconhecida {
+  id: number;
+  nome_completo: string;
+  conta_email: string | null;
+  conta_ativa: boolean;
+  vinculos: {
+    id: number;
+    matricula: string;
+    tipo_vinculo: TipoVinculo;
+    status: StatusColaborador;
+    data_admissao: string;
+    data_desligamento: string | null;
+    empresa_nome: string | null;
+  }[];
+}
+
 const ESTILO_PILL: Record<StatusColaborador, string> = {
   ativo: estilos.pillAtivo,
   afastado: estilos.pillAfastado,
@@ -83,6 +104,16 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
     email: string;
     senha: string;
     id: number;
+  } | null>(null);
+  // O 409 "este CPF já é de alguém" vira PERGUNTA, não erro vermelho.
+  const [reconhecida, setReconhecida] = useState<PessoaReconhecida | null>(null);
+  const [vinculoAberto, setVinculoAberto] = useState<{
+    nome: string;
+    matricula: string;
+    id: number;
+    conta_email: string | null;
+    conta_reativada: boolean;
+    vinculo_anterior: string | null;
   } | null>(null);
   const [novo, setNovo] = useState({
     nome_completo: "",
@@ -148,10 +179,27 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
     void carregar(busca, status, valor);
   }
 
+  function limparFormulario() {
+    setNovo({
+      nome_completo: "",
+      email: "",
+      matricula: "",
+      cpf: "",
+      tipo_vinculo: "clt",
+      data_admissao: "",
+      data_nascimento: "",
+      genero: "nao_informado",
+      retrato: "",
+      contexto: "",
+    });
+  }
+
   async function criar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     setErroCriacao(null);
     setSenhaGerada(null);
+    setVinculoAberto(null);
+    setReconhecida(null);
     setCriando(true);
     try {
       const resposta = await fetch("/api/colaboradores", {
@@ -178,21 +226,64 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           senha: dados.senha_temporaria,
           id: dados.colaborador.id,
         });
-        setNovo({
-          nome_completo: "",
-          email: "",
-          matricula: "",
-          cpf: "",
-          tipo_vinculo: "clt",
-          data_admissao: "",
-          data_nascimento: "",
-          genero: "nao_informado",
-          retrato: "",
-          contexto: "",
-        });
+        limparFormulario();
         carregar(busca, status, estrutura);
+      } else if (
+        resposta.status === 409 &&
+        dados.confirmacao === "pessoa_ja_cadastrada" &&
+        dados.detalhe?.pessoa
+      ) {
+        // Não é recusa: o CPF é de alguém que já esteve na casa e não tem mais
+        // vínculo em pé. A tela mostra QUEM é e pergunta. Os outros 409 desta
+        // rota (CPF de quem está ativo, matrícula em uso) continuam erro:
+        // insistir neles traria o mesmo erro de volta.
+        setReconhecida(dados.detalhe.pessoa as PessoaReconhecida);
       } else {
         setErroCriacao(dados.erro ?? "Não foi possível criar o colaborador.");
+      }
+    } catch {
+      setErroCriacao("Falha de conexão. Tente novamente.");
+    } finally {
+      setCriando(false);
+    }
+  }
+
+  /**
+   * O "sim, é a mesma pessoa". Manda SÓ o contrato mais o id que a tela acabou
+   * de mostrar: nome, e-mail, nascimento e gênero NÃO vão — são da pessoa, já
+   * existem, e reenviá-los daria um jeito de sobrescrever, pela tela de
+   * admissão, o cadastro de quem já está na casa.
+   */
+  async function abrirNovoVinculo(pessoa: PessoaReconhecida) {
+    setErroCriacao(null);
+    setCriando(true);
+    try {
+      const resposta = await fetch("/api/colaboradores", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmar_pessoa_id: pessoa.id,
+          cpf: novo.cpf,
+          matricula: novo.matricula,
+          tipo_vinculo: novo.tipo_vinculo,
+          data_admissao: novo.data_admissao,
+        }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        setReconhecida(null);
+        setVinculoAberto({
+          nome: dados.colaborador.nome_completo,
+          matricula: dados.colaborador.matricula,
+          id: dados.colaborador.id,
+          conta_email: dados.pessoa_reaproveitada?.conta_email ?? null,
+          conta_reativada: Boolean(dados.pessoa_reaproveitada?.conta_reativada),
+          vinculo_anterior: dados.pessoa_reaproveitada?.vinculo_anterior ?? null,
+        });
+        limparFormulario();
+        carregar(busca, status, estrutura);
+      } else {
+        setErroCriacao(dados.erro ?? "Não foi possível abrir o novo vínculo.");
       }
     } catch {
       setErroCriacao("Falha de conexão. Tente novamente.");
@@ -438,6 +529,96 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
               </form>
             )}
             {erroCriacao && <p className={estilos.erro}>{erroCriacao}</p>}
+
+            {/* CPF reconhecido: a tela DIZ de quem é antes de perguntar.
+                Sem este bloco, confirmar "é a mesma pessoa" seria assinar em
+                branco — e juntar duas pessoas num CPF só é irreversível. */}
+            {reconhecida && (
+              <div className={estilos.reconhecida}>
+                <h3>CPF já cadastrado: {reconhecida.nome_completo}</h3>
+                <p>
+                  Este CPF já é de gente do grupo, e ela não tem mais nenhum
+                  vínculo em pé. Confira se é a mesma pessoa:
+                </p>
+                <ul className={estilos.vinculosAnteriores}>
+                  {reconhecida.vinculos.map((vinculo) => (
+                    <li key={vinculo.id}>
+                      Matrícula {vinculo.matricula} —{" "}
+                      {vinculo.empresa_nome ?? "sem registro definido"} —{" "}
+                      {ROTULOS_VINCULO[vinculo.tipo_vinculo]}, admitida em{" "}
+                      {formatarData(vinculo.data_admissao)}
+                      {vinculo.data_desligamento
+                        ? `, desligada em ${formatarData(vinculo.data_desligamento)}`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+                <p>
+                  Confirmando, nasce <strong>só o vínculo novo</strong>: matrícula{" "}
+                  <strong>{novo.matricula || "(informe a matrícula)"}</strong>,{" "}
+                  {ROTULOS_VINCULO[novo.tipo_vinculo]}, admissão em{" "}
+                  <strong>
+                    {novo.data_admissao
+                      ? formatarData(novo.data_admissao)
+                      : "(informe a data)"}
+                  </strong>
+                  . CPF, nome, nascimento e o histórico continuam sendo os dela, e o
+                  acesso volta a ser{" "}
+                  <strong>{reconhecida.conta_email ?? "a conta já existente"}</strong>{" "}
+                  com a mesma senha — nenhuma conta nova, nenhum dado sobrescrito.
+                </p>
+                <div className={estilos.acoesReconhecida}>
+                  <button
+                    className={estilos.botao}
+                    type="button"
+                    disabled={criando}
+                    onClick={() => abrirNovoVinculo(reconhecida)}
+                  >
+                    {criando
+                      ? "Abrindo…"
+                      : "É a mesma pessoa — abrir novo vínculo"}
+                  </button>
+                  <button
+                    className={estilos.botaoLinha}
+                    type="button"
+                    disabled={criando}
+                    onClick={() => {
+                      setReconhecida(null);
+                      setNovo((atual) => ({ ...atual, cpf: "" }));
+                    }}
+                  >
+                    Não é a mesma pessoa — corrigir o CPF
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {vinculoAberto && (
+              <div className={estilos.reconhecida}>
+                <p>
+                  Novo vínculo aberto para <strong>{vinculoAberto.nome}</strong> —
+                  matrícula <strong>{vinculoAberto.matricula}</strong>. A pessoa é a
+                  mesma: CPF, cadastro e histórico foram reaproveitados.
+                </p>
+                {vinculoAberto.vinculo_anterior && (
+                  <p>Vínculo anterior: {vinculoAberto.vinculo_anterior}.</p>
+                )}
+                <p>
+                  Acesso:{" "}
+                  <strong>{vinculoAberto.conta_email ?? "conta existente"}</strong>{" "}
+                  {vinculoAberto.conta_reativada
+                    ? "— a conta estava desativada e foi reaberta, com a MESMA senha de antes (nenhuma senha nova foi gerada)."
+                    : "— a conta já estava ativa, com a MESMA senha de antes."}{" "}
+                  <Link
+                    className={estilos.acao}
+                    href={`/colaboradores/${vinculoAberto.id}`}
+                  >
+                    Abrir ficha
+                  </Link>
+                </p>
+              </div>
+            )}
+
             {senhaGerada && (
               <div className={estilos.avisoSenha}>
                 <p>

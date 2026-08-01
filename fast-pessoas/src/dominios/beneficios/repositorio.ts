@@ -401,10 +401,20 @@ export async function listarAdesoesDoColaborador(
   return linhas.map(paraAdesao);
 }
 
+/**
+ * O painel do RH, sob o título "Adesões vigentes" e com os botões de suspender,
+ * reativar e cancelar do lado. VIGENTE tem duas condições, não uma: a adesão
+ * não fechou E o CONTRATO ainda está de pé. Só `a.fim IS NULL` bastava enquanto
+ * a pessoa tinha um vínculo na vida; desde a 0046 ela pode ter dois, e a
+ * transferência entre CNPJs (0048) fecha um e abre outro. Sem o segundo filtro,
+ * o RH via as adesões pela matrícula ENCERRADA enquanto a própria pessoa via
+ * zero — a mesma pessoa, duas verdades, e uma delas com botão de ação.
+ */
 export async function listarAdesoesVigentes(): Promise<AdesaoResumo[]> {
   const linhas = await consultar<LinhaAdesao>(
     `${SELECT_ADESAO}
      WHERE a.fim IS NULL
+       AND c.status <> 'desligado'
      ORDER BY c.nome_completo, b.nome, a.id`
   );
   return linhas.map(paraAdesao);
@@ -444,6 +454,60 @@ export async function temAdesaoVigente(
   return linhas.length > 0;
 }
 
+export interface AdesaoParaTransferir {
+  id: number;
+  beneficio_id: number;
+  beneficio_nome: string;
+  status: StatusAdesao;
+  valor: number | null;
+  desconto: number | null;
+  /** Critério da regra VIGENTE do benefício; null quando o benefício não tem regra. */
+  criterio: Criterio | null;
+}
+
+/**
+ * Adesões de fim aberto do vínculo que vai fechar, já com o critério vigente
+ * de cada benefício — o serviço da transferência precisa das duas coisas na
+ * mesma leitura para decidir, benefício a benefício, o que atravessa.
+ * `FOR UPDATE OF a` porque a transferência e um cancelamento concorrente não
+ * podem passar os dois.
+ */
+export async function adesoesParaTransferir(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<AdesaoParaTransferir[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    beneficio_id: string;
+    beneficio_nome: string;
+    status: StatusAdesao;
+    valor: string | null;
+    desconto: string | null;
+    criterio: Criterio | null;
+  }>(
+    `SELECT a.id, a.beneficio_id, b.nome AS beneficio_nome, a.status,
+            a.valor::text AS valor, a.desconto::text AS desconto,
+            r.criterio
+       FROM rh.adesao a
+       JOIN rh.beneficio b ON b.id = a.beneficio_id
+       LEFT JOIN rh.regra_elegibilidade_versao r
+         ON r.beneficio_id = a.beneficio_id AND r.status = 'ativa'
+      WHERE a.colaborador_id = $1 AND a.fim IS NULL
+      ORDER BY b.nome
+      FOR UPDATE OF a`,
+    [colaboradorId]
+  );
+  return rows.map((linha) => ({
+    id: Number(linha.id),
+    beneficio_id: Number(linha.beneficio_id),
+    beneficio_nome: linha.beneficio_nome,
+    status: linha.status,
+    valor: numeroOuNulo(linha.valor),
+    desconto: numeroOuNulo(linha.desconto),
+    criterio: linha.criterio,
+  }));
+}
+
 export async function inserirAdesao(
   cliente: PoolClient,
   dados: {
@@ -480,6 +544,28 @@ export async function cancelarAdesaoNoBanco(
   await cliente.query(
     `UPDATE rh.adesao SET status = 'cancelada', fim = $2 WHERE id = $1`,
     [id, fim]
+  );
+}
+
+/**
+ * Fecha a adesão porque o CONTRATO dela acabou (transferência entre empresas
+ * do grupo). Recebe o INÍCIO do vínculo novo e fecha na véspera — o mesmo
+ * corte de `encerrarPosicao`/`encerrarLotacao`, para não haver um dia sem dono.
+ * Distinto de `cancelarAdesaoNoBanco`, que é o cancelamento pedido por alguém:
+ * aqui a data é imposta pelo ato. `GREATEST` protege o CHECK `fim >= inicio`
+ * da adesão que tenha começado no próprio dia da transferência.
+ */
+export async function encerrarAdesaoPorFimDoVinculo(
+  cliente: PoolClient,
+  id: number,
+  inicioDoVinculoNovo: string
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.adesao
+        SET status = 'cancelada', fim = GREATEST(inicio, $2::date - 1),
+            atualizado_em = now()
+      WHERE id = $1 AND fim IS NULL`,
+    [id, inicioDoVinculoNovo]
   );
 }
 

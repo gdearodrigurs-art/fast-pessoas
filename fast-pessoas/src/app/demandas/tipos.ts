@@ -97,6 +97,9 @@ export interface Movimentacao {
   /** Só em 'transferencia_empresa': o contrato que nasce na empresa destino. */
   matricula_destino: string | null;
   tipo_vinculo_destino: TipoVinculo | null;
+  /** Líder na empresa destino (0053). null = ninguém escolheu. */
+  gestor_destino_colaborador_id: number | null;
+  gestor_destino_nome: string | null;
   vinculo_destino_id: number | null;
   vinculo_destino_matricula: string | null;
   data_pretendida: string;
@@ -104,6 +107,8 @@ export interface Movimentacao {
   dentro_faixa: boolean | null;
   justificativa_excecao: string | null;
   aplicada_em: string | null;
+  /** A data pretendida já chegou — calculado no servidor, em São Paulo. */
+  efeito_vencido: boolean;
   // Remuneração: null quando a sessão não pode ver (ausência, não máscara) e
   // sempre null nas listas — o valor sai só no detalhe.
   salario_proposto: number | null;
@@ -121,6 +126,8 @@ export interface VisaoMovimentacoes {
   minhas: CartaoMovimentacao[];
   do_lider: CartaoMovimentacao[] | null;
   da_diretoria: CartaoMovimentacao[] | null;
+  /** Aprovadas com o efeito ainda por aplicar — as vencidas na frente. */
+  programadas: CartaoMovimentacao[] | null;
   aplicadas: CartaoMovimentacao[] | null;
 }
 
@@ -142,6 +149,13 @@ export interface OpcoesMovimentacao {
   }[];
   /** Vazio para quem não tem movimentacao.transferir_empresa (0048). */
   empresas: { id: number; nome_fantasia: string; cnpj: string | null }[];
+  /** Candidatos a líder na empresa destino, já com a empresa de cada um. */
+  gestores: {
+    colaborador_id: number;
+    nome_completo: string;
+    cargo_atual: string | null;
+    empresa_id: number;
+  }[];
 }
 
 export interface Visao {
@@ -154,6 +168,7 @@ export interface Visao {
     ciencia_movimentacao: boolean;
     ver_salario: boolean;
     transferir_empresa: boolean;
+    editar_posicao: boolean;
   };
   tipos: TipoDemanda[];
   minhas: Demanda[];
@@ -177,5 +192,7 @@ export interface Detalhe {
     recusar: boolean;
     comentar: boolean;
     decidir_etapa: NivelAprovacao | null;
+    /** Efeito aprovado, data já chegada e ainda não aplicado. */
+    aplicar_efeito: boolean;
   };
 }

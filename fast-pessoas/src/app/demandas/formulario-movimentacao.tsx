@@ -38,6 +38,10 @@ export function FormularioMovimentacao({
   const [empresaDestino, setEmpresaDestino] = useState("");
   const [matriculaDestino, setMatriculaDestino] = useState("");
   const [vinculoDestino, setVinculoDestino] = useState<"" | TipoVinculo>("");
+  // Líder NA EMPRESA DESTINO (0053). Nasce vazio e vazio é resposta: o vínculo
+  // novo nasce sem líder e o DP designa. O que não existe mais é herdar o
+  // líder de origem, que fica em outro CNPJ.
+  const [gestorDestino, setGestorDestino] = useState("");
   const [salario, setSalario] = useState("");
   const [justificativaExcecao, setJustificativaExcecao] = useState("");
   const [dataPretendida, setDataPretendida] = useState("");
@@ -117,6 +121,14 @@ export function FormularioMovimentacao({
   // `movimentacao.transferir_empresa` — e a lista de empresas vem vazia da API
   // para quem não tem, então o servidor manda e a tela obedece.
   const podeTransferirEmpresa = (opcoes?.empresas.length ?? 0) > 0;
+  // Candidatos a líder recortados pela empresa destino escolhida: quem lidera
+  // "lá" tem de estar registrado lá.
+  const gestoresDoDestino = (opcoes?.gestores ?? []).filter(
+    (gestor) =>
+      empresaDestino !== "" &&
+      String(gestor.empresa_id) === empresaDestino &&
+      String(gestor.colaborador_id) !== colaboradorId
+  );
   const tiposOferecidos = TIPOS_MOVIMENTACAO.filter(
     (chave) => chave !== "transferencia_empresa" || podeTransferirEmpresa
   );
@@ -146,6 +158,9 @@ export function FormularioMovimentacao({
         corpo.centro_custo_destino_id = Number(centroCusto);
         corpo.matricula_destino = matriculaDestino.trim();
         if (vinculoDestino) corpo.tipo_vinculo_destino = vinculoDestino;
+        if (gestorDestino) {
+          corpo.gestor_destino_colaborador_id = Number(gestorDestino);
+        }
       } else {
         corpo.estabelecimento_destino_id = Number(unidadeDestino);
         if (centroCusto) corpo.centro_custo_destino_id = Number(centroCusto);
@@ -318,6 +333,38 @@ export function FormularioMovimentacao({
                   </option>
                 ))}
               </select>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-gestor-destino">
+                Líder na empresa destino
+              </label>
+              <select
+                className={comum.campo}
+                id="mov-gestor-destino"
+                value={gestorDestino}
+                disabled={empresaDestino === ""}
+                onChange={(e) => setGestorDestino(e.target.value)}
+              >
+                <option value="">
+                  {empresaDestino === ""
+                    ? "escolha a empresa destino primeiro"
+                    : "sem líder definido (o DP designa depois)"}
+                </option>
+                {gestoresDoDestino.map((gestor) => (
+                  <option
+                    key={gestor.colaborador_id}
+                    value={gestor.colaborador_id}
+                  >
+                    {gestor.nome_completo}
+                    {gestor.cargo_atual ? ` — ${gestor.cargo_atual}` : ""}
+                  </option>
+                ))}
+              </select>
+              <p className={comum.dicaSla}>
+                Só aparece quem está registrado na empresa destino. O líder de
+                hoje NÃO atravessa: liderar dá acesso à ficha, ao ponto e à
+                aprovação, e ele fica em outro CNPJ. Sem escolha aqui, o vínculo
+                novo nasce sem líder e o DP designa.
+              </p>
 
               <label className={comum.rotuloCampo} htmlFor="mov-empresa-unidade">
                 Lotação destino (local de trabalho)

@@ -21,6 +21,7 @@ import {
   TIPOS_VINCULO,
   TipoOcorrencia,
   TipoVinculo,
+  hojeNaOperacao,
 } from "@/dominios/colaboradores/esquemas";
 import { formatarMinutos } from "@/dominios/ponto/esquemas";
 import type { PermissoesFicha } from "./page";
@@ -375,6 +376,13 @@ const formatoDataUtc = new Intl.DateTimeFormat("pt-BR", {
   year: "numeric",
 });
 
+// Teto dos três campos de vigência que gravam DIRETO na ficha (posição, gestor
+// e alocação). O servidor é quem manda — `esquemaVigenciaNaoFutura` recusa data
+// futura porque o sistema inteiro lê "vigente" por `fim_vigencia IS NULL` e a
+// linha de amanhã já responderia por hoje. Aqui é só o aviso antes de digitar:
+// quem quer decidir antes vai pela movimentação, que agenda o efeito.
+const HOJE_NA_OPERACAO = hojeNaOperacao();
+
 function formatarDataEvento(iso: string): string {
   const data = new Date(iso);
   if (Number.isNaN(data.getTime())) return iso;
@@ -440,7 +448,9 @@ export function FichaColaborador({
 
   const [novaOcorrencia, setNovaOcorrencia] = useState({
     ocorrida_em: "",
-    tipo: "positivo" as TipoOcorrencia,
+    // Classificação da conduta nasce VAZIA: o sinal (positivo/negativo) é o
+    // que a ficha registra sobre a pessoa — a tela não chuta por ordem do enum.
+    tipo: "" as TipoOcorrencia | "",
     restrita: false,
     descricao: "",
     impacto: "",
@@ -464,7 +474,9 @@ export function FichaColaborador({
     cargo_id: "",
     salario: "",
     inicio_vigencia: "",
-    motivo: "promocao" as MotivoPosicao,
+    // Motivo nasce VAZIO: é o rótulo que distingue promoção de reajuste
+    // coletivo, mérito e enquadramento no histórico de posições.
+    motivo: "" as MotivoPosicao | "",
   });
   const [novoGestor, setNovoGestor] = useState({ gestor_colaborador_id: "", inicio_vigencia: "" });
   const [novaLotacao, setNovaLotacao] = useState(ALOCACAO_VAZIA);
@@ -631,7 +643,7 @@ export function FichaColaborador({
       }
       setNovaOcorrencia({
         ocorrida_em: "",
-        tipo: "positivo",
+        tipo: "",
         restrita: false,
         descricao: "",
         impacto: "",
@@ -779,7 +791,7 @@ export function FichaColaborador({
         return;
       }
       setPosicoes(dados.posicoes ?? []);
-      setNovaPosicao({ cargo_id: "", salario: "", inicio_vigencia: "", motivo: "promocao" });
+      setNovaPosicao({ cargo_id: "", salario: "", inicio_vigencia: "", motivo: "" });
       await carregarFicha();
     } catch {
       setErroAba("Falha de conexão. Tente novamente.");
@@ -1521,14 +1533,16 @@ export function FichaColaborador({
                     <select
                       className={estilos.campo}
                       id="ocTipo"
+                      required
                       value={novaOcorrencia.tipo}
                       onChange={(e) =>
                         setNovaOcorrencia((atual) => ({
                           ...atual,
-                          tipo: e.target.value as TipoOcorrencia,
+                          tipo: e.target.value as TipoOcorrencia | "",
                         }))
                       }
                     >
+                      <option value="">selecione…</option>
                       {TIPOS_OCORRENCIA.map((opcao) => (
                         <option key={opcao} value={opcao}>
                           {ROTULOS_OCORRENCIA[opcao]}
@@ -1944,6 +1958,7 @@ export function FichaColaborador({
                         className={estilos.campo}
                         id="poInicio"
                         type="date"
+                        max={HOJE_NA_OPERACAO}
                         required
                         value={novaPosicao.inicio_vigencia}
                         onChange={(e) =>
@@ -1961,14 +1976,16 @@ export function FichaColaborador({
                       <select
                         className={estilos.campo}
                         id="poMotivo"
+                        required
                         value={novaPosicao.motivo}
                         onChange={(e) =>
                           setNovaPosicao((atual) => ({
                             ...atual,
-                            motivo: e.target.value as MotivoPosicao,
+                            motivo: e.target.value as MotivoPosicao | "",
                           }))
                         }
                       >
+                        <option value="">selecione…</option>
                         {MOTIVOS_POSICAO.map((opcao) => (
                           <option key={opcao} value={opcao}>
                             {ROTULOS_MOTIVO_POSICAO[opcao]}
@@ -2056,6 +2073,7 @@ export function FichaColaborador({
                       className={estilos.campo}
                       id="geInicio"
                       type="date"
+                      max={HOJE_NA_OPERACAO}
                       required
                       value={novoGestor.inicio_vigencia}
                       onChange={(e) =>
@@ -2223,6 +2241,7 @@ export function FichaColaborador({
                       className={estilos.campo}
                       id="loInicio"
                       type="date"
+                      max={HOJE_NA_OPERACAO}
                       required
                       value={novaLotacao.inicio_vigencia}
                       onChange={(e) =>

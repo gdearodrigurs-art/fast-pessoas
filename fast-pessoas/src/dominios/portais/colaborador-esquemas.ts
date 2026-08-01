@@ -28,10 +28,34 @@ import type { StatusCiclo, TipoCiclo } from "../avaliacao/esquemas";
  * "Dúvida sobre a folha" — não este portal. FichaColaborador nem carrega o
  * campo, então não há como vazar por descuido de serialização.
  */
+/**
+ * Contrato ANTERIOR da mesma pessoa no grupo (migration 0046: o CPF é da
+ * pessoa, o contrato é do vínculo). Existe porque o portal calava sobre ele: a
+ * Onda I foi feita para "não perder o histórico" na troca de empresa, e o dono
+ * do histórico era justamente quem não via que ele existia — o portal abria no
+ * vínculo corrente e não dizia uma palavra sobre o anterior.
+ *
+ * Só o RÓTULO mora aqui. O conteúdo de cada contrato (ficha, espelho de ponto,
+ * banco de horas, documentos) continua atrás da mesma guarda de sempre, que já
+ * alcança a pessoa inteira — ver `condicaoEscopo` e `vinculosDoUsuario`.
+ */
+export interface ContratoAnterior {
+  colaborador_id: number;
+  matricula: string;
+  empresa_nome: string | null;
+  data_admissao: string;
+  data_desligamento: string | null;
+}
+
 export interface MeusDados {
   colaborador_id: number;
   nome_completo: string;
   matricula: string;
+  /**
+   * Os OUTROS contratos da mesma pessoa no grupo, do mais novo ao mais antigo.
+   * Vazio para quem sempre teve um só — o caso da maioria.
+   */
+  contratos_anteriores: ContratoAnterior[];
   cargo_nome: string | null;
   /** Cargo da posição vigente — alvo do link para o RCF. */
   cargo_id: number | null;

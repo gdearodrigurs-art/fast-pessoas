@@ -294,11 +294,19 @@ export function PainelDemandas() {
             {abaPrincipal === "movimentacoes" && movimentacoes && (
               <>
                 <div className={estilos.aviso}>
-                  A cadeia é <b>líder → diretoria</b>. Com a aprovação da
-                  diretoria a nova posição/lotação passa a vigorar na data
-                  pretendida e o <b>DP e o T&amp;D são avisados</b>{" "}
-                  automaticamente para providenciar os trâmites.
+                  A cadeia é <b>líder → diretoria</b>. Aprovado o pedido, o{" "}
+                  <b>DP e o T&amp;D são avisados</b> automaticamente para
+                  providenciar os trâmites. O efeito no cadastro acontece na{" "}
+                  <b>data pretendida</b>: se ela ainda não chegou, o pedido fica{" "}
+                  <b>programado</b> e é aplicado na data, aqui mesmo.
                 </div>
+
+                {movimentacoes.programadas &&
+                  secaoMovimentacoes(
+                    "Aprovadas — efeito a aplicar na data",
+                    movimentacoes.programadas,
+                    "Nenhum efeito programado pendente."
+                  )}
 
                 {movimentacoes.do_lider &&
                   secaoMovimentacoes(
@@ -324,9 +332,9 @@ export function PainelDemandas() {
 
                 {movimentacoes.aplicadas &&
                   secaoMovimentacoes(
-                    "Aprovadas — trâmites de DP e T&D",
+                    "Aplicadas — trâmites de DP e T&D",
                     movimentacoes.aplicadas,
-                    "Nenhuma movimentação aprovada ainda."
+                    "Nenhuma movimentação aplicada ainda."
                   )}
               </>
             )}

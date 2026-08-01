@@ -48,6 +48,8 @@ export function AcoesDemanda({
     assumir?: boolean;
     concluir?: boolean;
     recusar?: boolean;
+    /** Movimentação aprovada cuja data pretendida já chegou (efeito por aplicar). */
+    aplicar_efeito?: boolean;
   };
   aoAtualizar: () => void;
 }) {
@@ -116,6 +118,18 @@ export function AcoesDemanda({
           onClick={() => executar("assumir")}
         >
           Assumir
+        </button>
+      )}
+      {/* Aplicar o efeito é o ato que a data pretendida destravou: a aprovação
+          decidiu, e aqui a movimentação entra de fato no cadastro. */}
+      {habilitadas.aplicar_efeito && (
+        <button
+          className={comum.botaoPrimario}
+          type="button"
+          disabled={enviando}
+          onClick={() => executar("aplicar-efeito")}
+        >
+          Aplicar efeito no cadastro
         </button>
       )}
       {habilitadas.concluir && (

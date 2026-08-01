@@ -18,6 +18,24 @@ import {
 // ------------------------------------------------------------------ escopo de visibilidade
 // A regra "quem vê quem" é do repositório: gestor enxerga a si e aos liderados
 // com relação VIGENTE; funcionário só a própria ficha; rh/dp/diretoria, todos.
+//
+// A UNIDADE DO ESCOPO É O VÍNCULO, e "eu" é a PESSOA. As duas frases juntas são
+// a correção que a 0046 exigiu e que ficou faltando: antes dela uma pessoa tinha
+// um vínculo só, então "o vínculo X" e "a gente do vínculo X" eram a mesma
+// coisa e ninguém precisava escolher. Depois dela as duas perguntas se
+// separaram, e comparar `c.id` com o meu vínculo CORRENTE errava dos dois lados:
+//
+//   • escondia de mim o meu próprio contrato anterior no grupo (403 no meu
+//     ponto, no meu banco de horas e nos meus documentos daquele contrato);
+//   • e — quando a leitura escapava por `pessoa_id`, como a linha do tempo e a
+//     lista de vínculos da ficha faziam — entregava ao gestor de UM contrato
+//     tudo o que acontece nos OUTROS contratos daquela pessoa, em qualquer
+//     empresa do grupo, inclusive advertência de CNPJ que não é o dele.
+//
+// Então: de MIM, alcanço todos os meus vínculos (é a minha vida); de OUTRO,
+// só os vínculos que eu lidero HOJE. Quem enxerga a pessoa inteira de terceiro
+// continua sendo só quem tem `rh.colaborador.ver.todos` (alcance "todos") — a
+// mesma chave de sempre, decidida por chave e nunca por nome de papel.
 
 export type Escopo =
   | { alcance: "todos" }
@@ -33,8 +51,11 @@ function condicaoEscopo(
   if (escopo.colaboradorId === null) return "FALSE";
   parametros.push(escopo.colaboradorId);
   const n = parametros.length;
-  if (escopo.alcance === "proprio") return `${alias}.id = $${n}`;
-  return `(${alias}.id = $${n} OR ${alias}.id IN (
+  // "Eu" pela PESSOA: o contrato anterior no grupo continua sendo meu.
+  const euMesmo = `${alias}.pessoa_id =
+      (SELECT eu.pessoa_id FROM rh.colaborador eu WHERE eu.id = $${n})`;
+  if (escopo.alcance === "proprio") return `(${euMesmo})`;
+  return `(${euMesmo} OR ${alias}.id IN (
       SELECT rg.liderado_colaborador_id
         FROM rh.relacao_gestor rg
        WHERE rg.gestor_colaborador_id = $${n} AND rg.fim_vigencia IS NULL))`;
@@ -481,16 +502,27 @@ export async function buscarFicha(
     id: Number(linha.id),
     usuario_id: Number(linha.usuario_id),
     pessoa_id: pessoaId,
-    vinculos: await listarVinculosDaPessoa(pessoaId),
+    // O MESMO escopo que autorizou esta ficha recorta a lista de contratos:
+    // autorizar um vínculo nunca autoriza os outros da mesma pessoa.
+    vinculos: await listarVinculosDaPessoa(pessoaId, escopo),
     empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
     gestor_id: linha.gestor_id === null ? null : Number(linha.gestor_id),
   };
 }
 
-/** Contratos da pessoa no grupo, do mais antigo ao mais novo. */
+/**
+ * Contratos da pessoa no grupo, do mais antigo ao mais novo — RECORTADOS pelo
+ * escopo de quem pergunta. `rh.vinculos_da_pessoa` responde pela pessoa inteira
+ * (é a função certa: quem tem alcance "todos" quer justamente isso), e é aqui
+ * que a resposta se ajusta a quem lê: gestor de um contrato vê aquele contrato,
+ * a própria pessoa vê os dela, RH/DP/diretoria veem todos.
+ */
 export async function listarVinculosDaPessoa(
-  pessoaId: number
+  pessoaId: number,
+  escopo: Escopo
 ): Promise<VinculoDaPessoa[]> {
+  const parametros: unknown[] = [pessoaId];
+  const filtro = condicaoEscopo(escopo, parametros, "vis");
   const linhas = await consultar<{
     id: string;
     matricula: string;
@@ -503,13 +535,16 @@ export async function listarVinculosDaPessoa(
     sucede_vinculo_id: string | null;
     sucedido_por_vinculo_id: string | null;
   }>(
-    `SELECT id, matricula, tipo_vinculo, status,
-            data_admissao::text AS data_admissao,
-            data_desligamento::text AS data_desligamento,
-            empresa_id, empresa_nome,
-            sucede_vinculo_id, sucedido_por_vinculo_id
-       FROM rh.vinculos_da_pessoa($1)`,
-    [pessoaId]
+    `SELECT v.id, v.matricula, v.tipo_vinculo, v.status,
+            v.data_admissao::text AS data_admissao,
+            v.data_desligamento::text AS data_desligamento,
+            v.empresa_id, v.empresa_nome,
+            v.sucede_vinculo_id, v.sucedido_por_vinculo_id
+       FROM rh.vinculos_da_pessoa($1) v
+      WHERE EXISTS (
+        SELECT 1 FROM rh.colaborador vis
+         WHERE vis.id = v.id AND ${filtro})`,
+    parametros
   );
   const numeroOuNulo = (valor: string | null) =>
     valor === null ? null : Number(valor);
@@ -529,11 +564,23 @@ export async function listarVinculosDaPessoa(
  * e a resposta soma os vínculos dela, identificando em qual cada fato caiu.
  * É o que o dono pediu ao dizer que não queria perder o histórico de quem é
  * demitido e recontratado em outra empresa do grupo.
+ *
+ * SOMA OS VÍNCULOS QUE O ESCOPO ALCANÇA, e só esses. Somar por `pessoa_id`
+ * solto — como esta consulta fazia — desmanchava a autorização que a ficha já
+ * tinha feito: quem levava 404 no contrato novo do liderado recebia, pelo
+ * resumo do evento, a admissão, a mudança de gestor e o TEXTO da advertência
+ * daquele contrato, em outra empresa do grupo, e continuaria recebendo cada
+ * fato novo dali para sempre. Quem enxerga a pessoa inteira é quem tem
+ * `rh.colaborador.ver.todos` (alcance "todos") e a própria pessoa; para o
+ * gestor de linha, a história vai até onde vai a liderança dele.
  */
 export async function listarEventos(
   colaboradorId: number,
-  incluirRestritos: boolean
+  incluirRestritos: boolean,
+  escopo: Escopo
 ): Promise<EventoLinhaTempo[]> {
+  const parametros: unknown[] = [colaboradorId, incluirRestritos];
+  const filtro = condicaoEscopo(escopo, parametros, "vis");
   const linhas = await consultar<{
     id: string;
     tipo: string;
@@ -547,8 +594,11 @@ export async function listarEventos(
        FROM rh.evento_da_pessoa e
       WHERE e.pessoa_id = (SELECT pessoa_id FROM rh.colaborador WHERE id = $1)
         AND ($2 OR COALESCE(e.payload->>'restrita', 'false') <> 'true')
+        AND EXISTS (
+          SELECT 1 FROM rh.colaborador vis
+           WHERE vis.id = e.vinculo_id AND ${filtro})
       ORDER BY e.ocorrido_em DESC, e.id DESC`,
-    [colaboradorId, incluirRestritos]
+    parametros
   );
   return linhas.map((linha) => ({
     ...linha,
@@ -569,6 +619,105 @@ export async function buscarPessoaPorCpf(
   return rows.length
     ? { id: Number(rows[0].id), nome_completo: rows[0].nome_completo }
     : null;
+}
+
+/**
+ * Os vínculos de uma pessoa, do mais novo ao mais antigo, com o REGISTRO
+ * (empresa do grupo) de cada um. A empresa sai da ÚLTIMA linha de alocação do
+ * vínculo — a mesma regra do filtro dos três campos: "a vigente, ou a última
+ * quando o contrato acabou". Vínculo que nunca teve alocação devolve null, e é
+ * null mesmo: dizer "sem empresa" seria inventar.
+ *
+ * Gêmea de `listarVinculosDaPessoa` (que é LEITURA de tela, pelo pool), mas
+ * dentro da TRANSAÇÃO que decide se abre um vínculo novo: quem pergunta "esta
+ * pessoa já tem contrato em pé?" precisa da resposta no mesmo instante em que
+ * `buscarPessoaPorCpf` travou a pessoa, senão duas admissões simultâneas do
+ * mesmo CPF passam as duas.
+ */
+export interface VinculoConhecido {
+  id: number;
+  matricula: string;
+  tipo_vinculo: TipoVinculo;
+  status: StatusColaborador;
+  data_admissao: string;
+  data_desligamento: string | null;
+  empresa_id: number | null;
+  empresa_nome: string | null;
+}
+
+export async function listarVinculosDaPessoaNaTransacao(
+  cliente: PoolClient,
+  pessoaId: number
+): Promise<VinculoConhecido[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    matricula: string;
+    tipo_vinculo: TipoVinculo;
+    status: StatusColaborador;
+    data_admissao: string;
+    data_desligamento: string | null;
+    empresa_id: string | null;
+    empresa_nome: string | null;
+  }>(
+    `SELECT c.id, c.matricula, c.tipo_vinculo, c.status,
+            c.data_admissao::text AS data_admissao,
+            c.data_desligamento::text AS data_desligamento,
+            ultima.empresa_id, ev.nome_fantasia AS empresa_nome
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+         SELECT l.empresa_id
+           FROM rh.lotacao l
+          WHERE l.colaborador_id = c.id
+          ORDER BY l.inicio_vigencia DESC, l.id DESC
+          LIMIT 1
+       ) ultima ON TRUE
+       LEFT JOIN rh.empresa_grupo_versao ev
+         ON ev.empresa_id = ultima.empresa_id AND ev.status = 'ativa'
+      WHERE c.pessoa_id = $1
+      ORDER BY c.data_admissao DESC, c.id DESC`,
+    [pessoaId]
+  );
+  return rows.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
+  }));
+}
+
+/** A conta de acesso da pessoa (0046: uma por gente), travada para reuso. */
+export async function buscarContaDaPessoa(
+  cliente: PoolClient,
+  pessoaId: number
+): Promise<{ id: number; email: string; nome: string; ativo: boolean } | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    email: string;
+    nome: string;
+    ativo: boolean;
+  }>(
+    `SELECT id, email, nome, ativo FROM sistema.usuario
+      WHERE pessoa_id = $1 FOR UPDATE`,
+    [pessoaId]
+  );
+  return rows.length === 0 ? null : { ...rows[0], id: Number(rows[0].id) };
+}
+
+/**
+ * Reabre a conta de quem volta. Contrapartida exata de `desativarUsuario`: o
+ * desligamento fecha o acesso quando não sobra vínculo em pé, e o vínculo novo
+ * o reabre. NÃO mexe na senha — a que a pessoa tinha continua valendo, e
+ * inventar uma nova aqui invalidaria o acesso de quem ainda lembra da antiga.
+ * Devolve se houve mudança, para a trilha só registrar o que mudou de verdade.
+ */
+export async function reativarUsuario(
+  cliente: PoolClient,
+  usuarioId: number
+): Promise<boolean> {
+  const { rowCount } = await cliente.query(
+    "UPDATE sistema.usuario SET ativo = TRUE WHERE id = $1 AND ativo = FALSE",
+    [usuarioId]
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 export async function criarPessoa(

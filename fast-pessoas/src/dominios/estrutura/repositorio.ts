@@ -7,6 +7,8 @@ import {
   TipoEmpresa,
 } from "./esquemas";
 
+const HOJE_SP = "(now() AT TIME ZONE 'America/Sao_Paulo')::date";
+
 // SQL dos catálogos de REGISTRO (rh.empresa_grupo) e CENTRO DE CUSTO
 // (rh.centro_custo), ambos com nome versionado por vigência — migration 0047.
 // O catálogo de LOTAÇÃO (rh.estabelecimento) já morava no domínio colaboradores
@@ -196,6 +198,13 @@ export interface CentroCustoResumo {
   nome: string | null;
   inicio_vigencia: string | null;
   inativado_em: string | null;
+  /**
+   * Quando a EMPRESA que mantém o centro está inativada. O centro em si pode
+   * estar ativo e mesmo assim não ser oferecido — quem inativa a empresa espera
+   * que ela suma das escolhas, e os centros dela vão junto. A tela precisa do
+   * campo para dizer POR QUE o centro sumiu dos seletores.
+   */
+  empresa_inativada_em: string | null;
   /** Alocações (vigentes ou encerradas) que já caíram neste centro. */
   alocacoes: number;
 }
@@ -209,6 +218,7 @@ interface LinhaCentroCusto extends Record<string, unknown> {
   nome: string | null;
   inicio_vigencia: string | null;
   inativado_em: string | null;
+  empresa_inativada_em: string | null;
   alocacoes: string;
 }
 
@@ -226,9 +236,11 @@ const SELECT_CENTRO = `
   SELECT cc.id, cc.empresa_id, ev.nome_fantasia AS empresa_nome, cc.codigo,
          v.id AS versao_id, v.nome, v.inicio_vigencia::text AS inicio_vigencia,
          cc.inativado_em::text AS inativado_em,
+         eg.inativada_em::text AS empresa_inativada_em,
          (SELECT count(*) FROM rh.lotacao l
            WHERE l.centro_custo_id = cc.id) AS alocacoes
     FROM rh.centro_custo cc
+    JOIN rh.empresa_grupo eg ON eg.id = cc.empresa_id
     LEFT JOIN rh.centro_custo_versao v
       ON v.centro_custo_id = cc.id AND v.status = 'ativa'
     LEFT JOIN rh.empresa_grupo_versao ev
@@ -237,8 +249,8 @@ const SELECT_CENTRO = `
 export async function listarCentrosCusto(): Promise<CentroCustoResumo[]> {
   const linhas = await consultar<LinhaCentroCusto>(
     `${SELECT_CENTRO}
-      ORDER BY cc.inativado_em NULLS FIRST, ev.nome_fantasia NULLS LAST,
-               cc.codigo`
+      ORDER BY cc.inativado_em NULLS FIRST, eg.inativada_em NULLS FIRST,
+               ev.nome_fantasia NULLS LAST, cc.codigo`
   );
   return linhas.map(montarCentroCusto);
 }
@@ -328,9 +340,20 @@ export async function definirInativacaoCentroCusto(
 
 // ------------------------------------------------------------------ seletores da alocação
 // O que a ficha do colaborador oferece para escolher os três campos. Só ATIVOS:
-// inativado sai do seletor sem sumir do passado. O centro de custo traz a
-// empresa que o mantém, mas NÃO filtra por ela — alocar alguém da Supply num
-// centro do CSC é permitido de propósito (ver cabeçalho da migration 0047).
+// inativado sai do seletor sem sumir do passado.
+//
+// ATIVO INCLUI A EMPRESA QUE MANTÉM O CENTRO DE CUSTO. Inativar uma empresa do
+// grupo tirava só ela dos seletores e deixava os centros de custo dela na
+// escolha — oferecer CC-1000 da Supply depois de inativar a Supply convida a
+// lançar custo numa empresa que não opera mais. O dono do centro de custo é a
+// empresa (rh.centro_custo.empresa_id, migration 0047), então o centro segue a
+// situação dela.
+//
+// Isso NÃO é a trava "centro de custo tem que ser da mesma empresa da lotação",
+// que a 0047 rejeitou de propósito: alocar alguém registrado na Supply num
+// centro do CSC continua permitido — o que sai é o centro cuja MANTENEDORA foi
+// desligada. E nada disso esconde o passado: quem já custa ali continua
+// aparecendo onde já aparecia (ver listarOpcoesDeFiltroEstrutura, mais abaixo).
 
 export interface OpcaoEmpresa {
   id: number;
@@ -373,11 +396,12 @@ export async function listarCentrosCustoAtivos(): Promise<OpcaoCentroCusto[]> {
     `SELECT cc.id, cc.codigo, v.nome, cc.empresa_id,
             ev.nome_fantasia AS empresa_nome
        FROM rh.centro_custo cc
+       JOIN rh.empresa_grupo eg ON eg.id = cc.empresa_id
        JOIN rh.centro_custo_versao v
          ON v.centro_custo_id = cc.id AND v.status = 'ativa'
        LEFT JOIN rh.empresa_grupo_versao ev
          ON ev.empresa_id = cc.empresa_id AND ev.status = 'ativa'
-      WHERE cc.inativado_em IS NULL
+      WHERE cc.inativado_em IS NULL AND eg.inativada_em IS NULL
       ORDER BY ev.nome_fantasia NULLS LAST, cc.codigo`
   );
   return linhas.map((linha) => ({
@@ -399,13 +423,21 @@ export async function existeEmpresaAtiva(
   return rows.length > 0;
 }
 
+/**
+ * Gêmeo de validação do seletor: o mesmo "ativo" que `listarCentrosCustoAtivos`
+ * usa para OFERECER. Os dois têm que dizer a mesma coisa — senão a API aceita
+ * por POST o que a tela deixou de mostrar.
+ */
 export async function existeCentroCustoAtivo(
   cliente: PoolClient,
   centroCustoId: number
 ): Promise<boolean> {
   const { rows } = await cliente.query(
-    `SELECT 1 FROM rh.centro_custo
-      WHERE id = $1 AND inativado_em IS NULL`,
+    `SELECT 1
+       FROM rh.centro_custo cc
+       JOIN rh.empresa_grupo eg ON eg.id = cc.empresa_id
+      WHERE cc.id = $1 AND cc.inativado_em IS NULL
+        AND eg.inativada_em IS NULL`,
     [centroCustoId]
   );
   return rows.length > 0;
@@ -463,52 +495,88 @@ export function condicaoFiltroEstrutura(
 }
 
 /**
- * O que oferecer nos três seletores. Sai do que EXISTE em rh.lotacao, não do
- * catálogo inteiro: seletor com opção que não devolve ninguém é ruído. Inclui o
- * catálogo inativado, de propósito — inativar tira do cadastro NOVO, e quem
- * esteve ali continua tendo passado que o DP precisa achar.
+ * O que oferecer nos três seletores.
+ *
+ * Duas coisas que precisam andar juntas e antes não andavam:
+ *
+ * 1. As opções saem da MESMA LINHA que `condicaoFiltroEstrutura` compara — a
+ *    ÚLTIMA lotação de cada vínculo. Sair de `rh.lotacao_detalhada` inteira
+ *    (que cobre o histórico) colocava no seletor centro de custo, lotação e
+ *    empresa que só aparecem em linhas ENCERRADAS: escolher a opção devolvia
+ *    lista vazia, que é exatamente o ruído que este seletor existe para evitar.
+ *
+ * 2. O rótulo é resolvido UMA VEZ por id, na data de HOJE. A view resolve o
+ *    nome no fim da vigência de cada linha, então depois de uma renomeação o
+ *    mesmo id voltava com dois nomes diferentes e o Map guardava o primeiro que
+ *    o Postgres devolvesse — sem ORDER BY, o rótulo do seletor era sorteio, e
+ *    podia mostrar um nome que a empresa não tem mais enquanto a coluna da
+ *    lista (que lê a linha vigente) mostrava o nome de hoje.
+ *
+ * Catálogo INATIVADO continua entrando: inativar tira do cadastro novo, e quem
+ * ainda está alocado ali precisa ser achável.
  */
 export async function listarOpcoesDeFiltroEstrutura(): Promise<OpcoesFiltroEstrutura> {
   const linhas = await consultar<{
-    empresa_id: string;
-    empresa_nome: string | null;
-    estabelecimento_id: string;
-    lotacao_nome: string | null;
-    centro_custo_id: string;
-    centro_custo_codigo: string;
-    centro_custo_nome: string | null;
+    dimensao: "empresa" | "lotacao" | "centro";
+    id: string;
+    nome: string | null;
+    codigo: string | null;
   }>(
-    `SELECT DISTINCT ld.empresa_id, ld.empresa_nome,
-            ld.estabelecimento_id, ld.lotacao_nome,
-            ld.centro_custo_id, ld.centro_custo_codigo, ld.centro_custo_nome
-       FROM rh.lotacao_detalhada ld`
+    `WITH ultima AS (
+       SELECT u.empresa_id, u.estabelecimento_id, u.centro_custo_id
+         FROM rh.colaborador c
+         JOIN LATERAL (
+           SELECT le.empresa_id, le.estabelecimento_id, le.centro_custo_id
+             FROM rh.lotacao le
+            WHERE le.colaborador_id = c.id
+            ORDER BY le.inicio_vigencia DESC, le.id DESC
+            LIMIT 1
+         ) u ON TRUE
+     ),
+     opcao AS (
+       SELECT 'empresa'::text AS dimensao, ul.empresa_id AS id FROM ultima ul
+       UNION
+       SELECT 'lotacao', ul.estabelecimento_id FROM ultima ul
+       UNION
+       SELECT 'centro', ul.centro_custo_id FROM ultima ul
+     )
+     SELECT o.dimensao, o.id,
+            CASE o.dimensao
+              WHEN 'empresa' THEN
+                (SELECT v.nome_fantasia FROM rh.empresa_grupo_versao v
+                  WHERE v.id = rh.empresa_versao_em(o.id, ${HOJE_SP}))
+              WHEN 'lotacao' THEN
+                (SELECT v.unidade FROM rh.estabelecimento_versao v
+                  WHERE v.id = rh.estabelecimento_versao_em(o.id, ${HOJE_SP}))
+              ELSE
+                (SELECT v.nome FROM rh.centro_custo_versao v
+                  WHERE v.id = rh.centro_custo_versao_em(o.id, ${HOJE_SP}))
+            END AS nome,
+            CASE WHEN o.dimensao = 'centro'
+                 THEN (SELECT cc.codigo FROM rh.centro_custo cc WHERE cc.id = o.id)
+            END AS codigo
+       FROM opcao o`
   );
-  const empresas = new Map<number, string>();
-  const lotacoes = new Map<number, string>();
-  const centros = new Map<number, string>();
+
+  const empresas: OpcaoEstrutura[] = [];
+  const lotacoes: OpcaoEstrutura[] = [];
+  const centros: OpcaoEstrutura[] = [];
   for (const linha of linhas) {
-    const empresaId = Number(linha.empresa_id);
-    if (!empresas.has(empresaId)) {
-      empresas.set(empresaId, linha.empresa_nome ?? `Empresa ${empresaId}`);
-    }
-    const lotacaoId = Number(linha.estabelecimento_id);
-    if (!lotacoes.has(lotacaoId)) {
-      lotacoes.set(lotacaoId, linha.lotacao_nome ?? `Local ${lotacaoId}`);
-    }
-    const centroId = Number(linha.centro_custo_id);
-    if (!centros.has(centroId)) {
-      centros.set(
-        centroId,
-        linha.centro_custo_nome
-          ? `${linha.centro_custo_codigo} — ${linha.centro_custo_nome}`
-          : linha.centro_custo_codigo
-      );
+    const id = Number(linha.id);
+    if (linha.dimensao === "empresa") {
+      empresas.push({ id, nome: linha.nome ?? `Empresa ${id}` });
+    } else if (linha.dimensao === "lotacao") {
+      lotacoes.push({ id, nome: linha.nome ?? `Local ${id}` });
+    } else {
+      const codigo = linha.codigo ?? `CC ${id}`;
+      centros.push({
+        id,
+        nome: linha.nome ? `${codigo} — ${linha.nome}` : codigo,
+      });
     }
   }
-  const ordenar = (mapa: Map<number, string>): OpcaoEstrutura[] =>
-    [...mapa.entries()]
-      .map(([id, nome]) => ({ id, nome }))
-      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  const ordenar = (opcoes: OpcaoEstrutura[]): OpcaoEstrutura[] =>
+    [...opcoes].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
   return {
     empresas: ordenar(empresas),
     lotacoes: ordenar(lotacoes),

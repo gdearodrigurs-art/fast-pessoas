@@ -3,6 +3,13 @@ import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
+// Benefício na transferência entre empresas do grupo: a regra é do domínio de
+// BENEFÍCIOS (quem sabe o que é elegibilidade é ele), e é chamada de dentro da
+// transação que aplica o efeito, ao lado dos dependentes.
+import {
+  BeneficiosNaTransferencia,
+  transferirAdesoesEntreVinculos,
+} from "../beneficios/servico";
 import { ROTULOS_VINCULO } from "../colaboradores/esquemas";
 import {
   atualizar as atualizarColaborador,
@@ -19,6 +26,10 @@ import {
   inserirRelacaoGestor,
   registrarLeituraSensivel,
 } from "../colaboradores/repositorio";
+// O gate de estabilidade é do domínio de DESLIGAMENTO — a transferência entre
+// empresas do grupo ENCERRA um contrato e usa exatamente a mesma verificação,
+// sem inventar régua própria.
+import { temAfastamentoAcidentario12m } from "../desligamento/repositorio";
 import {
   listarCentrosCustoAtivos,
   OpcaoCentroCusto,
@@ -71,9 +82,11 @@ import {
   DemandaResumo,
   ehGestorDoColaborador,
   ehGestorDoUsuario,
+  empresaDoVinculoVigente,
   estabelecimentoAtivo,
   EtapaAprovacao,
   faixaVigenteDoCargo,
+  GestorPorEmpresa,
   gestoresDoUsuario,
   gestorVigenteDoColaborador,
   hojeSaoPaulo,
@@ -90,9 +103,11 @@ import {
   listarDoSolicitante,
   listarEtapas,
   listarEtapasDeVarias,
+  listarGestoresPorEmpresa,
   listarMovimentacoesAplicadas,
   listarMovimentacoesDaDiretoria,
   listarMovimentacoesDoLider,
+  listarMovimentacoesProgramadas,
   listarTodas,
   listarTransicoes,
   listarUnidadesAtivas,
@@ -127,6 +142,13 @@ export interface PermissoesDemandas {
    * contrato e abrir outro em outro CNPJ é ato de DP, não de líder.
    */
   transferir_empresa: boolean;
+  /**
+   * Aplicar no cadastro o efeito de uma movimentação já aprovada, na data
+   * pretendida ou depois (rh.posicao.editar). É a MESMA chave que autoriza
+   * mexer em posição e alocação à mão — aplicar o efeito escreve exatamente
+   * essas duas coisas, e quem pode uma pode a outra.
+   */
+  editar_posicao: boolean;
 }
 
 export interface CartaoMovimentacao {
@@ -142,6 +164,12 @@ export interface VisaoMovimentacoes {
   do_lider: CartaoMovimentacao[] | null;
   /** Fila "aguardando aprovação da diretoria". */
   da_diretoria: CartaoMovimentacao[] | null;
+  /**
+   * Aprovadas com o efeito ainda POR APLICAR, as vencidas na frente. Sem
+   * agendador, esta lista é o que garante que uma vigência combinada para
+   * daqui a três dias não passe em branco.
+   */
+  programadas: CartaoMovimentacao[] | null;
   /** Já aplicadas — a lista de ciência de DP e T&D (trâmites). */
   aplicadas: CartaoMovimentacao[] | null;
 }
@@ -175,6 +203,12 @@ export interface DetalheDemanda {
     comentar: boolean;
     /** Nível da cadeia que ESTE usuário pode decidir agora (ou null). */
     decidir_etapa: NivelAprovacao | null;
+    /**
+     * Aplicar AGORA o efeito de uma movimentação aprovada cuja data pretendida
+     * já chegou. Só verdadeiro quando as três coisas valem juntas: a chave, a
+     * data e o efeito ainda não aplicado.
+     */
+    aplicar_efeito: boolean;
   };
 }
 
@@ -197,6 +231,7 @@ async function permissoesDe(usuarioId: number): Promise<PermissoesDemandas> {
     cienciaMovimentacao,
     verSalario,
     transferirEmpresa,
+    editarPosicao,
   ] = await Promise.all([
     temPermissao(usuarioId, "demanda.aprovar"),
     temPermissao(usuarioId, "demanda.atender"),
@@ -206,6 +241,7 @@ async function permissoesDe(usuarioId: number): Promise<PermissoesDemandas> {
     temPermissao(usuarioId, "movimentacao.ciencia"),
     temPermissao(usuarioId, "rh.posicao.ver"),
     temPermissao(usuarioId, "movimentacao.transferir_empresa"),
+    temPermissao(usuarioId, "rh.posicao.editar"),
   ]);
   return {
     aprovar,
@@ -216,6 +252,7 @@ async function permissoesDe(usuarioId: number): Promise<PermissoesDemandas> {
     ciencia_movimentacao: cienciaMovimentacao,
     ver_salario: verSalario,
     transferir_empresa: transferirEmpresa,
+    editar_posicao: editarPosicao,
   };
 }
 
@@ -358,17 +395,26 @@ export async function obterDemanda(
   const souLiderDoAlvo =
     movimentacao !== null &&
     (await ehGestorDoColaborador(sessao.usuario_id, movimentacao.colaborador_id));
-  const souOAlvoAplicado =
+  // O alvo vê o pedido quando a decisão vira FINAL e favorável. Até a Onda I o
+  // corte era "depois de aplicada"; agora que a aprovação e a aplicação podem
+  // estar dias separadas, o aviso "sua promoção foi aprovada, vale a partir de
+  // 03/08" precisa ter uma página que abra. Pedido REPROVADO ele continua não
+  // vendo — ninguém deve descobrir que tentaram promovê-lo e negaram.
+  const decisaoFinalFavoravel =
+    demanda.status === "aberta" ||
+    demanda.status === "em_atendimento" ||
+    demanda.status === "concluida";
+  const souOAlvoDecidido =
     movimentacao !== null &&
-    movimentacao.aplicada_em !== null &&
-    movimentacao.colaborador_usuario_id === sessao.usuario_id;
+    movimentacao.colaborador_usuario_id === sessao.usuario_id &&
+    (movimentacao.aplicada_em !== null || decisaoFinalFavoravel);
   const participante =
     souSolicitante ||
     souGestor ||
     pode.atender ||
     pode.ver_todas ||
     souLiderDoAlvo ||
-    souOAlvoAplicado ||
+    souOAlvoDecidido ||
     (ehMovimentacao && pode.ciencia_movimentacao);
   if (!participante) {
     // Ausência, não máscara: quem não participa não sabe que a demanda existe.
@@ -394,6 +440,17 @@ export async function obterDemanda(
       if (podeDecidir) decidirEtapaAgora = pendente.nivel;
     }
   }
+  // Efeito programado que ainda não foi escrito no cadastro. Ele é o que
+  // segura a conclusão da demanda e o que habilita o botão de aplicar.
+  const efeitoPendente =
+    movimentacao !== null &&
+    movimentacao.aplicada_em === null &&
+    (demanda.status === "aberta" || demanda.status === "em_atendimento");
+  const podeAplicarEfeito =
+    efeitoPendente &&
+    movimentacao.efeito_vencido &&
+    pode.editar_posicao &&
+    (movimentacao.tipo !== "transferencia_empresa" || pode.transferir_empresa);
   return {
     demanda,
     transicoes,
@@ -406,12 +463,16 @@ export async function obterDemanda(
       aprovar: souGestor && aguardando && !ehMovimentacao,
       reprovar: souGestor && aguardando && !ehMovimentacao,
       assumir: pode.atender && demanda.status === "aberta",
-      concluir: pode.atender && demanda.status === "em_atendimento",
+      // Concluir com efeito pendente é recusado pelo serviço: a tela não
+      // oferece o botão para não prometer o que a API nega.
+      concluir:
+        pode.atender && demanda.status === "em_atendimento" && !efeitoPendente,
       recusar:
         pode.atender &&
         (demanda.status === "aberta" || demanda.status === "em_atendimento"),
       comentar: demandaAtiva(demanda.status),
       decidir_etapa: decidirEtapaAgora,
+      aplicar_efeito: podeAplicarEfeito,
     },
   };
 }
@@ -436,6 +497,15 @@ async function filtrarSensiveis(
       salario_proposto: null,
       faixa_min: null,
       faixa_max: null,
+      // `dentro_faixa` e `justificativa_excecao` NASCEM da comparação do
+      // salário com a faixa e só existem por causa dela — deixá-los no payload
+      // era publicar a remuneração por outro caminho: o cartão pinta o selo
+      // "Fora da faixa — com exceção" a partir do booleano e imprime a
+      // justificativa inteira, que é texto livre sobre valor ("entra abaixo do
+      // piso da faixa..."). Quem não pode ver o número não lê o número por
+      // extenso.
+      dentro_faixa: null,
+      justificativa_excecao: null,
     };
   }
   if (registrarLeitura && movimentacao.salario_proposto !== null) {
@@ -681,6 +751,21 @@ export async function concluirDemanda(
         "Só é possível concluir demanda em atendimento (assuma antes)."
       );
     }
+    // Movimentação com efeito ainda não aplicado não se conclui: concluir aqui
+    // deixaria o pedido "resolvido" com a promoção/transferência nunca escrita
+    // no cadastro, e sem nada na fila para lembrar disso. Para desistir, o
+    // caminho é recusar — que é como se cancela um efeito programado.
+    if (demanda.fluxo === "movimentacao") {
+      const movimentacao = await buscarMovimentacao(id, cliente);
+      if (movimentacao && movimentacao.aplicada_em === null) {
+        throw new ErroHttp(
+          409,
+          movimentacao.efeito_vencido
+            ? "O efeito desta movimentação ainda não foi aplicado: aplique antes de concluir."
+            : `O efeito desta movimentação está programado para ${formatarData(movimentacao.data_pretendida)}: conclua depois de aplicá-lo, ou recuse o pedido para cancelá-lo.`
+        );
+      }
+    }
     await registrarTransicao(cliente, sessao, demanda, "concluida", resposta, {
       Resposta: { de: null, para: resposta },
     });
@@ -872,19 +957,29 @@ async function montarVisaoMovimentacoes(
   const minhasMovimentacoes = minhasDemandas.filter(
     (demanda) => demanda.fluxo === "movimentacao"
   );
-  const [minhas, doLider, daDiretoria, aplicadas] = await Promise.all([
-    cartoesDe(minhasMovimentacoes),
-    pode.aprovar
-      ? listarMovimentacoesDoLider(sessao.usuario_id).then(cartoesDe)
-      : Promise.resolve(null),
-    pode.aprovar_diretoria
-      ? listarMovimentacoesDaDiretoria().then(cartoesDe)
-      : Promise.resolve(null),
-    pode.ciencia_movimentacao
-      ? listarMovimentacoesAplicadas().then(cartoesDe)
-      : Promise.resolve(null),
-  ]);
-  return { minhas, do_lider: doLider, da_diretoria: daDiretoria, aplicadas };
+  const [minhas, doLider, daDiretoria, programadas, aplicadas] =
+    await Promise.all([
+      cartoesDe(minhasMovimentacoes),
+      pode.aprovar
+        ? listarMovimentacoesDoLider(sessao.usuario_id).then(cartoesDe)
+        : Promise.resolve(null),
+      pode.aprovar_diretoria
+        ? listarMovimentacoesDaDiretoria().then(cartoesDe)
+        : Promise.resolve(null),
+      pode.ciencia_movimentacao
+        ? listarMovimentacoesProgramadas().then(cartoesDe)
+        : Promise.resolve(null),
+      pode.ciencia_movimentacao
+        ? listarMovimentacoesAplicadas().then(cartoesDe)
+        : Promise.resolve(null),
+    ]);
+  return {
+    minhas,
+    do_lider: doLider,
+    da_diretoria: daDiretoria,
+    programadas,
+    aplicadas,
+  };
 }
 
 export interface OpcoesMovimentacao {
@@ -905,6 +1000,12 @@ export interface OpcoesMovimentacao {
    * tipo, e sem opção não há como forjá-lo pela tela.
    */
   empresas: EmpresaAtiva[];
+  /**
+   * Candidatos a LÍDER na empresa destino, com `empresa_id` para a tela
+   * recortar pela empresa escolhida. Vem vazio junto com `empresas`: a lista
+   * só serve à transferência entre CNPJs.
+   */
+  gestores: GestorPorEmpresa[];
 }
 
 /**
@@ -917,16 +1018,20 @@ export async function opcoesMovimentacao(
 ): Promise<OpcoesMovimentacao> {
   const pode = await permissoesDe(sessao.usuario_id);
   const emNomeDoLider = pode.ver_todas || pode.aprovar_diretoria;
-  const [alvos, cargos, unidades, centros_custo, empresas] = await Promise.all([
-    listarAlvosPossiveis(sessao.usuario_id, emNomeDoLider),
-    listarCargosAtivos(),
-    listarUnidadesAtivas(),
-    listarCentrosCustoAtivos(),
-    pode.transferir_empresa
-      ? listarEmpresasAtivas()
-      : Promise.resolve([] as EmpresaAtiva[]),
-  ]);
-  return { alvos, cargos, unidades, centros_custo, empresas };
+  const [alvos, cargos, unidades, centros_custo, empresas, gestores] =
+    await Promise.all([
+      listarAlvosPossiveis(sessao.usuario_id, emNomeDoLider),
+      listarCargosAtivos(),
+      listarUnidadesAtivas(),
+      listarCentrosCustoAtivos(),
+      pode.transferir_empresa
+        ? listarEmpresasAtivas()
+        : Promise.resolve([] as EmpresaAtiva[]),
+      pode.transferir_empresa
+        ? listarGestoresPorEmpresa()
+        : Promise.resolve([] as GestorPorEmpresa[]),
+    ]);
+  return { alvos, cargos, unidades, centros_custo, empresas, gestores };
 }
 
 /**
@@ -1115,6 +1220,29 @@ export async function criarMovimentacao(
           "colaborador_id"
         );
       }
+      // O seletor da tela já só oferece quem está 'ativo'; a régua tem de estar
+      // aqui também, porque o pedido pode chegar pela API e porque o estado
+      // muda entre abrir e aplicar.
+      if (vinculo.status !== "ativo") {
+        throw new ErroHttpCampo(
+          409,
+          `Só vínculo ativo pode ser transferido (este está ${vinculo.status}). Afastamento em curso precisa ser encerrado antes: o vínculo novo nasce ativo e sem afastamento, e a pessoa apareceria presente e trabalhando na empresa de destino.`,
+          "colaborador_id"
+        );
+      }
+      // GATE DE ESTABILIDADE. A transferência ENCERRA um contrato, e até aqui
+      // era o único caminho no sistema que encerrava contrato sem passar pelo
+      // gate que o desligamento exige (art. 118 da Lei 8.213/91): quem tem
+      // afastamento acidentário nos últimos 12 meses saía sem verificação e
+      // sem registro. Barra na ABERTURA para quem pede descobrir agora, e é
+      // conferido de novo na aplicação — o estado pode mudar entre abrir e
+      // aprovar, ainda mais depois que o efeito passou a esperar a data
+      // pretendida.
+      await exigirEstabilidadeLivreParaTransferir(
+        cliente,
+        alvo.id,
+        "colaborador_id"
+      );
       const lotacao = await buscarLotacaoVigenteParaAtualizar(cliente, alvo.id);
       if (!lotacao) {
         throw new ErroHttpCampo(
@@ -1160,7 +1288,7 @@ export async function criarMovimentacao(
       if (!centro) {
         throw new ErroHttpCampo(
           400,
-          "O centro de custo destino não existe ou está inativado.",
+          "O centro de custo destino não está disponível: ou ele foi inativado, ou a empresa do grupo que o mantém foi.",
           "centro_custo_destino_id"
         );
       }
@@ -1185,6 +1313,45 @@ export async function criarMovimentacao(
           "Transferência entre empresas não muda o cargo: o vínculo novo nasce com o cargo atual.",
           "cargo_destino_id"
         );
+      }
+      // LÍDER NO DESTINO (0053). Opcional de propósito — "ninguém ainda" é
+      // resposta legítima e o vínculo novo nasce sem líder, para o DP designar.
+      // O que não pode é o pedido apontar para alguém de OUTRO CNPJ: liderar
+      // dá acesso à ficha, ao ponto e à aprovação, e a segregação por empresa
+      // existe justamente para isso.
+      if (dados.gestor_destino_colaborador_id !== undefined) {
+        const gestor = await empresaDoVinculoVigente(
+          cliente,
+          dados.gestor_destino_colaborador_id
+        );
+        if (!gestor) {
+          throw new ErroHttpCampo(
+            400,
+            "O líder escolhido não tem alocação vigente.",
+            "gestor_destino_colaborador_id"
+          );
+        }
+        if (gestor.status !== "ativo") {
+          throw new ErroHttpCampo(
+            400,
+            `${gestor.nome_completo} não está ativo — escolha um líder com contrato vigente na empresa destino.`,
+            "gestor_destino_colaborador_id"
+          );
+        }
+        if (gestor.empresa_id !== empresaId) {
+          throw new ErroHttpCampo(
+            400,
+            `${gestor.nome_completo} não é da ${empresa.nome_fantasia}. O líder tem de estar registrado na MESMA empresa de destino — liderar de outro CNPJ dá acesso à ficha de quem não é da sua empresa.`,
+            "gestor_destino_colaborador_id"
+          );
+        }
+        if (dados.gestor_destino_colaborador_id === alvo.id) {
+          throw new ErroHttpCampo(
+            400,
+            "Ninguém é o próprio líder.",
+            "gestor_destino_colaborador_id"
+          );
+        }
       }
       origem = lotacao.empresa_nome ?? "empresa atual";
     } else {
@@ -1266,6 +1433,8 @@ export async function criarMovimentacao(
       empresa_destino_id: dados.empresa_destino_id ?? null,
       matricula_destino: dados.matricula_destino ?? null,
       tipo_vinculo_destino: dados.tipo_vinculo_destino ?? null,
+      gestor_destino_colaborador_id:
+        dados.gestor_destino_colaborador_id ?? null,
       salario_proposto: dados.salario_proposto ?? null,
       faixa_min: faixaMin,
       faixa_max: faixaMax,
@@ -1559,10 +1728,189 @@ export async function decidirEtapaMovimentacao(
       return;
     }
 
-    // ------------------------------------------------ EFEITO AUTOMÁTICO
-    // Última etapa aprovada: a vida do colaborador muda AQUI, na mesma
-    // transação da decisão — é o que hoje "ocorre de forma aleatória".
-    await aplicarEfeito(cliente, sessao, demanda, movimentacao, rotuloTipo);
+    // ------------------------------------------------ APROVAÇÃO FINAL
+    // A cadeia acabou. A DECISÃO está tomada e a demanda entra na fila do DP
+    // com os trâmites — isso vale nos dois caminhos abaixo.
+    //
+    // O EFEITO, porém, tem data própria: a pretendida. Aplicá-lo antes dela
+    // seria antecipar a vida da pessoa (ver o bloco "efeito programado" em
+    // esquemas.ts, que argumenta a escolha). Então:
+    //   • vigência já chegada → aplica agora, exatamente como sempre fez;
+    //   • vigência no futuro  → agenda, e o DP aplica na data.
+    const hoje = await hojeSaoPaulo(cliente);
+    if (movimentacao.data_pretendida <= hoje) {
+      await aplicarEfeito(
+        cliente,
+        sessao,
+        demanda,
+        movimentacao,
+        rotuloTipo,
+        true
+      );
+    } else {
+      await agendarEfeito(cliente, sessao, demanda, movimentacao, rotuloTipo);
+    }
+  });
+
+  return cartaoAposDecisao(sessao, demandaId);
+}
+
+/**
+ * Aprovação final com vigência no futuro: NADA é escrito no cadastro da pessoa.
+ * A demanda entra na fila do DP (a decisão está tomada, os trâmites não), a
+ * trilha registra que o efeito ficou marcado para a data, e quem precisa saber
+ * é avisado com a data no texto.
+ */
+async function agendarEfeito(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  demanda: DemandaParaTransicao,
+  movimentacao: Movimentacao,
+  rotuloTipo: string
+): Promise<void> {
+  const data = movimentacao.data_pretendida;
+  const diff: Diff = {
+    "Aprovação final": { de: null, para: "Diretoria" },
+    Efeito: {
+      de: null,
+      para: `programado para ${formatarData(data)} — nada muda no cadastro até lá`,
+    },
+  };
+  await registrarTransicao(cliente, sessao, demanda, "aberta", null, diff);
+  await registrarAlteracao(cliente, {
+    usuarioId: sessao.usuario_id,
+    papel: sessao.papel,
+    acao: "efeito_programado",
+    tabela: TABELA_MOVIMENTACAO,
+    registroId: String(movimentacao.id),
+    diff: {
+      Colaborador: { de: null, para: movimentacao.colaborador_nome },
+      Pedido: { de: null, para: formatarNumeroDemanda(demanda.numero) },
+      ...diff,
+    },
+  });
+
+  // Ciência: os mesmos destinatários da aprovação, com a diferença que importa
+  // — o que foi aprovado ainda NÃO aconteceu, e alguém precisa aplicar na data.
+  const ciencia = await usuariosComChave(cliente, "movimentacao.ciencia");
+  const destinatarios = new Set<number>(ciencia);
+  if (movimentacao.colaborador_usuario_id !== null) {
+    destinatarios.delete(movimentacao.colaborador_usuario_id);
+  }
+  destinatarios.delete(sessao.usuario_id);
+  await notificarLote(
+    cliente,
+    [...destinatarios].map((usuarioId) => ({
+      usuarioId,
+      tipo: "movimentacao.efeito_programado",
+      titulo: `${rotuloTipo} aprovada — efeito em ${formatarData(data)}`,
+      corpo: `${movimentacao.colaborador_nome}: pedido ${formatarNumeroDemanda(demanda.numero)} aprovado pela diretoria. O efeito no cadastro só vale a partir de ${formatarData(data)} e é aplicado pelo pedido, na data.`,
+      link: `/demandas/${demanda.id}`,
+    }))
+  );
+  if (
+    movimentacao.colaborador_usuario_id !== null &&
+    movimentacao.colaborador_usuario_id !== sessao.usuario_id
+  ) {
+    await notificar(cliente, {
+      usuarioId: movimentacao.colaborador_usuario_id,
+      tipo: "movimentacao.efeito_programado",
+      titulo: `Sua ${rotuloTipo.toLowerCase()} foi aprovada`,
+      corpo: `A decisão está registrada no pedido ${formatarNumeroDemanda(demanda.numero)} e passa a valer em ${formatarData(data)}.`,
+      link: `/demandas/${demanda.id}`,
+    });
+  }
+  await notificarSolicitante(
+    cliente,
+    sessao,
+    demanda,
+    "movimentacao.efeito_programado",
+    `${rotuloTipo} aprovada pela diretoria`,
+    `O pedido ${formatarNumeroDemanda(demanda.numero)} foi aprovado; o efeito está programado para ${formatarData(data)}.`
+  );
+}
+
+/**
+ * O disparo do efeito programado, na data ou depois. É o ato que fecha o par
+ * "aprovação decide / efeito acontece" — sem ele o agendamento seria promessa.
+ *
+ * Não há agendador neste sistema (procurado: não existe cron, fila nem processo
+ * de fundo), então quem chama é gente: o DP, pela demanda que a aprovação já
+ * pôs na fila dele junto com os demais trâmites da data. A rota é a mesma que
+ * um agendador usaria, se um dia houver.
+ */
+export async function aplicarEfeitoProgramado(
+  sessao: PayloadSessao,
+  demandaId: number
+): Promise<CartaoMovimentacao> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const demanda = await buscarParaTransicao(cliente, demandaId);
+    if (!demanda) {
+      throw new ErroHttp(404, "Pedido não encontrado.");
+    }
+    if (demanda.fluxo !== "movimentacao") {
+      throw new ErroHttp(409, "Esta demanda não tem efeito a aplicar.");
+    }
+    const movimentacao = await buscarMovimentacao(demandaId, cliente);
+    if (!movimentacao) {
+      throw new ErroHttp(500, "Pedido sem detalhe de movimentação.");
+    }
+    if (movimentacao.aplicada_em !== null) {
+      throw new ErroHttp(409, "O efeito deste pedido já foi aplicado.");
+    }
+    if (await buscarEtapaPendente(cliente, demandaId)) {
+      throw new ErroHttp(
+        409,
+        "O pedido ainda aguarda aprovação — o efeito só existe depois da cadeia."
+      );
+    }
+    // Recusado ou concluído não aplica: recusar DEPOIS da aprovação é
+    // justamente como se cancela um efeito programado.
+    if (demanda.status !== "aberta" && demanda.status !== "em_atendimento") {
+      throw new ErroHttp(
+        409,
+        "Só o pedido aberto ou em atendimento tem efeito a aplicar."
+      );
+    }
+    const hoje = await hojeSaoPaulo(cliente);
+    if (movimentacao.data_pretendida > hoje) {
+      throw new ErroHttp(
+        409,
+        `O efeito vale a partir de ${formatarData(movimentacao.data_pretendida)}: não é possível aplicá-lo antes da data aprovada.`
+      );
+    }
+
+    // Autorização POR CHAVE, nunca por papel. Aplicar o efeito escreve posição
+    // e alocação — é o mesmo ato que `rh.posicao.editar` autoriza fazer à mão.
+    // A transferência entre empresas encerra um contrato e abre outro, e por
+    // isso exige a chave própria dela, a mesma que a abertura exigiu.
+    if (!(await temPermissao(sessao.usuario_id, "rh.posicao.editar"))) {
+      throw new ErroHttp(
+        403,
+        "Aplicar o efeito de uma movimentação é ato de quem administra posição e alocação."
+      );
+    }
+    if (
+      movimentacao.tipo === "transferencia_empresa" &&
+      !(await temPermissao(
+        sessao.usuario_id,
+        "movimentacao.transferir_empresa"
+      ))
+    ) {
+      throw new ErroHttp(
+        403,
+        "Transferência entre empresas do grupo é ato de DP ou da diretoria."
+      );
+    }
+
+    await aplicarEfeito(
+      cliente,
+      sessao,
+      demanda,
+      movimentacao,
+      ROTULOS_TIPO_MOVIMENTACAO[movimentacao.tipo],
+      false
+    );
   });
 
   return cartaoAposDecisao(sessao, demandaId);
@@ -1573,7 +1921,15 @@ async function aplicarEfeito(
   sessao: PayloadSessao,
   demanda: DemandaParaTransicao,
   movimentacao: Movimentacao,
-  rotuloTipo: string
+  rotuloTipo: string,
+  /**
+   * `true` quando o efeito sai junto com a aprovação final — aí a demanda ainda
+   * precisa entrar na fila do DP, e a transição de status leva o resumo do
+   * efeito. `false` quando é o efeito PROGRAMADO sendo aplicado depois: a
+   * demanda já está na fila, o status não muda, e o registro do que aconteceu
+   * vai para a thread do pedido.
+   */
+  naAprovacaoFinal: boolean
 ): Promise<void> {
   const data = movimentacao.data_pretendida;
   const diffEfeito: Diff = {
@@ -1715,11 +2071,24 @@ async function aplicarEfeito(
     vinculo_destino_id: vinculoDestinoId,
   });
 
-  // A demanda entra na fila do DP: a decisão está tomada, os TRÂMITES não.
-  await registrarTransicao(cliente, sessao, demanda, "aberta", null, {
-    "Aprovação final": { de: null, para: "Diretoria" },
-    ...diffEfeito,
-  });
+  if (naAprovacaoFinal) {
+    // A demanda entra na fila do DP: a decisão está tomada, os TRÂMITES não.
+    await registrarTransicao(cliente, sessao, demanda, "aberta", null, {
+      "Aprovação final": { de: null, para: "Diretoria" },
+      ...diffEfeito,
+    });
+  } else {
+    // Efeito programado aplicado no dia: o status não se mexe (a demanda já
+    // está na fila), então o que marca o momento na thread do pedido é um
+    // comentário — a máquina de status não ganha um estado só para isto.
+    await inserirComentario(cliente, {
+      demanda_id: demanda.id,
+      autor_usuario_id: sessao.usuario_id,
+      texto:
+        `Efeito aplicado com vigência em ${formatarData(data)}, conforme aprovado.` +
+        ` A partir de agora o cadastro de ${movimentacao.colaborador_nome} reflete a movimentação.`,
+    });
+  }
 
   await registrarAlteracao(cliente, {
     usuarioId: sessao.usuario_id,
@@ -1752,20 +2121,28 @@ async function aplicarEfeito(
   });
 
   // CIÊNCIA AUTOMÁTICA — a dor central do feedback. DP e T&D (chave
-  // movimentacao.ciencia) mais o próprio colaborador e o solicitante.
+  // movimentacao.ciencia) mais o próprio colaborador e o solicitante. Quando o
+  // efeito é o programado sendo aplicado, o aviso da aprovação já saiu dias
+  // atrás: o que se comunica agora é que o cadastro MUDOU.
   const ciencia = await usuariosComChave(cliente, "movimentacao.ciencia");
   const destinatarios = new Set<number>(ciencia);
   if (movimentacao.colaborador_usuario_id !== null) {
     destinatarios.delete(movimentacao.colaborador_usuario_id);
   }
   destinatarios.delete(sessao.usuario_id);
+  const tituloCiencia = naAprovacaoFinal
+    ? `${rotuloTipo} aprovada — providenciar trâmites`
+    : `${rotuloTipo} aplicada — vigência em ${formatarData(data)}`;
+  const corpoCiencia = naAprovacaoFinal
+    ? `${movimentacao.colaborador_nome}: pedido ${formatarNumeroDemanda(demanda.numero)} aprovado pela diretoria, com vigência em ${formatarData(data)}.`
+    : `${movimentacao.colaborador_nome}: o efeito programado do pedido ${formatarNumeroDemanda(demanda.numero)} foi aplicado e o cadastro já reflete a movimentação.`;
   await notificarLote(
     cliente,
     [...destinatarios].map((usuarioId) => ({
       usuarioId,
       tipo: "movimentacao.aprovada",
-      titulo: `${rotuloTipo} aprovada — providenciar trâmites`,
-      corpo: `${movimentacao.colaborador_nome}: pedido ${formatarNumeroDemanda(demanda.numero)} aprovado pela diretoria, com vigência em ${formatarData(data)}.`,
+      titulo: tituloCiencia,
+      corpo: corpoCiencia,
       link: `/demandas/${demanda.id}`,
     }))
   );
@@ -1776,8 +2153,12 @@ async function aplicarEfeito(
     await notificar(cliente, {
       usuarioId: movimentacao.colaborador_usuario_id,
       tipo: "movimentacao.aprovada",
-      titulo: `Sua ${rotuloTipo.toLowerCase()} foi aprovada`,
-      corpo: `A decisão está registrada no pedido ${formatarNumeroDemanda(demanda.numero)}, com vigência em ${formatarData(data)}.`,
+      titulo: naAprovacaoFinal
+        ? `Sua ${rotuloTipo.toLowerCase()} foi aprovada`
+        : `Sua ${rotuloTipo.toLowerCase()} passou a valer`,
+      corpo: naAprovacaoFinal
+        ? `A decisão está registrada no pedido ${formatarNumeroDemanda(demanda.numero)}, com vigência em ${formatarData(data)}.`
+        : `O pedido ${formatarNumeroDemanda(demanda.numero)} foi aplicado, com vigência em ${formatarData(data)}.`,
       link: `/demandas/${demanda.id}`,
     });
   }
@@ -1786,15 +2167,20 @@ async function aplicarEfeito(
     sessao,
     demanda,
     "movimentacao.aprovada",
-    `${rotuloTipo} aprovada pela diretoria`,
-    `O pedido ${formatarNumeroDemanda(demanda.numero)} foi aprovado; o DP e o T&D já foram avisados dos trâmites.`
+    naAprovacaoFinal
+      ? `${rotuloTipo} aprovada pela diretoria`
+      : `${rotuloTipo} aplicada`,
+    naAprovacaoFinal
+      ? `O pedido ${formatarNumeroDemanda(demanda.numero)} foi aprovado; o DP e o T&D já foram avisados dos trâmites.`
+      : `O efeito do pedido ${formatarNumeroDemanda(demanda.numero)} foi aplicado, com vigência em ${formatarData(data)}.`
   );
 }
 
 // ================================================================ TRANSFERÊNCIA ENTRE EMPRESAS
 // "ele demite e recontrata na outra empresa, mas não queria perder os dados e
 // histórico" — o caso que motivou a onda. Aqui a demissão e a recontratação
-// viram UM ato, dentro da transação que aprova o pedido.
+// viram UM ato, dentro da transação que APLICA o efeito — na aprovação final
+// quando a vigência já chegou, ou na data pretendida quando ela é futura.
 //
 // O QUE ACONTECE, na ordem, e por quê:
 //   1. encerra a POSIÇÃO e a ALOCAÇÃO do vínculo velho na véspera;
@@ -1805,7 +2191,10 @@ async function aplicarEfeito(
 //   5. abre o VÍNCULO NOVO com a MESMA pessoa_id — mesmo CPF, mesma conta;
 //   6. recria posição (cargo e salário congelados), alocação (o trio da 0047)
 //      e liderança no vínculo novo;
-//   7. copia os DEPENDENTES com rastro;
+//   7. copia os DEPENDENTES com rastro e leva os BENEFÍCIOS: encerra as
+//      adesões do vínculo que fecha na véspera e recria no novo as que o
+//      critério de elegibilidade do CNPJ destino admite — o que não passa vai
+//      NOMEADO para o diff do cartão, como pendência do DP;
 //   8. liga um vínculo ao outro (sucede_vinculo_id) e grava os dois eventos.
 //
 // O que NÃO acontece aqui, de propósito, e está argumentado no cabeçalho da
@@ -1813,6 +2202,71 @@ async function aplicarEfeito(
 // cabe em quem continua na casa), não se copia evento, avaliação, ocorrência,
 // documento nem ASO, e o período aquisitivo de férias recomeça no contrato
 // novo. A leitura dessas coisas atravessa pela PESSOA, não por cópia.
+
+/**
+ * GATE DE ESTABILIDADE DA TRANSFERÊNCIA ENTRE EMPRESAS DO GRUPO.
+ *
+ * A transferência ENCERRA um contrato de trabalho — o vínculo de origem sai com
+ * status 'desligado' e data_desligamento. O desligamento propriamente dito só
+ * passa depois do gate do art. 118 da Lei 8.213/91 (`previaEstabilidades` /
+ * `temAfastamentoAcidentario12m`), que grava rh.verificacao_estabilidade e, no
+ * resultado 'bloqueado', exige justificativa auditada. A transferência não
+ * chamava nada disso: era o único caminho do sistema que encerrava contrato sem
+ * verificação nenhuma e sem deixar registro.
+ *
+ * Aqui o gate BARRA, e não oferece override. O override do desligamento existe
+ * porque lá a saída é o ato pedido e alguém assume a responsabilidade por ela;
+ * na transferência o objetivo é a pessoa CONTINUAR na casa, então "encerrar o
+ * contrato de quem tem estabilidade acidentária" nunca é o caminho — ou se
+ * espera o fim do período, ou o caso é um desligamento e vai pelo rito que tem
+ * override e registro. Se o dono decidir o contrário, isso vira item (m) da
+ * 0048, escrito, com tabela para guardar a justificativa.
+ *
+ * Roda DUAS vezes de propósito: na abertura do pedido (para quem pede descobrir
+ * na hora, e não o aprovador dias depois) e de novo dentro da transação que
+ * aplica o efeito — desde a onda A4 o efeito espera a data pretendida, então o
+ * estado pode mudar entre abrir e aplicar.
+ *
+ * @param campo quando informado, o erro sai como erro DE CAMPO do formulário
+ * (abertura); sem ele, é erro do ato (aplicação do efeito).
+ */
+async function exigirEstabilidadeLivreParaTransferir(
+  cliente: PoolClient,
+  colaboradorId: number,
+  campo?: "colaborador_id"
+): Promise<void> {
+  const bloqueado = await temAfastamentoAcidentario12m(colaboradorId, cliente);
+  if (!bloqueado) return;
+  const mensagem =
+    "Há afastamento por acidente de trabalho nos últimos 12 meses: o contrato" +
+    " tem estabilidade do art. 118 da Lei 8.213/91 e a transferência entre" +
+    " empresas do grupo ENCERRA o contrato atual. Aguarde o fim do período de" +
+    " estabilidade ou, se a intenção for mesmo a saída, conduza pelo processo" +
+    " de desligamento, que tem a verificação registrada e a exceção justificada.";
+  throw campo
+    ? new ErroHttpCampo(409, mensagem, campo)
+    : new ErroHttp(409, mensagem);
+}
+
+/** Frase do diff e do evento: o que atravessou e, sobretudo, o que não. */
+function descreverBeneficiosNaTransferencia(
+  beneficios: BeneficiosNaTransferencia
+): string {
+  const partes: string[] = [];
+  if (beneficios.atravessaram.length > 0) {
+    partes.push(
+      `${beneficios.atravessaram.length} recriada(s) no vínculo novo ` +
+        `(${beneficios.atravessaram.join(", ")})`
+    );
+  }
+  if (beneficios.ficaram.length > 0) {
+    partes.push(
+      `${beneficios.ficaram.length} encerrada(s) sem recriação — o critério da ` +
+        `empresa destino não admite: ${beneficios.ficaram.join(", ")}`
+    );
+  }
+  return partes.length > 0 ? partes.join("; ") : "nenhuma adesão vigente";
+}
 
 interface EfeitoTransferencia {
   posicao_id: number;
@@ -1843,12 +2297,27 @@ async function aplicarTransferenciaEntreEmpresas(
       "O vínculo de origem já está desligado — a transferência não tem o que encerrar."
     );
   }
+  // Não basta recusar 'desligado'. Entre abrir o pedido e aplicá-lo passam-se
+  // dias (o efeito espera a data pretendida), e nesse intervalo o vínculo pode
+  // ter virado 'afastado'. A transferência não copia nem encerra afastamento:
+  // o vínculo novo nasce 'ativo' (DEFAULT da coluna) e sem nenhuma linha em
+  // rh.afastamento, então a pessoa reapareceria presente para o gestor de
+  // destino e entraria na folha com salário cheio.
+  if (vinculo.status !== "ativo") {
+    throw new ErroHttp(
+      409,
+      `O vínculo de origem está ${vinculo.status} — só vínculo ativo pode ser transferido. Encerre o afastamento ou reabra o pedido com outra data.`
+    );
+  }
   if (vinculo.ja_sucedido) {
     throw new ErroHttp(
       409,
       "Este vínculo já foi transferido para outra empresa do grupo."
     );
   }
+  // Mesmo gate da abertura, conferido de novo: o afastamento acidentário pode
+  // ter começado depois do pedido, e a transferência encerra o contrato.
+  await exigirEstabilidadeLivreParaTransferir(cliente, origemId);
   const posicao = await buscarPosicaoVigenteParaAtualizar(cliente, origemId);
   if (!posicao) {
     throw new ErroHttp(
@@ -1907,7 +2376,7 @@ async function aplicarTransferenciaEntreEmpresas(
   if (!centro) {
     throw new ErroHttp(
       409,
-      "O centro de custo destino foi inativado depois da abertura do pedido."
+      "O centro de custo destino deixou de estar disponível depois da abertura do pedido (ele ou a empresa do grupo que o mantém foi inativado)."
     );
   }
   const matricula = movimentacao.matricula_destino as string;
@@ -1929,9 +2398,12 @@ async function aplicarTransferenciaEntreEmpresas(
   if (relacaoLider) {
     await encerrarRelacaoGestor(cliente, relacaoLider.id, data);
   }
-  // A equipe DELE, quando ele é líder: sem isso o organograma perderia os
-  // liderados no dia da transferência (o vínculo velho fica desligado, e a
-  // consulta do organograma só enxerga quem não está desligado).
+  // A equipe DELE, quando ele é líder. Todas as relações do vínculo que fecha
+  // são encerradas — a liderança valeu enquanto o contrato valeu (0050).
+  // Quem volta a ser pendurado no vínculo novo é decidido logo abaixo, pela
+  // EMPRESA de cada liderado: reinserir todo mundo, como se fazia, levava
+  // gente do CNPJ de origem para um líder do CNPJ de destino só para o desenho
+  // do organograma não abrir buraco.
   const liderados = await listarLiderados(cliente, origemId);
   for (const relacao of liderados) {
     await encerrarRelacaoGestor(cliente, relacao.relacao_id, data);
@@ -1982,23 +2454,69 @@ async function aplicarTransferenciaEntreEmpresas(
     centro_custo_id: centro.id,
     inicio_vigencia: data,
   });
-  if (relacaoLider) {
+  // LIDERANÇA (0053). Quem lidera na empresa NOVA é o que o pedido escolheu —
+  // nunca o líder de origem, que é de outro CNPJ. Sem escolha, o vínculo nasce
+  // sem líder e o DP designa; é a mesma decisão que a 0050 registrou para o
+  // desligamento do gestor ("sobe para a raiz do organograma até o DP
+  // registrar o novo"). O gestor é revalidado AQUI porque entre abrir e
+  // aplicar ele pode ter sido desligado ou transferido.
+  const gestorEscolhidoId = movimentacao.gestor_destino_colaborador_id;
+  let liderDoDestino: { id: number; nome: string } | null = null;
+  let motivoSemLider: string | null = null;
+  if (gestorEscolhidoId === null) {
+    motivoSemLider =
+      "nenhum líder foi escolhido na empresa destino — o DP precisa designar";
+  } else {
+    const gestor = await empresaDoVinculoVigente(cliente, gestorEscolhidoId);
+    if (!gestor || gestor.status !== "ativo" || gestor.empresa_id !== empresa.id) {
+      throw new ErroHttp(
+        409,
+        "O líder escolhido para a empresa destino não está mais ativo e registrado nela. Reabra o pedido com outro líder."
+      );
+    }
     await inserirRelacaoGestor(cliente, {
-      gestor_colaborador_id: relacaoLider.gestor_colaborador_id,
+      gestor_colaborador_id: gestorEscolhidoId,
       liderado_colaborador_id: novo.id,
       inicio_vigencia: data,
     });
-  }
-  for (const relacao of liderados) {
-    await inserirRelacaoGestor(cliente, {
-      gestor_colaborador_id: novo.id,
-      liderado_colaborador_id: relacao.liderado_id,
-      inicio_vigencia: data,
-    });
+    liderDoDestino = { id: gestorEscolhidoId, nome: gestor.nome_completo };
   }
 
-  // ---------------------------------------------------------- 7: dependentes
+  // A equipe dele só atravessa junto quem também está na empresa de destino.
+  // Quem ficou no CNPJ de origem teve a relação encerrada acima e sai NOMEADO
+  // no diff, como pendência de "redefinir líder" para o DP daquela empresa.
+  const lideradosQueAtravessam: string[] = [];
+  const lideradosQueFicam: string[] = [];
+  for (const relacao of liderados) {
+    const liderado = await empresaDoVinculoVigente(cliente, relacao.liderado_id);
+    if (liderado && liderado.empresa_id === empresa.id) {
+      await inserirRelacaoGestor(cliente, {
+        gestor_colaborador_id: novo.id,
+        liderado_colaborador_id: relacao.liderado_id,
+        inicio_vigencia: data,
+      });
+      lideradosQueAtravessam.push(liderado.nome_completo);
+    } else {
+      lideradosQueFicam.push(
+        liderado ? liderado.nome_completo : `vínculo ${relacao.liderado_id}`
+      );
+    }
+  }
+
+  // ---------------------------------------------------------- 7: dependentes e benefícios
   const dependentesCopiados = await copiarDependentes(cliente, origemId, novo.id);
+  // Benefício é contrato do EMPREGADOR com a operadora: o do CNPJ que sai
+  // termina na véspera e o do CNPJ que entra só nasce se a regra DELE admitir
+  // (tipo de vínculo e unidade podem ser outros). Até aqui rh.adesao não era
+  // tocada em lugar nenhum deste ato — o vínculo velho ficava com as adesões
+  // de fim aberto e o novo nascia sem nenhuma, e o RH via cinco adesões
+  // "vigentes" numa matrícula encerrada enquanto a pessoa via zero.
+  const beneficios = await transferirAdesoesEntreVinculos(
+    cliente,
+    origemId,
+    novo.id,
+    data
+  );
 
   // ---------------------------------------------------------- 8: o elo e os eventos
   await ligarSucessao(cliente, novo.id, origemId);
@@ -2028,7 +2546,12 @@ async function aplicarTransferenciaEntreEmpresas(
       ` (vinha de ${empresaOrigem}, matrícula ${vinculo.matricula}) em ${formatarData(data)}` +
       ` — aprovada na demanda ${formatarNumeroDemanda(demanda.numero)}.` +
       ` Cargo e remuneração mantidos; período aquisitivo de férias recomeça neste contrato.`,
-    payload: { ...payloadComum, dependentes_copiados: dependentesCopiados },
+    payload: {
+      ...payloadComum,
+      dependentes_copiados: dependentesCopiados,
+      beneficios_recriados: beneficios.atravessaram,
+      beneficios_nao_recriados: beneficios.ficaram,
+    },
     registrado_por: sessao.usuario_id,
   });
 
@@ -2066,14 +2589,28 @@ async function aplicarTransferenciaEntreEmpresas(
           ? "nenhum a copiar"
           : `${dependentesCopiados} copiado(s) para o vínculo novo, com rastro`,
     },
-    "Liderança": {
+    // O que ficou para trás sai NOMEADO: é a pendência que o DP precisa ver na
+    // hora, não descobrir na próxima folha.
+    "Benefícios": {
       de: null,
+      para: descreverBeneficiosNaTransferencia(beneficios),
+    },
+    // O que a liderança virou de verdade: quem passa a liderar NA EMPRESA
+    // NOVA, e quem ficou sem líder do lado de lá. "Líder mantido" era falso —
+    // o líder de origem é de outro CNPJ.
+    "Liderança": {
+      de: relacaoLider
+        ? `${relacaoLider.gestor_nome} (${empresaOrigem})`
+        : "sem líder vigente",
       para:
-        (relacaoLider
-          ? `líder ${relacaoLider.gestor_nome} mantido`
-          : "sem líder vigente") +
-        (liderados.length > 0
-          ? `; ${liderados.length} liderado(s) remanejado(s) para o vínculo novo`
+        (liderDoDestino
+          ? `${liderDoDestino.nome} (${empresa.nome_fantasia})`
+          : `SEM LÍDER — ${motivoSemLider}`) +
+        (lideradosQueAtravessam.length > 0
+          ? `; equipe que acompanha (também na ${empresa.nome_fantasia}): ${lideradosQueAtravessam.join(", ")}`
+          : "") +
+        (lideradosQueFicam.length > 0
+          ? `; SEM LÍDER em ${empresaOrigem}, o DP de lá precisa redefinir: ${lideradosQueFicam.join(", ")}`
           : ""),
     },
   };

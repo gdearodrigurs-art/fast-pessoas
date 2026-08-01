@@ -38,13 +38,18 @@ export const esquemaCriacaoIndicador = z.object({
 
 export type CriacaoIndicador = z.infer<typeof esquemaCriacaoIndicador>;
 
+/**
+ * O escopo da meta é a UNIDADE, não o nome dela: quem chega é o
+ * `estabelecimento_id` (NULL = global). Antes chegava a string do nome, e
+ * renomear a unidade orfanava a meta — ver migration 0049.
+ */
 export const esquemaCriacaoMeta = z.object({
-  escopo: z
-    .string()
-    .trim()
-    .min(1, "Informe o escopo")
-    .max(120)
-    .default(ESCOPO_GLOBAL),
+  estabelecimento_id: z
+    .number("Informe a unidade da meta")
+    .int("Unidade inválida")
+    .positive("Unidade inválida")
+    .nullable()
+    .default(null),
   valor: z
     .number("Informe o valor da meta")
     .finite("Valor inválido")

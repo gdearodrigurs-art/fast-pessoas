@@ -1019,16 +1019,25 @@ async function semear(cliente) {
   //    de apuração devolvem qualquer um ao positivo, e a demo acabava sem
   //    nenhum saldo devedor para mostrar. A folga adiantada entra no último dia
   //    apurado e respeita o PISO da regra pela mesma função do teto.
+  //    "Último dia apurado" não é o último dia de `corrente`: no DIA 1 da
+  //    competência corrente ainda não existe dia fechado (o app apura até
+  //    ontem, e por isso diasCorrente nasce VAZIO). Nesse dia o último dia
+  //    apurado é o da competência ANTERIOR — e era a leitura cega do vazio que
+  //    mandava data NULL para rh.banco_horas_movimento e derrubava o povoador
+  //    todo dia primeiro.
+  const competenciaApurada = diasCorrente.length > 0 ? corrente : anterior;
+  const diasApurados = diasCorrente.length > 0 ? diasCorrente : anterior.dias;
+  const ultimoDiaApurado = diasApurados[diasApurados.length - 1];
   if (negativoEscolhido) {
     const saldoAtual = saldoDoBanco.get(negativoEscolhido.id) ?? 0;
     const alvo = -inteiro(rng, 300, 900);
     const folga = limitarCreditoDoBanco(saldoAtual, alvo - saldoAtual, tetoBanco, pisoBanco, {
       regra: `Padrão da empresa (versão ${regra.id})`,
-      competencia: corrente.rotulo,
+      competencia: competenciaApurada.rotulo,
     });
     lancarNoBanco(
       negativoEscolhido.id,
-      diasCorrente[diasCorrente.length - 1],
+      ultimoDiaApurado,
       folga.lancado,
       'compensacao',
       null,

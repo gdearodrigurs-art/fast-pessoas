@@ -96,17 +96,27 @@ const SELECT_RESUMO = `
     LEFT JOIN sistema.usuario a ON a.id = d.atendente_usuario_id`;
 
 // Gestor vigente do solicitante da demanda (rh.relacao_gestor sem fim de vigência).
+//
+// PIVÔ PELO VÍNCULO, NÃO PELA CONTA. Desde a 0046 a conta é da PESSOA e
+// `rh.colaborador.usuario_id` é projeção dela: `sc.usuario_id = <conta>` casa
+// com TODOS os contratos daquele ser humano, inclusive os já encerrados em
+// outra empresa do grupo. Enquanto a relação de liderança do contrato morto
+// ficasse aberta, o líder de lá continuaria aprovando, reprovando e recebendo
+// aviso de quem hoje é de outro CNPJ — escrita atravessando empresa.
+// A demanda já grava `d.solicitante_colaborador_id`: quem manda em mim é
+// pergunta do CONTRATO, e é ele que responde. Do outro lado, o gestor decide
+// pelo vínculo em que ele está HOJE (`rh.vinculo_atual`), não por um contrato
+// que ele já encerrou. As duas pontas juntas — mais o encerramento da relação
+// no desligamento (0050_lideranca_encerra_com_o_contrato) — fecham o buraco
+// por dois caminhos independentes.
 function fragmentoGestor(parametroGestor: string): string {
   return `EXISTS (
     SELECT 1
-      FROM rh.colaborador sc
-      JOIN rh.relacao_gestor rg
-        ON rg.liderado_colaborador_id = sc.id
+      FROM rh.relacao_gestor rg
+     WHERE rg.liderado_colaborador_id = d.solicitante_colaborador_id
        AND rg.fim_vigencia IS NULL
        AND rg.inicio_vigencia <= ${HOJE_SP}
-      JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
-     WHERE sc.usuario_id = d.solicitante_usuario_id
-       AND gc.usuario_id = ${parametroGestor})`;
+       AND rg.gestor_colaborador_id = rh.vinculo_atual(${parametroGestor}))`;
 }
 
 interface LinhaResumo extends Record<string, unknown> {
@@ -484,6 +494,10 @@ export async function inserirComentario(
  * Usuários (com conta) que são gestores vigentes do solicitante — alvo dos
  * avisos de aprovação pendente. Vazio quando o solicitante não tem gestor
  * vigente ou o gestor não tem usuário.
+ *
+ * Pivô pelo VÍNCULO do solicitante (`rh.vinculo_atual`), pelo mesmo motivo
+ * escrito em `fragmentoGestor`: o líder de um contrato encerrado não pode ser
+ * avisado de pedido de quem hoje trabalha em outra empresa do grupo.
  */
 export async function gestoresDoUsuario(
   cliente: PoolClient,
@@ -491,20 +505,24 @@ export async function gestoresDoUsuario(
 ): Promise<number[]> {
   const { rows } = await cliente.query<{ usuario_id: string }>(
     `SELECT DISTINCT gc.usuario_id
-       FROM rh.colaborador sc
-       JOIN rh.relacao_gestor rg
-         ON rg.liderado_colaborador_id = sc.id
+       FROM rh.relacao_gestor rg
+       JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
+      WHERE rg.liderado_colaborador_id = rh.vinculo_atual($1)
         AND rg.fim_vigencia IS NULL
         AND rg.inicio_vigencia <= ${HOJE_SP}
-       JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
-      WHERE sc.usuario_id = $1
         AND gc.usuario_id IS NOT NULL`,
     [solicitanteUsuarioId]
   );
   return rows.map((linha) => Number(linha.usuario_id));
 }
 
-/** O usuário é gestor vigente do solicitante? (rh.relacao_gestor sem fim.) */
+/**
+ * O usuário é gestor vigente do solicitante? (rh.relacao_gestor sem fim.)
+ *
+ * É a GUARDA DE ESCRITA do nível 'lider' — quem aprova, reprova e decide passa
+ * por aqui. Vínculo dos dois lados (ver `fragmentoGestor`): o contrato vigente
+ * de quem pede e o contrato vigente de quem decide.
+ */
 export async function ehGestorDoUsuario(
   gestorUsuarioId: number,
   solicitanteUsuarioId: number,
@@ -512,14 +530,11 @@ export async function ehGestorDoUsuario(
 ): Promise<boolean> {
   const sql = `SELECT EXISTS (
       SELECT 1
-        FROM rh.colaborador sc
-        JOIN rh.relacao_gestor rg
-          ON rg.liderado_colaborador_id = sc.id
+        FROM rh.relacao_gestor rg
+       WHERE rg.liderado_colaborador_id = rh.vinculo_atual($2)
          AND rg.fim_vigencia IS NULL
          AND rg.inicio_vigencia <= ${HOJE_SP}
-        JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
-       WHERE sc.usuario_id = $2
-         AND gc.usuario_id = $1) AS eh_gestor`;
+         AND rg.gestor_colaborador_id = rh.vinculo_atual($1)) AS eh_gestor`;
   if (cliente) {
     const { rows } = await cliente.query<{ eh_gestor: boolean }>(sql, [
       gestorUsuarioId,
@@ -782,6 +797,12 @@ export interface Movimentacao {
   /** Só em 'transferencia_empresa': o contrato que nasce na empresa destino. */
   matricula_destino: string | null;
   tipo_vinculo_destino: TipoVinculo | null;
+  /**
+   * Quem lidera na empresa DESTINO (0053). null = ninguém escolheu, e o
+   * vínculo novo nasce sem líder — nunca se herda o líder do CNPJ de origem.
+   */
+  gestor_destino_colaborador_id: number | null;
+  gestor_destino_nome: string | null;
   /** Preenchido na aplicação do efeito: o vínculo criado na empresa destino. */
   vinculo_destino_id: number | null;
   vinculo_destino_matricula: string | null;
@@ -790,6 +811,12 @@ export interface Movimentacao {
   dentro_faixa: boolean | null;
   justificativa_excecao: string | null;
   aplicada_em: string | null;
+  /**
+   * A data pretendida já chegou (em São Paulo). Vem do banco e não do relógio
+   * do navegador porque é o MESMO relógio que a trava do serviço consulta: a
+   * tela não pode oferecer "Aplicar" um segundo antes de a API aceitar.
+   */
+  efeito_vencido: boolean;
   // Sensíveis (remuneração): o serviço remove de quem não pode ver.
   salario_proposto: number | null;
   faixa_min: number | null;
@@ -816,6 +843,8 @@ interface LinhaMovimentacao extends Record<string, unknown> {
   empresa_destino: string | null;
   matricula_destino: string | null;
   tipo_vinculo_destino: TipoVinculo | null;
+  gestor_destino_colaborador_id: string | null;
+  gestor_destino_nome: string | null;
   vinculo_destino_id: string | null;
   vinculo_destino_matricula: string | null;
   data_pretendida: string;
@@ -823,6 +852,7 @@ interface LinhaMovimentacao extends Record<string, unknown> {
   dentro_faixa: boolean | null;
   justificativa_excecao: string | null;
   aplicada_em: string | null;
+  efeito_vencido: boolean;
   salario_proposto: string | null;
   faixa_min: string | null;
   faixa_max: string | null;
@@ -848,14 +878,19 @@ const SELECT_MOVIMENTACAO = `
            ORDER BY p.inicio_vigencia DESC
            LIMIT 1)
            AS cargo_origem,
-         (SELECT ev.unidade
-            FROM rh.lotacao l
-            JOIN rh.estabelecimento_versao ev
-              ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-           WHERE l.colaborador_id = m.colaborador_id
-             AND l.inicio_vigencia <= m.data_pretendida - 1
-             AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= m.data_pretendida - 1)
-           ORDER BY l.inicio_vigencia DESC
+         -- A LINHA é a da véspera, e o NOME também. Ler o nome pela versão
+         -- 'ativa' do estabelecimento acertava a linha e errava a época:
+         -- renomear a unidade hoje reescrevia de onde a pessoa saiu meses
+         -- atrás ("saiu da Filial Oeste" virava "saiu da OESTE RENOMEADA
+         -- HOJE"). rh.lotacao_detalhada resolve cada nome pela versão vigente
+         -- no FIM daquela linha de lotação — a mesma régua que empresa_origem
+         -- e centro_custo_origem usam vinte linhas abaixo.
+         (SELECT ld.lotacao_nome
+            FROM rh.lotacao_detalhada ld
+           WHERE ld.colaborador_id = m.colaborador_id
+             AND ld.inicio_vigencia <= m.data_pretendida - 1
+             AND (ld.fim_vigencia IS NULL OR ld.fim_vigencia >= m.data_pretendida - 1)
+           ORDER BY ld.inicio_vigencia DESC
            LIMIT 1)
            AS unidade_origem,
          m.cargo_destino_id,
@@ -882,11 +917,16 @@ const SELECT_MOVIMENTACAO = `
          (SELECT ev.nome_fantasia FROM rh.empresa_grupo_versao ev
            WHERE ev.empresa_id = m.empresa_destino_id AND ev.status = 'ativa')
            AS empresa_destino,
-         m.matricula_destino, m.tipo_vinculo_destino, m.vinculo_destino_id,
+         m.matricula_destino, m.tipo_vinculo_destino,
+         m.gestor_destino_colaborador_id,
+         (SELECT g.nome_completo FROM rh.colaborador g
+           WHERE g.id = m.gestor_destino_colaborador_id) AS gestor_destino_nome,
+         m.vinculo_destino_id,
          (SELECT vd.matricula FROM rh.colaborador vd
            WHERE vd.id = m.vinculo_destino_id) AS vinculo_destino_matricula,
          m.data_pretendida::text AS data_pretendida,
          m.justificativa, m.dentro_faixa, m.justificativa_excecao, m.aplicada_em,
+         (m.data_pretendida <= ${HOJE_SP}) AS efeito_vencido,
          m.salario_proposto::text AS salario_proposto,
          m.faixa_min::text AS faixa_min, m.faixa_max::text AS faixa_max
     FROM rh.demanda_movimentacao m
@@ -915,6 +955,10 @@ function paraMovimentacao(linha: LinhaMovimentacao): Movimentacao {
     empresa_destino: linha.empresa_destino,
     matricula_destino: linha.matricula_destino,
     tipo_vinculo_destino: linha.tipo_vinculo_destino,
+    gestor_destino_colaborador_id: numeroOuNulo(
+      linha.gestor_destino_colaborador_id
+    ),
+    gestor_destino_nome: linha.gestor_destino_nome,
     vinculo_destino_id: numeroOuNulo(linha.vinculo_destino_id),
     vinculo_destino_matricula: linha.vinculo_destino_matricula,
     data_pretendida: linha.data_pretendida,
@@ -922,6 +966,7 @@ function paraMovimentacao(linha: LinhaMovimentacao): Movimentacao {
     dentro_faixa: linha.dentro_faixa,
     justificativa_excecao: linha.justificativa_excecao,
     aplicada_em: linha.aplicada_em,
+    efeito_vencido: linha.efeito_vencido,
     salario_proposto: numeroOuNulo(linha.salario_proposto),
     faixa_min: numeroOuNulo(linha.faixa_min),
     faixa_max: numeroOuNulo(linha.faixa_max),
@@ -969,6 +1014,7 @@ export async function inserirMovimentacao(
     empresa_destino_id: number | null;
     matricula_destino: string | null;
     tipo_vinculo_destino: TipoVinculo | null;
+    gestor_destino_colaborador_id: number | null;
     salario_proposto: number | null;
     faixa_min: number | null;
     faixa_max: number | null;
@@ -982,10 +1028,12 @@ export async function inserirMovimentacao(
     `INSERT INTO rh.demanda_movimentacao
        (demanda_id, tipo, colaborador_id, cargo_destino_id,
         estabelecimento_destino_id, centro_custo_destino_id, empresa_destino_id,
-        matricula_destino, tipo_vinculo_destino, salario_proposto,
+        matricula_destino, tipo_vinculo_destino,
+        gestor_destino_colaborador_id, salario_proposto,
         faixa_min, faixa_max, dentro_faixa, justificativa_excecao,
         data_pretendida, justificativa)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+             $16, $17)
      RETURNING id`,
     [
       dados.demanda_id,
@@ -997,6 +1045,7 @@ export async function inserirMovimentacao(
       dados.empresa_destino_id,
       dados.matricula_destino,
       dados.tipo_vinculo_destino,
+      dados.gestor_destino_colaborador_id,
       dados.salario_proposto,
       dados.faixa_min,
       dados.faixa_max,
@@ -1081,7 +1130,14 @@ export async function empresaAtiva(
  * Centro de custo do catálogo, com a empresa que o MANTÉM. A 0047 decidiu de
  * propósito NÃO travar "centro de custo tem que ser da mesma empresa da
  * lotação" (o exemplo do dono: registrado na Supply, custo caindo no CSC) —
- * por isso aqui só se confere que ele existe e está ativo.
+ * a empresa destino da transferência e a mantenedora do centro seguem podendo
+ * ser diferentes.
+ *
+ * O que ela confere é que o centro está OFERECÍVEL, e ofertável inclui a
+ * mantenedora: empresa do grupo inativada leva os centros de custo dela junto.
+ * Esta é a mesma condição de `listarCentrosCustoAtivos` (domínio estrutura), que
+ * monta o seletor — as duas não podem discordar, senão o POST aceita o que a
+ * tela parou de oferecer.
  */
 export async function centroCustoAtivo(
   cliente: PoolClient,
@@ -1092,9 +1148,11 @@ export async function centroCustoAtivo(
     codigo: string;
     empresa_id: string;
   }>(
-    `SELECT id, codigo, empresa_id
-       FROM rh.centro_custo
-      WHERE id = $1 AND inativado_em IS NULL`,
+    `SELECT cc.id, cc.codigo, cc.empresa_id
+       FROM rh.centro_custo cc
+       JOIN rh.empresa_grupo eg ON eg.id = cc.empresa_id
+      WHERE cc.id = $1 AND cc.inativado_em IS NULL
+        AND eg.inativada_em IS NULL`,
     [centroCustoId]
   );
   return rows.length
@@ -1222,7 +1280,11 @@ export async function listarLiderados(
   }));
 }
 
-/** O usuário é gestor VIGENTE do colaborador alvo? (nível 'lider' da cadeia.) */
+/**
+ * O usuário é gestor VIGENTE do colaborador alvo? (nível 'lider' da cadeia.)
+ * O lado do liderado já era vínculo; o do gestor passa a ser também — quem
+ * decide decide pelo contrato em que está hoje, não por um que já encerrou.
+ */
 export async function ehGestorDoColaborador(
   gestorUsuarioId: number,
   colaboradorId: number,
@@ -1231,11 +1293,10 @@ export async function ehGestorDoColaborador(
   const sql = `SELECT EXISTS (
       SELECT 1
         FROM rh.relacao_gestor rg
-        JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
        WHERE rg.liderado_colaborador_id = $2
          AND rg.fim_vigencia IS NULL
          AND rg.inicio_vigencia <= ${HOJE_SP}
-         AND gc.usuario_id = $1) AS eh_gestor`;
+         AND rg.gestor_colaborador_id = rh.vinculo_atual($1)) AS eh_gestor`;
   if (cliente) {
     const { rows } = await cliente.query<{ eh_gestor: boolean }>(sql, [
       gestorUsuarioId,
@@ -1378,11 +1439,10 @@ export async function listarMovimentacoesDoLider(
              ON rg.liderado_colaborador_id = m.colaborador_id
             AND rg.fim_vigencia IS NULL
             AND rg.inicio_vigencia <= ${HOJE_SP}
-           JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
           WHERE e.demanda_id = d.id
             AND e.nivel = 'lider'
             AND e.status = 'pendente'
-            AND gc.usuario_id = $1)
+            AND rg.gestor_colaborador_id = rh.vinculo_atual($1))
      ORDER BY d.prazo, d.numero`,
     [usuarioId]
   );
@@ -1431,6 +1491,32 @@ export async function listarMovimentacoesAplicadas(
   return linhas.map(paraResumo);
 }
 
+/**
+ * Aprovadas com o efeito ainda POR APLICAR — a lista que impede o esquecimento.
+ * Como não há agendador, é a fila do DP que carrega o compromisso: as vencidas
+ * primeiro (a data já passou e o cadastro ainda não mudou), depois as que ainda
+ * vão vencer. Recusada e concluída ficam de fora: nelas não há efeito a aplicar.
+ */
+export async function listarMovimentacoesProgramadas(
+  limite = 50
+): Promise<DemandaResumo[]> {
+  const linhas = await consultar<LinhaResumo>(
+    `${SELECT_RESUMO}
+     WHERE t.fluxo = 'movimentacao'
+       AND d.status IN ('aberta', 'em_atendimento')
+       AND EXISTS (SELECT 1 FROM rh.demanda_movimentacao m
+                    WHERE m.demanda_id = d.id AND m.aplicada_em IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM rh.etapa_aprovacao_demanda e
+                        WHERE e.demanda_id = d.id AND e.status = 'pendente')
+     ORDER BY (SELECT m.data_pretendida FROM rh.demanda_movimentacao m
+                WHERE m.demanda_id = d.id) ASC,
+              d.numero DESC
+     LIMIT $1`,
+    [limite]
+  );
+  return linhas.map(paraResumo);
+}
+
 // ------------------------------------------------- opções do formulário
 
 export interface OpcaoColaborador {
@@ -1452,11 +1538,10 @@ export async function listarAlvosPossiveis(
     ? ""
     : `AND EXISTS (SELECT 1
                      FROM rh.relacao_gestor rg
-                     JOIN rh.colaborador gc ON gc.id = rg.gestor_colaborador_id
                     WHERE rg.liderado_colaborador_id = c.id
                       AND rg.fim_vigencia IS NULL
                       AND rg.inicio_vigencia <= ${HOJE_SP}
-                      AND gc.usuario_id = $1)`;
+                      AND rg.gestor_colaborador_id = rh.vinculo_atual($1))`;
   const linhas = await consultar<{
     id: string;
     nome_completo: string;
@@ -1487,6 +1572,83 @@ export async function listarAlvosPossiveis(
     todos ? [] : [usuarioId]
   );
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+export interface GestorPorEmpresa {
+  colaborador_id: number;
+  nome_completo: string;
+  cargo_atual: string | null;
+  empresa_id: number;
+}
+
+/**
+ * Quem pode ser escolhido como líder NA EMPRESA DESTINO (0053).
+ *
+ * A pergunta é "quem lidera lá", e "lá" é a empresa de registro — por isso a
+ * lista sai da lotação VIGENTE de cada vínculo ativo, carregando `empresa_id`
+ * para a tela recortar sozinha assim que o registro destino for escolhido.
+ * Sem esta lista o único caminho era herdar o líder de origem, que está em
+ * outro CNPJ.
+ *
+ * Não filtra "só quem já é gestor de alguém": o primeiro liderado de um líder
+ * novo tem de caber, e a alçada de aprovação é decidida por chave, não por
+ * aparecer nesta lista.
+ */
+export async function listarGestoresPorEmpresa(): Promise<GestorPorEmpresa[]> {
+  const linhas = await consultar<{
+    colaborador_id: string;
+    nome_completo: string;
+    cargo_atual: string | null;
+    empresa_id: string;
+  }>(
+    `SELECT c.id AS colaborador_id, c.nome_completo,
+            (SELECT cv.nome
+               FROM rh.posicao_colaborador p
+               JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
+              WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL)
+              AS cargo_atual,
+            l.empresa_id
+       FROM rh.colaborador c
+       JOIN rh.lotacao l
+         ON l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+      WHERE c.status = 'ativo'
+      ORDER BY c.nome_completo`
+  );
+  return linhas.map((linha) => ({
+    colaborador_id: Number(linha.colaborador_id),
+    nome_completo: linha.nome_completo,
+    cargo_atual: linha.cargo_atual,
+    empresa_id: Number(linha.empresa_id),
+  }));
+}
+
+/**
+ * Empresa de registro do vínculo, pela lotação vigente — a régua que valida se
+ * o líder escolhido está mesmo na empresa de destino, tanto na abertura do
+ * pedido quanto na aplicação do efeito.
+ */
+export async function empresaDoVinculoVigente(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<{ empresa_id: number; nome_completo: string; status: string } | null> {
+  const { rows } = await cliente.query<{
+    empresa_id: string | null;
+    nome_completo: string;
+    status: string;
+  }>(
+    `SELECT l.empresa_id, c.nome_completo, c.status
+       FROM rh.colaborador c
+       LEFT JOIN rh.lotacao l
+              ON l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+      WHERE c.id = $1`,
+    [colaboradorId]
+  );
+  if (rows.length === 0 || rows[0].empresa_id === null) return null;
+  return {
+    empresa_id: Number(rows[0].empresa_id),
+    nome_completo: rows[0].nome_completo,
+    status: rows[0].status,
+  };
 }
 
 /** Cargos com versão ativa — SEM faixa salarial (dado de remuneração). */

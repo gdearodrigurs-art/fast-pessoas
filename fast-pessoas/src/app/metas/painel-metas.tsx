@@ -16,9 +16,18 @@ import estilos from "./page.module.css";
 
 interface MetaVigente {
   id: number;
+  /** NULL = meta global. É a chave do escopo — o nome é só rótulo. */
+  estabelecimento_id: number | null;
+  /** Nome da unidade hoje; `escopo` é o nome congelado de quando foi pactuada. */
+  unidade: string | null;
   escopo: string;
   valor: number;
   inicio_vigencia: string;
+}
+
+interface UnidadeEscopo {
+  estabelecimento_id: number;
+  unidade: string;
 }
 
 interface Indicador {
@@ -33,12 +42,29 @@ interface Indicador {
   metas_unidade: MetaVigente[];
 }
 
+type SituacaoFarol =
+  | "dentro"
+  | "fora"
+  | "sem_meta"
+  | "sem_dados"
+  | "sem_apuracao";
+
+interface ValorUnidade {
+  meta_id: number;
+  estabelecimento_id: number;
+  unidade: string;
+  valor_formatado: string | null;
+  detalhe: string | null;
+  situacao: SituacaoFarol;
+}
+
 interface ValorIndicador {
   chave: string;
   valor: number | null;
   valor_formatado: string | null;
   detalhe: string | null;
-  situacao: "dentro" | "fora" | "sem_meta" | "sem_dados";
+  situacao: SituacaoFarol;
+  por_unidade: ValorUnidade[];
 }
 
 interface VersaoMeta {
@@ -53,11 +79,42 @@ interface VersaoMeta {
 
 interface Central {
   indicadores: Indicador[];
-  unidades: string[];
+  unidades: UnidadeEscopo[];
   pode_administrar: boolean;
 }
 
 const OPCAO_NOVA_AREA = "__nova_area__";
+
+/**
+ * Opções do seletor de escopo: as unidades ativas MAIS as unidades que já têm
+ * meta ativa deste indicador (mesmo inativadas). Sem a segunda parte, uma meta
+ * de unidade que saiu do catálogo ficava impossível de trocar ou encerrar pela
+ * tela — a "meta imortal".
+ */
+function opcoesEscopo(
+  unidades: UnidadeEscopo[],
+  indicador: Indicador
+): { estabelecimento_id: number; unidade: string; ativa: boolean }[] {
+  const porId = new Map<
+    number,
+    { estabelecimento_id: number; unidade: string; ativa: boolean }
+  >();
+  for (const unidade of unidades) {
+    porId.set(unidade.estabelecimento_id, { ...unidade, ativa: true });
+  }
+  for (const meta of indicador.metas_unidade) {
+    if (meta.estabelecimento_id === null) continue;
+    if (porId.has(meta.estabelecimento_id)) continue;
+    porId.set(meta.estabelecimento_id, {
+      estabelecimento_id: meta.estabelecimento_id,
+      unidade: meta.unidade ?? meta.escopo,
+      ativa: false,
+    });
+  }
+  return [...porId.values()].sort((a, b) =>
+    a.unidade.localeCompare(b.unidade, "pt-BR")
+  );
+}
 
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
@@ -223,13 +280,36 @@ export function PainelMetas() {
     setErroMeta(null);
   }
 
+  /** O valor do <select> é 'global' ou o id da unidade — nunca o nome dela. */
+  function escopoEmId(escopo: string): number | null {
+    return escopo === ESCOPO_GLOBAL ? null : Number(escopo);
+  }
+
+  function metaDoEscopo(
+    indicador: Indicador,
+    escopo: string
+  ): MetaVigente | null {
+    const id = escopoEmId(escopo);
+    if (id === null) return indicador.meta_global;
+    return (
+      indicador.metas_unidade.find(
+        (meta) => meta.estabelecimento_id === id
+      ) ?? null
+    );
+  }
+
   function aoTrocarEscopo(indicador: Indicador, escopo: string) {
     setFEscopo(escopo);
-    const vigente =
-      escopo === ESCOPO_GLOBAL
-        ? indicador.meta_global
-        : indicador.metas_unidade.find((meta) => meta.escopo === escopo);
+    const vigente = metaDoEscopo(indicador, escopo);
     setFValor(vigente ? String(vigente.valor) : "");
+  }
+
+  async function aposGravarMeta(indicadorId: number) {
+    setIndicadorEmEdicao(null);
+    await recarregar();
+    if (historicos[indicadorId] !== undefined) {
+      await buscarHistorico(indicadorId);
+    }
   }
 
   async function salvarMeta(evento: FormEvent<HTMLFormElement>) {
@@ -249,7 +329,7 @@ export function PainelMetas() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            escopo: fEscopo,
+            estabelecimento_id: escopoEmId(fEscopo),
             valor: valorNumerico,
             inicio_vigencia: fVigencia,
           }),
@@ -260,12 +340,33 @@ export function PainelMetas() {
         setErroMeta(dados.erro ?? "Não foi possível salvar a meta.");
         return;
       }
-      const indicadorId = indicadorEmEdicao.id;
-      setIndicadorEmEdicao(null);
-      await recarregar();
-      if (historicos[indicadorId] !== undefined) {
-        await buscarHistorico(indicadorId);
+      await aposGravarMeta(indicadorEmEdicao.id);
+    } catch {
+      setErroMeta("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvandoMeta(false);
+    }
+  }
+
+  /** Encerra a meta vigente do escopo sem criar substituta (vira histórico). */
+  async function encerrarMetaDoEscopo() {
+    if (!indicadorEmEdicao) return;
+    const id = escopoEmId(fEscopo);
+    setSalvandoMeta(true);
+    setErroMeta(null);
+    try {
+      const consulta =
+        id === null ? "" : `?estabelecimento_id=${encodeURIComponent(id)}`;
+      const resposta = await fetch(
+        `/api/indicadores/${indicadorEmEdicao.id}/metas${consulta}`,
+        { method: "DELETE" }
+      );
+      const dados = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) {
+        setErroMeta(dados.erro ?? "Não foi possível encerrar a meta.");
+        return;
       }
+      await aposGravarMeta(indicadorEmEdicao.id);
     } catch {
       setErroMeta("Falha de conexão. Tente novamente.");
     } finally {
@@ -355,7 +456,10 @@ export function PainelMetas() {
           <b>dado administrável pelo RH</b>. Alterar uma meta nunca sobrescreve
           a anterior — <b>cria uma nova versão com data de início de vigência</b>;
           períodos já apurados continuam avaliados pela meta que valia na época.
-          Metas podem ser globais ou específicas por unidade.
+          Metas podem ser globais ou específicas por unidade — a meta de unidade
+          fica <b>registrada como pactuada, mas ainda sem apuração</b>: nenhuma
+          fonte do sistema recorta indicador por unidade, e o farol da coluna
+          &quot;Valor atual&quot; é sempre o número da empresa inteira.
         </div>
 
         {erro && <p className={estilos.erro}>{erro}</p>}
@@ -432,12 +536,25 @@ export function PainelMetas() {
                 <option value={ESCOPO_GLOBAL}>
                   Global (todas as unidades)
                 </option>
-                {central?.unidades.map((unidade) => (
-                  <option key={unidade} value={unidade}>
-                    {unidade}
-                  </option>
-                ))}
+                {opcoesEscopo(central?.unidades ?? [], indicadorEmEdicao).map(
+                  (opcao) => (
+                    <option
+                      key={opcao.estabelecimento_id}
+                      value={String(opcao.estabelecimento_id)}
+                    >
+                      {opcao.unidade}
+                      {opcao.ativa ? "" : " (unidade inativada)"}
+                    </option>
+                  )
+                )}
               </select>
+              {fEscopo !== ESCOPO_GLOBAL && (
+                <p className={estilos.subDialogo}>
+                  Meta por unidade ainda NÃO é apurada: nenhuma fonte do sistema
+                  recorta este indicador por unidade, então ela fica registrada
+                  como pactuada, sem farol.
+                </p>
+              )}
 
               <label className={estilos.rotulo} htmlFor="meta-valor">
                 Meta ({indicadorEmEdicao.unidade}) —{" "}
@@ -476,6 +593,16 @@ export function PainelMetas() {
                 >
                   Cancelar
                 </button>
+                {metaDoEscopo(indicadorEmEdicao, fEscopo) && (
+                  <button
+                    className={estilos.botaoSecundario}
+                    type="button"
+                    disabled={salvandoMeta}
+                    onClick={encerrarMetaDoEscopo}
+                  >
+                    Encerrar meta deste escopo
+                  </button>
+                )}
                 <button
                   className={estilos.botao}
                   type="submit"
@@ -613,11 +740,20 @@ export function PainelMetas() {
   );
 }
 
-const ROTULOS_FAROL: Record<ValorIndicador["situacao"], string> = {
+const ROTULOS_FAROL: Record<SituacaoFarol, string> = {
   dentro: "dentro da meta",
   fora: "fora da meta",
   sem_meta: "sem meta definida",
   sem_dados: "sem dados",
+  sem_apuracao: "sem apuração por unidade",
+};
+
+const CLASSES_FAROL: Record<SituacaoFarol, string> = {
+  dentro: estilos.farolDentro,
+  fora: estilos.farolFora,
+  sem_meta: estilos.farolNeutro,
+  sem_dados: estilos.farolNeutro,
+  sem_apuracao: estilos.farolNeutro,
 };
 
 function IndicadorLinha({
@@ -636,12 +772,7 @@ function IndicadorLinha({
   aoAlternarHistorico: () => void;
 }) {
   const metaGlobal = indicador.meta_global;
-  const classesFarol: Record<ValorIndicador["situacao"], string> = {
-    dentro: estilos.farolDentro,
-    fora: estilos.farolFora,
-    sem_meta: estilos.farolNeutro,
-    sem_dados: estilos.farolNeutro,
-  };
+  const classesFarol = CLASSES_FAROL;
   return (
     <>
       <tr>
@@ -664,12 +795,28 @@ function IndicadorLinha({
           ) : (
             <span className={estilos.semMeta}>meta não definida</span>
           )}
-          {indicador.metas_unidade.map((meta) => (
-            <span className={estilos.chipUnidade} key={meta.id}>
-              {meta.escopo}:{" "}
-              {formatarValorMeta(meta.valor, indicador.unidade)}
-            </span>
-          ))}
+          {indicador.metas_unidade.map((meta) => {
+            // Cada meta de unidade carrega o PRÓPRIO farol. Sem fonte que
+            // recorte o indicador por unidade, a situação é "sem apuração" e a
+            // tela diz isso — não desenha a meta ao lado do farol global como
+            // se alguém estivesse medindo aquela loja.
+            const apuracao = valorAtual?.por_unidade?.find(
+              (linha) => linha.meta_id === meta.id
+            );
+            const situacao: SituacaoFarol = apuracao?.situacao ?? "sem_apuracao";
+            return (
+              <span className={estilos.chipUnidade} key={meta.id}>
+                <span
+                  className={`${estilos.farolChip} ${CLASSES_FAROL[situacao]}`}
+                  role="img"
+                  aria-label={ROTULOS_FAROL[situacao]}
+                />
+                {meta.unidade ?? meta.escopo}:{" "}
+                {formatarValorMeta(meta.valor, indicador.unidade)} ·{" "}
+                {apuracao?.valor_formatado ?? ROTULOS_FAROL[situacao]}
+              </span>
+            );
+          })}
         </td>
         <td className={estilos.celulaValor}>
           {valorAtual && valorAtual.valor_formatado !== null ? (

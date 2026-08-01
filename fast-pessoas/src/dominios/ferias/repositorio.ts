@@ -302,32 +302,63 @@ export async function atualizarGozoPeriodo(
 
 // ------------------------------------------------------------------ painel de vencimento
 
+/**
+ * Quem entra no painel e no indicador de férias.
+ *
+ * `c.status <> 'desligado'` sozinho estava certo enquanto "desligado" só
+ * significava "foi embora e a rescisão pagou". A 0048 criou um terceiro caso: o
+ * vínculo é marcado desligado por TRANSFERÊNCIA entre empresas do grupo e, de
+ * propósito, NÃO abre processo de desligamento ("rito de saída não cabe em quem
+ * continua na casa"). Sem esta condição, o saldo do contrato encerrado some do
+ * painel do DP e do indicador — inclusive período já VENCIDO, que o art. 137 da
+ * CLT manda pagar em dobro — e não existe nenhuma outra tela que o mostre.
+ *
+ * Continua fora quem saiu do grupo de verdade: lá a rescisão é quem acerta.
+ */
+const VINCULO_COM_PASSIVO_VISIVEL = `(
+  c.status <> 'desligado'
+  OR (NOT rh.saiu_do_grupo(c.id) AND p.saldo_dias > p.dias_gozados)
+)`;
+
 export interface LinhaPainelVencimento extends PeriodoAquisitivo {
   colaborador_nome: string;
   matricula: string;
+  /**
+   * O período ficou num vínculo ENCERRADO POR TRANSFERÊNCIA entre empresas do
+   * grupo (0048). Não há processo de desligamento para cobrar o acerto — a
+   * própria 0048 diz "os períodos abertos ficam no vínculo encerrado, para o
+   * acerto" — então esta é a única tela que enxerga o passivo.
+   */
+  passivo_transferencia: boolean;
 }
 
 export async function listarPeriodosPainel(): Promise<
   LinhaPainelVencimento[]
 > {
   const linhas = await consultar<
-    LinhaPeriodo & { colaborador_nome: string; matricula: string }
+    LinhaPeriodo & {
+      colaborador_nome: string;
+      matricula: string;
+      passivo_transferencia: boolean;
+    }
   >(
     `SELECT p.id, p.colaborador_id, p.inicio::text AS inicio, p.fim::text AS fim,
             p.saldo_dias::text AS saldo_dias, p.dias_gozados::text AS dias_gozados,
             p.status, p.limite_concessivo::text AS limite_concessivo,
             (p.limite_concessivo - ${HOJE_SP})::int AS dias_ate_limite,
-            c.nome_completo AS colaborador_nome, c.matricula
+            c.nome_completo AS colaborador_nome, c.matricula,
+            (c.status = 'desligado') AS passivo_transferencia
        FROM rh.periodo_aquisitivo p
        JOIN rh.colaborador c ON c.id = p.colaborador_id
       WHERE p.status IN ('em_aberto','programado_parcial','vencido')
-        AND c.status <> 'desligado'
+        AND ${VINCULO_COM_PASSIVO_VISIVEL}
       ORDER BY p.limite_concessivo, c.nome_completo`
   );
   return linhas.map((linha) => ({
     ...paraPeriodo(linha),
     colaborador_nome: linha.colaborador_nome,
     matricula: linha.matricula,
+    passivo_transferencia: linha.passivo_transferencia,
   }));
 }
 
@@ -337,7 +368,7 @@ export async function contarPeriodosVencidos(): Promise<number> {
     `SELECT COUNT(*) AS total
        FROM rh.periodo_aquisitivo p
        JOIN rh.colaborador c ON c.id = p.colaborador_id
-      WHERE c.status <> 'desligado'
+      WHERE ${VINCULO_COM_PASSIVO_VISIVEL}
         AND (p.status = 'vencido'
              OR (p.status IN ('em_aberto','programado_parcial')
                  AND p.limite_concessivo < ${HOJE_SP}))`

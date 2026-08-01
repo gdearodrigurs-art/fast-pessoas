@@ -871,9 +871,10 @@ async function carregarElenco(cliente) {
   }
 
   // Equipe do gestor de demonstração, sem a persona funcionário (que tem
-  // referência própria no roteiro) e sem os desligados — 01-base deixa a
-  // relação de gestor ABERTA para quem saiu, e liderado desligado não abre
-  // demanda. Ordem por matrícula = ordem estável entre execuções.
+  // referência própria no roteiro) e sem os desligados — quem saiu não abre
+  // demanda. O filtro por status fica de pé por si: desde a correção do
+  // desligamento, a relação de gestor de quem sai é ENCERRADA (01-base semeia
+  // assim). Ordem por matrícula = ordem estável entre execuções.
   const { rows: equipe } = await cliente.query(
     `SELECT lu.id AS usuario_id, lu.email, lu.nome, lu.papel, lc.id AS colaborador_id
        FROM rh.relacao_gestor rg

@@ -790,6 +790,107 @@ export async function ehGestorDoColaborador(
   return rows[0].eh_gestor;
 }
 
+// ------------------------------------------------------------------ liderança do vínculo que termina
+// O contrato acaba, a liderança acaba junto. Enquanto rh.relacao_gestor ficar
+// sem fim de vigência, o desligado continua sendo "liderado vigente" (portal do
+// gestor, ficha, aprovação de demandas) e — pior — continua sendo GESTOR
+// VIGENTE da equipe dele, que fica pendurada em quem já não trabalha aqui.
+
+export type PapelNaLideranca = "liderado" | "gestor";
+
+export interface RelacaoLiderancaAberta {
+  id: number;
+  papel: PapelNaLideranca;
+  contraparte_id: number;
+  contraparte_nome: string;
+  inicio_vigencia: string;
+}
+
+/**
+ * Relações de liderança VIGENTES do vínculo, nos DOIS papéis: a que diz quem
+ * lidera ele e as que dizem quem ele lidera. Duas consultas porque `FOR UPDATE`
+ * não convive com UNION — e a trava importa: o desligamento e uma troca de
+ * gestor concorrente não podem passar as duas.
+ */
+export async function relacoesLiderancaAbertas(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<RelacaoLiderancaAberta[]> {
+  const comoLiderado = await cliente.query<{
+    id: string;
+    contraparte_id: string;
+    contraparte_nome: string;
+    inicio_vigencia: string;
+  }>(
+    `SELECT rg.id, rg.gestor_colaborador_id AS contraparte_id,
+            o.nome_completo AS contraparte_nome,
+            rg.inicio_vigencia::text AS inicio_vigencia
+       FROM rh.relacao_gestor rg
+       JOIN rh.colaborador o ON o.id = rg.gestor_colaborador_id
+      WHERE rg.liderado_colaborador_id = $1 AND rg.fim_vigencia IS NULL
+      FOR UPDATE OF rg`,
+    [colaboradorId]
+  );
+  const comoGestor = await cliente.query<{
+    id: string;
+    contraparte_id: string;
+    contraparte_nome: string;
+    inicio_vigencia: string;
+  }>(
+    `SELECT rg.id, rg.liderado_colaborador_id AS contraparte_id,
+            o.nome_completo AS contraparte_nome,
+            rg.inicio_vigencia::text AS inicio_vigencia
+       FROM rh.relacao_gestor rg
+       JOIN rh.colaborador o ON o.id = rg.liderado_colaborador_id
+      WHERE rg.gestor_colaborador_id = $1 AND rg.fim_vigencia IS NULL
+      ORDER BY o.nome_completo
+      FOR UPDATE OF rg`,
+    [colaboradorId]
+  );
+  const paraRelacao =
+    (papel: PapelNaLideranca) =>
+    (linha: {
+      id: string;
+      contraparte_id: string;
+      contraparte_nome: string;
+      inicio_vigencia: string;
+    }): RelacaoLiderancaAberta => ({
+      id: Number(linha.id),
+      papel,
+      contraparte_id: Number(linha.contraparte_id),
+      contraparte_nome: linha.contraparte_nome,
+      inicio_vigencia: linha.inicio_vigencia,
+    });
+  return [
+    ...comoLiderado.rows.map(paraRelacao("liderado")),
+    ...comoGestor.rows.map(paraRelacao("gestor")),
+  ];
+}
+
+/**
+ * Encerra a relação no ÚLTIMO DIA do contrato — a liderança valeu enquanto o
+ * contrato valeu, então `fim_vigencia = data_termino_efetiva` (e não a véspera,
+ * como em `encerrarRelacaoGestor`, que fecha para a PRÓXIMA relação começar no
+ * dia seguinte; aqui não há próxima). `GREATEST` protege o CHECK
+ * `fim_vigencia >= inicio_vigencia` quando o desligamento é retroativo a uma
+ * relação aberta depois — sem ele o encerramento estouraria a transação inteira.
+ * Devolve a data gravada; null quando outra transação já fechou a linha.
+ */
+export async function encerrarLiderancaNoDesligamento(
+  cliente: PoolClient,
+  relacaoId: number,
+  dataTerminoEfetiva: string
+): Promise<string | null> {
+  const { rows } = await cliente.query<{ fim: string }>(
+    `UPDATE rh.relacao_gestor
+        SET fim_vigencia = GREATEST(inicio_vigencia, $2::date)
+      WHERE id = $1 AND fim_vigencia IS NULL
+      RETURNING fim_vigencia::text AS fim`,
+    [relacaoId, dataTerminoEfetiva]
+  );
+  return rows.length === 0 ? null : rows[0].fim;
+}
+
 // ------------------------------------------------------------------ indicador oficial de cobertura
 
 export interface IndicadorEntrevistas {

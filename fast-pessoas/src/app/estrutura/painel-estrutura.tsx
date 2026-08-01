@@ -34,6 +34,8 @@ interface CentroCusto {
   nome: string | null;
   inicio_vigencia: string | null;
   inativado_em: string | null;
+  /** Preenchido quando a EMPRESA que mantém o centro está inativada. */
+  empresa_inativada_em: string | null;
   alocacoes: number;
 }
 
@@ -906,13 +908,24 @@ export function PainelEstrutura({
                       <tr
                         key={centro.id}
                         className={
-                          centro.inativado_em ? estilos.linhaInativa : undefined
+                          centro.inativado_em || centro.empresa_inativada_em
+                            ? estilos.linhaInativa
+                            : undefined
                         }
                       >
                         <td>
                           {centro.codigo}{" "}
                           {centro.inativado_em && (
                             <span className={estilos.seloInativo}>inativo</span>
+                          )}
+                          {/* O centro pode estar ativo e mesmo assim fora dos
+                              seletores, porque a empresa que o mantém saiu de
+                              operação. A linha continua aqui — inativar não
+                              apaga o passado, só tira da escolha nova. */}
+                          {!centro.inativado_em && centro.empresa_inativada_em && (
+                            <span className={estilos.seloInativo}>
+                              empresa inativa
+                            </span>
                           )}
                         </td>
                         <td>{centro.nome ?? "(sem versão ativa)"}</td>

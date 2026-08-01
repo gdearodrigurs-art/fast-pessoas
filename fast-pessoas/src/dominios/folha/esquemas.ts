@@ -39,6 +39,26 @@ export function formatarCompetencia(ano: number, mes: number): string {
   return `${String(mes).padStart(2, "0")}/${ano}`;
 }
 
+/**
+ * A DATA DE REFERÊNCIA da competência: o ÚLTIMO DIA dela.
+ *
+ * É por esta data que o cálculo resolve TUDO que tem vigência — salário,
+ * jornada, dependentes, versão de rubrica e as três tabelas legais. É a MESMA
+ * régua que a view rh_folha.apropriacao_competencia (migração 0047) já usa para
+ * decidir em que empresa/lotação/centro de custo o custo da linha cai:
+ * `make_date(ano, mes, 1) + INTERVAL '1 month - 1 day'`.
+ *
+ * Sem ela o cálculo perguntava "quanto essa pessoa ganha HOJE" em vez de
+ * "quanto ganhava NA competência": calcular julho em agosto pagava o salário de
+ * agosto, e recalcular a mesma competência devolvia outro número só porque o
+ * cadastro andou no meio do caminho. Competência é um MÊS, não "agora".
+ */
+export function dataReferenciaCompetencia(ano: number, mes: number): string {
+  // Dia 0 do mês seguinte = último dia deste mês. UTC de propósito: é
+  // aritmética de calendário, não instante — nada de fuso empurrando o dia.
+  return new Date(Date.UTC(ano, mes, 0)).toISOString().slice(0, 10);
+}
+
 export const esquemaAbrirCompetencia = z.object({
   ano: z.number().int().min(2020).max(2100),
   mes: z.number().int().min(1).max(12),

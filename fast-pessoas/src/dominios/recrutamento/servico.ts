@@ -1020,13 +1020,18 @@ export async function iniciarAdmissao(
       // 1) Pessoa + usuário + vínculo (mesmo arranjo de
       //    colaboradores.criarColaborador). Desde a 0046 o CPF mora na PESSOA:
       //    ela nasce primeiro, a conta se liga a ela, e só então vem o vínculo.
-      //    Candidato que JÁ é gente do grupo (readmissão) não passa por aqui
-      //    ainda — a tela de R&S cria conta nova, e conta é uma por pessoa.
+      //    Candidato que JÁ é gente do grupo (readmissão) não passa por aqui:
+      //    esta tela cria CONTA nova a partir do e-mail do candidato, e conta é
+      //    uma por pessoa. O caminho existe e é a admissão em Colaboradores,
+      //    que reconhece o CPF, mostra de quem é e abre o segundo vínculo
+      //    reaproveitando cadastro e login.
       if (await buscarPessoaPorCpf(cliente, dados.cpf)) {
         throw new ErroHttp(
           409,
           "Já existe uma pessoa com este CPF no grupo. Readmissão de quem já " +
-            "trabalhou aqui não passa pela abertura de admissão da seleção."
+            "trabalhou aqui é feita em Colaboradores → Novo colaborador: lá o " +
+            "CPF é reconhecido e o novo vínculo nasce ligado ao cadastro e ao " +
+            "login que ela já tem."
         );
       }
       const pessoaId = await criarPessoa(cliente, {

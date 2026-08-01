@@ -1071,9 +1071,10 @@ async function semear(cliente) {
     }
     const inicio = iso(pessoa.admissao);
 
-    // Vigências ficam ABERTAS mesmo para desligados: é o que o app faz ao
-    // encerrar um processo (ver src/dominios/desligamento/servico.ts) — a ficha
-    // do desligado continua mostrando cargo, salário e unidade do desligamento.
+    // Posição e lotação ficam ABERTAS mesmo para desligados: é o que o app faz
+    // ao encerrar um processo (ver src/dominios/desligamento/servico.ts) — a
+    // ficha do desligado continua mostrando cargo, salário e unidade do
+    // desligamento. A LIDERANÇA é o contrário e fecha logo abaixo.
     posicoes.push([pessoa.colaboradorId, cargo.versaoId, pessoa.salario.toFixed(2), inicio]);
     // Os três campos, na mesma linha de vigência.
     lotacoes.push([
@@ -1089,10 +1090,25 @@ async function semear(cliente) {
       if (!gestor) throw new Error(`Chefe inexistente no quadro: ${pessoa.chefe}`);
       // A relação começa na mais recente das duas admissões (o gestor não pode
       // liderar antes de existir na empresa).
-      const inicioRelacao = iso(
-        pessoa.admissao > gestor.admissao ? pessoa.admissao : gestor.admissao
-      );
-      relacoes.push([gestor.colaboradorId, pessoa.colaboradorId, inicioRelacao]);
+      const inicioRelacaoData =
+        pessoa.admissao > gestor.admissao ? pessoa.admissao : gestor.admissao;
+      // E ACABA COM O CONTRATO, dos dois lados: quem saiu não é mais liderado
+      // vigente de ninguém nem gestor vigente de ninguém. Deixar aberta era o
+      // que fazia o desligado continuar aparecendo na equipe do gestor e a
+      // equipe de um gestor desligado continuar pendurada nele.
+      const saidas = [pessoa.desligamento, gestor.desligamento].filter(Boolean);
+      const primeiraSaida = saidas.length
+        ? saidas.reduce((a, b) => (a < b ? a : b))
+        : null;
+      const fimRelacao = primeiraSaida
+        ? iso(primeiraSaida < inicioRelacaoData ? inicioRelacaoData : primeiraSaida)
+        : null;
+      relacoes.push([
+        gestor.colaboradorId,
+        pessoa.colaboradorId,
+        iso(inicioRelacaoData),
+        fimRelacao,
+      ]);
     }
 
     eventos.push([
@@ -1146,7 +1162,7 @@ async function semear(cliente) {
   await inserirLote(
     cliente,
     'rh.relacao_gestor',
-    ['gestor_colaborador_id', 'liderado_colaborador_id', 'inicio_vigencia'],
+    ['gestor_colaborador_id', 'liderado_colaborador_id', 'inicio_vigencia', 'fim_vigencia'],
     relacoes
   );
   await inserirLote(
@@ -1229,6 +1245,17 @@ async function semear(cliente) {
       WHERE c.status = 'ativo' AND u.papel <> 'diretoria'
         AND NOT EXISTS (SELECT 1 FROM rh.relacao_gestor g
                          WHERE g.liderado_colaborador_id = c.id AND g.fim_vigencia IS NULL)`,
+    0
+  );
+  // A liderança acaba com o contrato: nenhuma relação vigente pode envolver
+  // quem já saiu — nem como liderado, nem como gestor de uma equipe pendurada.
+  await conferir(
+    'liderança vigente com vínculo desligado',
+    `SELECT count(*)::int AS total FROM rh.relacao_gestor rg
+      WHERE rg.fim_vigencia IS NULL
+        AND EXISTS (SELECT 1 FROM rh.colaborador c
+                     WHERE c.id IN (rg.liderado_colaborador_id, rg.gestor_colaborador_id)
+                       AND c.status = 'desligado')`,
     0
   );
   await conferir(

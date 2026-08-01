@@ -185,7 +185,14 @@ export async function responderCheckin(
       });
     });
   } catch (erro) {
-    if (violacaoUnica(erro) === "checkin_resposta_unica_no_dia") {
+    const violada = violacaoUnica(erro);
+    // A segunda é a trava por PESSOA (0052): dispara quando quem tenta
+    // responder de novo é o vínculo aberto por transferência entre CNPJs no
+    // mesmo dia.
+    if (
+      violada === "checkin_resposta_unica_no_dia" ||
+      violada === "checkin_resposta_unica_no_dia_por_pessoa"
+    ) {
       throw new ErroHttp(409, "Você já respondeu esta pergunta hoje.");
     }
     throw erro;

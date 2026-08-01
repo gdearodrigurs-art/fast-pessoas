@@ -58,6 +58,8 @@ interface ItemEquipe {
   matricula: string;
   cargo_nome: string | null;
   unidade: string | null;
+  empresa_nome: string | null;
+  outra_empresa: boolean;
   data_admissao: string;
   tempo_de_casa: string;
   afastado_hoje: boolean;
@@ -133,8 +135,11 @@ interface AlertaExperiencia {
 interface AlertaAso {
   colaborador_id: number;
   nome_completo: string;
-  validade: string;
-  dias_ate_validade: number;
+  /** null quando a pessoa não tem nenhum ASO com validade registrada. */
+  validade: string | null;
+  dias_ate_validade: number | null;
+  data_admissao: string;
+  dias_desde_admissao: number;
   gravidade: Gravidade;
 }
 
@@ -244,6 +249,17 @@ function classeEtiqueta(gravidade: Gravidade): string {
     return `${estilos.etiqueta} ${estilos.etiquetaAtencao}`;
   }
   return `${estilos.etiqueta} ${estilos.etiquetaInformativo}`;
+}
+
+/**
+ * Quem nunca fez exame não está "vencido" — não há validade para vencer.
+ * Chamar de vencido seria trocar uma omissão por uma informação errada.
+ */
+function etiquetaAso(item: AlertaAso): string {
+  if (item.validade === null || item.dias_ate_validade === null) {
+    return "sem ASO";
+  }
+  return item.dias_ate_validade < 0 ? "vencido" : "a vencer";
 }
 
 function prazoTexto(dias: number): string {
@@ -434,6 +450,7 @@ export function PainelGestor() {
                       <tr>
                         <th>Colaborador</th>
                         <th>Cargo</th>
+                        <th>Empresa</th>
                         <th>Unidade</th>
                         <th>Tempo de casa</th>
                         <th>Situação</th>
@@ -454,6 +471,16 @@ export function PainelGestor() {
                             </div>
                           </td>
                           <td>{item.cargo_nome ?? "—"}</td>
+                          <td>
+                            {item.empresa_nome ?? "—"}
+                            {item.outra_empresa && (
+                              <div className={estilos.detalhe}>
+                                <span className={classeEtiqueta("atencao")}>
+                                  Outro CNPJ
+                                </span>
+                              </div>
+                            )}
+                          </td>
                           <td>{item.unidade ?? "—"}</td>
                           <td>{item.tempo_de_casa}</td>
                           <td>
@@ -1045,7 +1072,7 @@ export function PainelGestor() {
 
                 <div>
                   <h3 className={estilos.subtituloBloco}>
-                    ASO vencido ou a vencer
+                    ASO vencido, a vencer ou nunca feito
                   </h3>
                   {portal.alertas.aso === null ? (
                     <p className={estilos.bloqueado}>
@@ -1058,7 +1085,7 @@ export function PainelGestor() {
                       {portal.alertas.aso.map((item) => (
                         <li key={item.colaborador_id}>
                           <span className={classeEtiqueta(item.gravidade)}>
-                            {item.dias_ate_validade < 0 ? "vencido" : "a vencer"}
+                            {etiquetaAso(item)}
                           </span>
                           <Link
                             className={estilos.nomeLink}
@@ -1067,8 +1094,14 @@ export function PainelGestor() {
                             {item.nome_completo}
                           </Link>
                           <span className={estilos.detalhe}>
-                            validade {formatarData(item.validade)} ·{" "}
-                            {prazoTexto(item.dias_ate_validade)}
+                            {item.validade === null ||
+                            item.dias_ate_validade === null
+                              ? `nenhum ASO registrado · admitido em ${formatarData(
+                                  item.data_admissao
+                                )} (${item.dias_desde_admissao} dia(s))`
+                              : `validade ${formatarData(item.validade)} · ${prazoTexto(
+                                  item.dias_ate_validade
+                                )}`}
                           </span>
                         </li>
                       ))}

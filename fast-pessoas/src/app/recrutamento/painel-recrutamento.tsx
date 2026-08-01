@@ -421,11 +421,13 @@ function DialogoNovaRequisicao({
 }) {
   const cargos = painel.cargos ?? [];
   const estabelecimentos = painel.estabelecimentos ?? [];
-  const [cargoId, setCargoId] = useState(
-    cargos[0] ? String(cargos[0].cargo_id) : ""
-  );
+  // Cargo e motivo nascem VAZIOS. cargos[0] era o primeiro da consulta e
+  // "reposicao" o primeiro do catálogo — reposição e aumento de quadro têm
+  // impacto de orçamento e alçada diferentes, e quem aprova lê esse campo
+  // como afirmação de quem pediu.
+  const [cargoId, setCargoId] = useState("");
   const [estabelecimentoId, setEstabelecimentoId] = useState("");
-  const [motivo, setMotivo] = useState<MotivoRequisicao>("reposicao");
+  const [motivo, setMotivo] = useState<MotivoRequisicao | "">("");
   const [justificativa, setJustificativa] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -477,9 +479,11 @@ function DialogoNovaRequisicao({
           <select
             className={comum.campo}
             id="req-cargo"
+            required
             value={cargoId}
             onChange={(e) => setCargoId(e.target.value)}
           >
+            <option value="">Escolha o cargo…</option>
             {cargos.map((c) => (
               <option key={c.cargo_id} value={String(c.cargo_id)}>
                 {c.nome}
@@ -525,9 +529,11 @@ function DialogoNovaRequisicao({
           <select
             className={comum.campo}
             id="req-motivo"
+            required
             value={motivo}
-            onChange={(e) => setMotivo(e.target.value as MotivoRequisicao)}
+            onChange={(e) => setMotivo(e.target.value as MotivoRequisicao | "")}
           >
+            <option value="">Escolha o motivo…</option>
             {MOTIVOS_REQUISICAO.map((m) => (
               <option key={m} value={m}>
                 {ROTULOS_MOTIVO_REQUISICAO[m]}
@@ -558,7 +564,7 @@ function DialogoNovaRequisicao({
             <button
               className={comum.botaoPrimario}
               type="submit"
-              disabled={enviando || !cargoId}
+              disabled={enviando || !cargoId || motivo === ""}
             >
               {enviando ? "Enviando…" : "Solicitar vaga"}
             </button>

@@ -47,6 +47,7 @@ interface Programacao {
 interface LinhaPainel extends Periodo {
   colaborador_nome: string;
   matricula: string;
+  passivo_transferencia: boolean;
 }
 
 interface Visao {
@@ -520,6 +521,16 @@ export function PainelFerias({
                         >
                           <td>
                             {linha.colaborador_nome} ({linha.matricula})
+                            {linha.passivo_transferencia && (
+                              <div className={estilos.detalheLinha}>
+                                <span className={estilos.etiquetaTransferido}>
+                                  Passivo de contrato transferido
+                                </span>{" "}
+                                — o vínculo foi encerrado por transferência
+                                entre empresas do grupo e não tem rescisão que
+                                acerte estes dias.
+                              </div>
+                            )}
                           </td>
                           <td>
                             {formatarData(linha.inicio)} a{" "}

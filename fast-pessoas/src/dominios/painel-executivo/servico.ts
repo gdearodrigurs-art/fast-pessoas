@@ -388,7 +388,9 @@ async function montarCustoPessoal(
 
   const [total, porUnidade, serieBruta] = await Promise.all([
     repositorio.totalCompetencia(competencia.id),
-    repositorio.custoPorUnidade(competencia.id, competencia.referencia),
+    // Sem data: o rateio deriva a referência da própria competência (a mesma
+    // que `competencia.referencia` calcula para o texto da conta).
+    repositorio.custoPorUnidade(competencia.id),
     repositorio.serieCustoFechado(MESES_SERIE),
   ]);
 
@@ -519,13 +521,17 @@ async function montarAbsenteismo(
     conta:
       `Absenteísmo = dias úteis de afastamento ÷ dias úteis previstos × 100. ` +
       `${ausentes} ÷ ${previstos.toLocaleString("pt-BR")} × 100 = ${pt(percentual, 2)}%. ` +
-      `Dia útil = segunda a sexta (não existe calendário de feriados no sistema). ` +
+      `Dia útil = segunda a sexta, MENOS os feriados cadastrados em Ponto → ` +
+      `Parâmetros (nacional para todos; o da unidade só para quem estava ` +
+      `lotado nela naquele dia). Ponto facultativo continua sendo dia útil. ` +
       `Previstos somam, dia por dia, os vínculos vivos — quem ainda não tinha sido ` +
       `admitido e quem já havia saído não entram no denominador. ` +
       `Dois afastamentos sobrepostos contam um dia, não dois. ` +
+      `A ESCALA de cada pessoa ainda não entra: quem faz 6x1 ou 12x36 é contado ` +
+      `como se trabalhasse de segunda a sexta. ` +
       `Agregado puro: o card não traz tipo, motivo nem pessoa — afastamento é ` +
       `dado de saúde. Cobre AFASTAMENTOS registrados; falta e atraso avulsos ` +
-      `dependem do módulo de Ponto, que ainda não existe.`,
+      `saem da apuração do Ponto e ainda não são somados aqui.`,
     percentual,
     dias_afastamento: ausentes,
     dias_uteis_previstos: previstos,

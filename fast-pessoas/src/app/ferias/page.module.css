@@ -235,6 +235,22 @@
   color: #fff;
 }
 
+/* Saldo preso em vínculo encerrado por transferência entre empresas do grupo:
+   não há rescisão que acerte esses dias, então a linha precisa se explicar. */
+.etiquetaTransferido {
+  composes: etiqueta;
+  background: #fdf7ec;
+  color: #a36200;
+  border: 1px solid #d98200;
+}
+
+.detalheLinha {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6b6763;
+}
+
 .etiqueta30 {
   background: #fdf3f3;
   color: #d21217;

@@ -160,6 +160,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Farol miúdo do chip de meta por unidade — mesma paleta do farol da linha. */
+.farolChip {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+
 .celulaValor {
   min-width: 140px;
 }

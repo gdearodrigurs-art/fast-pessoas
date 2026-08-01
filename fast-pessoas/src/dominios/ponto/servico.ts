@@ -538,6 +538,71 @@ function normalizarHora(texto: string): string | null {
   return `${String(hora).padStart(2, "0")}:${achado[2]}:${achado[3] ?? "00"}`;
 }
 
+function formatarData(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split("-");
+  return `${dia}/${mes}/${ano}`;
+}
+
+/**
+ * A tabela de matrículas do importador, COM data.
+ *
+ * O importador resolvia matrícula → vínculo por um mapa cru da tabela inteira, e
+ * a única rejeição possível era "matrícula não encontrada". Depois de uma
+ * transferência entre empresas do grupo a pessoa ganha vínculo (e matrícula)
+ * novos, mas o relógio de ponto continua gravando a matrícula ANTIGA por
+ * dias — quem troca o crachá no relógio é outro sistema. A batida entrava então
+ * no vínculo ENCERRADO, onde ninguém a vê: a apuração da competência só percorre
+ * quem não está desligado e o espelho da pessoa resolve por rh.vinculo_atual.
+ * Como marcação é append-only, a linha não podia nem ser apagada.
+ *
+ * Agora a linha é casada com a janela [admissão, desligamento] do vínculo e,
+ * quando ela cai fora, a rejeição diz qual matrícula valia naquele dia — que é o
+ * que o DP precisa para corrigir o arquivo.
+ */
+interface TabelaDeMatriculas {
+  buscar(matricula: string): repo.VinculoDeMatricula | undefined;
+  motivoForaDaVigencia(
+    vinculo: repo.VinculoDeMatricula,
+    data: string
+  ): string | null;
+}
+
+function tabelaDeMatriculas(
+  vinculos: repo.VinculoDeMatricula[]
+): TabelaDeMatriculas {
+  // Datas AAAA-MM-DD comparam como texto na ordem do calendário.
+  const vigenteEm = (vinculo: repo.VinculoDeMatricula, data: string): boolean =>
+    vinculo.data_admissao <= data &&
+    (vinculo.data_desligamento === null || data <= vinculo.data_desligamento);
+
+  const porMatricula = new Map<string, repo.VinculoDeMatricula>();
+  const porPessoa = new Map<number, repo.VinculoDeMatricula[]>();
+  for (const vinculo of vinculos) {
+    porMatricula.set(vinculo.matricula, vinculo);
+    const irmaos = porPessoa.get(vinculo.pessoa_id);
+    if (irmaos) irmaos.push(vinculo);
+    else porPessoa.set(vinculo.pessoa_id, [vinculo]);
+  }
+
+  return {
+    buscar: (matricula) => porMatricula.get(matricula),
+    motivoForaDaVigencia: (vinculo, data) => {
+      if (vigenteEm(vinculo, data)) return null;
+      const janela =
+        vinculo.data_desligamento !== null && data > vinculo.data_desligamento
+          ? `pertence a vínculo encerrado em ${formatarData(vinculo.data_desligamento)}`
+          : `pertence a vínculo que só começa em ${formatarData(vinculo.data_admissao)}`;
+      const vigente = (porPessoa.get(vinculo.pessoa_id) ?? []).find((irmao) =>
+        vigenteEm(irmao, data)
+      );
+      const saida = vigente
+        ? `a matrícula desta pessoa em ${formatarData(data)} é ${vigente.matricula}`
+        : `esta pessoa não tinha vínculo vigente em ${formatarData(data)}`;
+      return `Matrícula "${vinculo.matricula}" ${janela}; ${saida}`;
+    },
+  };
+}
+
 /**
  * Importador de planilha (matricula ; data ; hora ; tipo).
  *
@@ -553,7 +618,7 @@ export async function importarMarcacoes(
   sessao: PayloadSessao,
   entrada: EntradaImportacao
 ): Promise<ResultadoImportacao> {
-  const matriculas = await repo.mapaMatriculas();
+  const matriculas = tabelaDeMatriculas(await repo.vinculosComMatricula());
   const linhas = entrada.conteudo
     .split(/\r?\n/)
     .map((linha) => linha.trim())
@@ -614,8 +679,8 @@ export async function importarMarcacoes(
       }
       const [matricula, dataBruta, horaBruta, tipoBruto] = colunas;
 
-      const colaboradorId = matriculas.get(matricula);
-      if (!colaboradorId) {
+      const vinculo = matriculas.buscar(matricula);
+      if (!vinculo) {
         rejeitar(`Matrícula "${matricula}" não encontrada`);
         continue;
       }
@@ -631,6 +696,13 @@ export async function importarMarcacoes(
         );
         continue;
       }
+      // A matrícula tem que valer NO DIA DA BATIDA, não "existir na tabela".
+      const foraDaVigencia = matriculas.motivoForaDaVigencia(vinculo, data);
+      if (foraDaVigencia) {
+        rejeitar(foraDaVigencia);
+        continue;
+      }
+      const colaboradorId = vinculo.id;
       const hora = normalizarHora(horaBruta);
       if (!hora) {
         rejeitar(`Hora inválida: "${horaBruta}" (use HH:MM)`);
@@ -1947,7 +2019,7 @@ export async function espelhoDaCompetencia(
   mes: number
 ): Promise<EspelhoPonto> {
   const proprio = await repo.colaboradorDoUsuario(sessao.usuario_id);
-  const ehProprio = proprio?.id === colaboradorId;
+  const ehProprio = await ehVinculoProprio(sessao, colaboradorId);
   const chave = ehProprio
     ? null
     : await exigirAlcanceSobre(sessao, colaboradorId);
@@ -1961,7 +2033,7 @@ export async function espelhoDaCompetencia(
   // escalado. O alcance já foi conferido acima; buscar por id não amplia nada.
   const colaborador =
     colaboradores.find((item) => item.id === colaboradorId) ??
-    (ehProprio ? proprio : null) ??
+    (proprio?.id === colaboradorId ? proprio : null) ??
     (await repo.buscarColaboradorPonto(colaboradorId));
   if (!colaborador) throw new ErroHttp(404, "Colaborador não encontrado");
   // A trilha só depois do 404 — ver exigirColaboradorExistente.
@@ -2031,6 +2103,25 @@ async function registrarLeituraDePonto(
     recurso,
     registroId,
   });
+}
+
+/**
+ * "Este vínculo é meu?" — pela PESSOA, não pelo contrato corrente.
+ *
+ * Ler o próprio ponto não passa por chave nenhuma: é direito do trabalhador
+ * (Portaria 671 art. 79), e o contrato anterior dele na mesma holding continua
+ * sendo dele. Comparar só com `rh.vinculo_atual` fazia o sistema responder 403
+ * para o dono do dado assim que ele mudava de empresa do grupo — inclusive para
+ * o saldo de banco que o próprio sistema disse ter preservado para o acerto.
+ * Para AGIR (bater ponto, ajustar marcação) o vínculo continua sendo o corrente:
+ * esta função é só de leitura.
+ */
+async function ehVinculoProprio(
+  sessao: PayloadSessao,
+  colaboradorId: number
+): Promise<boolean> {
+  const meus = await repo.vinculosDoUsuario(sessao.usuario_id);
+  return meus.includes(colaboradorId);
 }
 
 /**
@@ -2295,8 +2386,7 @@ export async function listarMovimentosBanco(
   sessao: PayloadSessao,
   colaboradorId: number
 ) {
-  const proprio = await repo.colaboradorDoUsuario(sessao.usuario_id);
-  if (proprio?.id !== colaboradorId) {
+  if (!(await ehVinculoProprio(sessao, colaboradorId))) {
     const chave = await exigirAlcanceSobre(sessao, colaboradorId);
     await exigirColaboradorExistente(colaboradorId);
     await registrarLeituraDePonto(
@@ -2897,8 +2987,7 @@ export async function resumoPontoComAlcance(
   sessao: PayloadSessao,
   colaboradorId: number
 ): Promise<ResumoPontoColaborador> {
-  const proprio = await repo.colaboradorDoUsuario(sessao.usuario_id);
-  if (proprio?.id !== colaboradorId) {
+  if (!(await ehVinculoProprio(sessao, colaboradorId))) {
     const chave = await exigirAlcanceSobre(sessao, colaboradorId);
     await exigirColaboradorExistente(colaboradorId);
     await registrarLeituraDePonto(
