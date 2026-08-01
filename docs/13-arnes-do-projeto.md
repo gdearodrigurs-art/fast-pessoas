@@ -31,20 +31,39 @@ Nenhum desses é falha de agente. **São buracos de arnês.**
 **Evidência:** todo verificador reescreveu do zero: abrir conexão, montar `SELECT`, fazer login HTTP,
 gerar o código TOTP, comparar payload. Dezenas de vezes, em todas as ondas.
 
-**Cinco firmes, uma opcional.** O número é curto de propósito: agente com ferramenta demais perde
-tempo escolhendo, e cada uma precisa ter propósito que não se confunde com o das outras.
+**Oito, e a conta foi reaberta em 01/08.** Este ponto dizia "cinco firmes, uma opcional", e o número
+era o argumento: agente com ferramenta demais perde tempo escolhendo. Só que o ponto 2 acrescentou a
+`bancada.js` e o ponto 3 acrescentou o `mapa.js` **sem ninguém refazer a conta**. São oito. O
+argumento do número curto continua valendo — o que muda é que ele agora se aplica a uma caixa maior, e
+a defesa passa a ser o `db/README.md`, não a memória de quem escreve o prompt.
 
 | | Ferramenta | O que substitui |
 |---|---|---|
-| 1 | `db/consultar.js "<SQL>" [--local]` | o `node -e "const {Pool}=require('pg')…"` de cada agente |
-| 2 | `db/logar-como.js <persona> [--local]` | a dança de login que cada verificador reimplementou |
+| 1 | `db/consultar.js "<SQL>" [--banco <nome>]` | o `node -e "const {Pool}=require('pg')…"` de cada agente |
+| 2 | `db/logar-como.js <persona> [--banco <nome>]` | a dança de login que cada verificador reimplementou |
 | 3 | `db/snapshot.js <nome>` · `comparar <a> <b>` | eu digitando "HE 50%=27333…" de memória em todo prompt |
 | 4 | `db/migracoes.js conferir` · `nova <nome>` | 3 colisões de número + a conferência disco×banco à mão |
 | 5 | `db/comparar-personas.js <rota> [personas…]` | o comparador de payload reescrito a cada verificação de acesso |
+| 6 | `db/bancada.js criar\|listar\|destruir\|orfaos` | o banco por frente do ponto 2 — quem cria tem que saber destruir |
+| 7 | `db/mapa.js [retrato]` | **já escrito** — o gatilho do adversarial do ponto 3 |
 | — | `db/trilha.js "<comando>"` | *opcional, baixa prioridade* — o antes/depois de `audit.leitura_sensivel` |
 
-Regra no prompt: **"use estas; não reimplemente."** Cada uma responde a `--help` com exemplo real, e
-todas ficam listadas no `PROJETO.md` (ponto 5).
+**`--local` morreu; agora é `--banco <nome>`.** A assinatura antiga era binária — local ou Supabase —
+e foi escrita quando existiam dois bancos. O ponto 2 criou **N**: um por frente. Pior, o default da
+assinatura antiga apontava para o Supabase, que é justamente o recurso que o ponto 2 protege.
+
+Regra nova: **o default é o banco da frente**, lido de variável de ambiente do processo do agente —
+**nunca de arquivo compartilhado**, senão duas frentes rodando juntas leem a mesma variável e a
+primeira que trocar leva a outra junto. Sem variável definida, a ferramenta **recusa e diz como
+definir**; ela nunca escolhe um banco por conta própria.
+
+Regra no prompt: **"use estas; não reimplemente."** Cada uma responde a `--help` com exemplo real.
+
+**Onde a lista mora.** O `PROJETO.md` que este ponto citava **não existe** — o ponto 5 o descartou de
+propósito ("arquivo que ninguém relê e envelhece sem avisar"), e o "Fica:" do ponto 7 não inclui lista
+de ferramenta. A lista ficou órfã entre dois pontos. Passa a morar em **`db/README.md`**, com uma
+única linha no `AGENTS.md` apontando para ele: *"as ferramentas de linha de comando estão em
+`db/README.md`; rode `--help` antes de escrever a sua."*
 
 ### Decisões tomadas ao fechar este ponto
 
@@ -57,8 +76,17 @@ chaves que autorizaram) — um bypass ingênuo inventaria isso e faria passar te
 
 O `logar-como.js` é **fábrica de sessão, não bypass**: chama a mesma função que a rota de login chama.
 Pula a digitação da senha e do TOTP, não a lógica de autorização. Três travas: recusa em
-`NODE_ENV=production`, recusa fora do banco de demonstração, e vive em `db/` — fora de `src/`, não
-entra no build.
+`NODE_ENV=production`, **recusa se a `DATABASE_URL` não for local** (host `127.0.0.1` e nome casando
+`fast_pessoas_*`), e vive em `db/` — fora de `src/`, não entra no build.
+
+> A trava do meio dizia "recusa fora do banco de demonstração". Ficou sem sentido no mesmo dia: o
+> ponto 2 mandou **todo o trabalho para as bancadas** e deixou o banco de demonstração só para
+> apresentação. A trava apontava para o único banco onde a ferramenta não deve rodar.
+
+**O que essa fábrica NÃO prova.** Ela pula o TOTP — e 2FA é exatamente uma das coisas que o ponto 2
+exige provar por HTTP. Então: **achado sobre 2FA, enrolamento ou bloqueio de entrada não pode ser
+provado com `logar-como.js`**, nem para o lado positivo nem para o negativo. Para esses, login de
+verdade, com o código gerado pelo `codigo-2fa.js`.
 
 **O `comparar-personas` é a de maior retorno.** É a forma exata da lente que mais rendeu: um
 verificador fez isso em 16 rotas, uma a uma, escrevendo o comparador do zero. Virando comando,
@@ -66,11 +94,23 @@ qualquer onda roda barato, e a lente deixa de depender de alguém pedir.
 
 **Smoke das telas NÃO é ferramenta — é portão (ponto 3).** Todo agente de fechamento fez, e cada um
 fez diferente: um cobriu 10 telas, outro 13, outro 91. É determinístico e dá passa/falha, então entra
-no `npm test` e roda igual toda vez.
+no **`npm run test:e2e`** — com a lista de telas versionada e única, que era o ponto.
 
-**Não existe ferramenta de limpeza de dado de teste** — o ponto 2 apaga o problema. Com banco por
-frente, o agente suja à vontade e o banco é descartado. Construir a ferramenta seria resolver um
-problema que estamos prestes a deletar.
+> Estava escrito "entra no `npm test`", e isso o punha em duas caixas que se excluem: o `npm test` é
+> definido no ponto 3 como o portão que **não sobe servidor**, e smoke de tela precisa de servidor,
+> que o ponto 2 raciona em uma vaga. O que importava — lista única, determinística, rodando igual toda
+> vez — sobrevive inteiro do outro lado.
+
+**Não existe ferramenta de limpeza de dado de teste, e o argumento vale só para a bancada.** Com banco
+por frente, o agente suja à vontade e o banco é descartado — construir a ferramenta seria resolver um
+problema prestes a ser deletado. **Mas o argumento não cobre dois casos**, e ambos apareceram na
+revisão cruzada:
+
+- **O smoke do fechamento roda contra o Supabase**, que o ponto 2 promete "sempre limpa" — e smoke que
+  navega tela escreve. Delimitado: contra o Supabase o fechamento roda **subida, migrations e o
+  subconjunto somente-leitura do smoke**. O que escreve roda contra bancada.
+- **O snapshot dentro da bancada do próprio agente** — ver ponto 3: ele saiu do portão rápido
+  justamente porque não havia como limpar entre a prova do agente e a medição dele.
 
 **Varredor contínuo de lixo: recusado, com a boa ideia aproveitada.** A proposta era um agente
 varrendo sempre e indicando candidatos, com a decisão ficando comigo. O que há de certo nela —
@@ -81,10 +121,20 @@ nos dois últimos commits; (b) agente vivo custa RAM, que é o nosso gargalo med
 `.tmp-out_api_*.json` pareciam lixo e eram um cético trabalhando; (d) é o mesmo erro que este
 documento existe para corrigir: agente onde regra resolve.
 
-Vira **portão no commit** (ponto 7): lista os não rastreados que o `.gitignore` não cobre e exige
-confirmação. Custo zero, fala só quando há algo, acontece na hora certa, e o que aparecer sem padrão
-vira padrão novo. **A ideia do varredor fica guardada** para quando houver folga de máquina — ela
-cobre o que a regra não previu, como o `prova-*.js` que ninguém tinha imaginado.
+Vira **portão no commit** (ponto 7): lista os não rastreados que o `.gitignore` não cobre e **recusa,
+nomeando o arquivo**. Não "exige confirmação" — confirmação de quem, por qual canal? O ponto 6 define
+três eventos para cima e nenhum é "tem um arquivo estranho aqui", e um agente parado esperando um
+"pode" que ninguém vai mandar é o pior desfecho possível. Recusando, o agente tem duas saídas que ele
+mesmo executa: **mover para a pasta de prova**, ou **acrescentar o padrão ao `.gitignore`** — e a
+segunda vira linha no arquivo de achados da onda, que é onde a decisão fica registrada.
+
+Custo zero, fala só quando há algo, acontece na hora certa. **A ideia do varredor fica guardada** para
+quando houver folga de máquina — ela cobre o que a regra não previu, como o `prova-*.js` que ninguém
+tinha imaginado.
+
+> Nota de 01/08, escrita no dia em que a regra provou o próprio valor: os três arquivos da prova da
+> onda I foram apagados por mim numa limpeza. Um portão que **recusa e nomeia** teria me feito olhar
+> para eles antes de deletar.
 
 ---
 
@@ -175,20 +225,41 @@ assume **uma vaga**, que é o pior caso.
 
 **Evidência:** sete varreduras do mesmo tipo de defeito, cada uma se dizendo completa. Um agente de
 fechamento cobriu 10 telas, outro 13, outro 91. Gatilho era "quando eu decido", escopo era o que eu
-escrevia na hora, profundidade era chute. Hoje existem **zero arquivos de teste** e o
-`eslint.config.mjs` tem 23 linhas — o padrão do Next, nenhuma regra nossa.
+escrevia na hora, profundidade era chute. Hoje existem **zero arquivos de teste**.
+
+**E uma evidência que eu escrevi errada duas vezes.** Eu disse que o `eslint.config.mjs` tem 23 linhas
+e é "o padrão do Next, nenhuma regra nossa". As 23 linhas conferem; o resto não. Ele tem
+`globalIgnores(["db/**", ".claude/**"])` — quer dizer, **o lint não olha uma linha de `db/`**, que é
+exatamente onde vivem as oito ferramentas do ponto 1, o runner de migrations e os semeadores. O portão
+é cego para o código de que os outros seis pontos dependem.
+
+Consequência para as três regras: elas valem **também para `db/`**. Tirar `db/**` do `globalIgnores`
+exige um bloco à parte, porque ali é CommonJS rodando fora do bundle — mas "é outro dialeto" nunca foi
+motivo para não ter portão, e sim para ter um portão próprio.
 
 ### Gatilho — quando
 
 | Gatilho | Quando | Custo |
 |---|---|---|
-| **Agente** | antes de qualquer agente declarar pronto | segundos |
-| **Commit** | portão: tsc, lint, teste, lixo | segundos |
-| **Fechamento** | build, migrations nos dois bancos, smoke, baterias, snapshot | minutos |
-| **Adversarial** | *EM DISCUSSÃO — ver abaixo* | horas |
+| **Agente** | antes de qualquer agente declarar pronto: tsc, lint, motor puro, baterias | segundos |
+| **Commit** | portão: tsc, lint, teste, lixo, `bancada.js orfaos`, onda-atual × branch | segundos |
+| **Fechamento** | ato nomeado — ver a seção **O fechamento**, no fim deste documento | minutos |
+| **Adversarial** | quando `node db/mapa.js` acusa **arquivo novo** em eixo que esta onda tocou | horas |
 
 A mudança central está na primeira linha: hoje o agente escreve, declara pronto, e a verdade aparece
 uma onda depois. Com `npm test`, **ele fecha o próprio laço**.
+
+**A quarta linha só virou executável agora.** Antes ela dizia "o mapa muda em um eixo que esta onda
+tocou" e chamava isso de medível — mas **nenhum dos quatro gatilhos mandava alguém rodar o mapa**. Era
+um critério medível que ninguém media. Agora `node db/mapa.js` é passo do fechamento, e ele **precede**
+o adversarial.
+
+**A ordem entre conferir e retratar não é detalhe: é o que impede a auto-absolvição.** O retrato apaga
+exatamente a evidência que o adversarial consome. Então a sequência é rígida — **conferir → julgar →
+retratar**, e retratar é o último passo do fechamento, nunca antes. É por isso que "não retrata o mapa"
+é regra de ouro do ponto 7, e por isso que o deny mira **escrita em `db/mapa-baseline.json`**, não a
+grafia do comando: `npm run mapa:retrato` existe versionado no `package.json` e passaria por cima de
+qualquer deny escrito contra o comando longo.
 
 ### Escopo — derivado, não escrito
 
@@ -201,14 +272,32 @@ esta onda introduz** — as lentes de caça, escolhidas a partir da mudança, n�
 Onda que acrescenta tela roda os dois primeiros níveis. Onda que mexe em `rh.colaborador`, em
 autorização ou em cálculo de dinheiro roda os quatro.
 
-### Dois comandos, não um
+### Dois comandos, não um — e o snapshot NÃO fica no rápido
 
-| | Servidor | Quando |
-|---|---|---|
-| `npm test` | **não** — motor puro, lint, snapshot contra banco local | todo agente, todo commit |
-| `npm run test:e2e` | **sim** | fechamento da onda |
+| | Servidor | O que roda | Quando |
+|---|---|---|---|
+| `npm test` | **não** | motor puro, lint, baterias em arquivo, tsc | todo agente, todo commit |
+| `npm run test:e2e` | **sim** | smoke de tela, payload, 401/403, 2FA, **snapshot** | fechamento da onda |
 
 O portão rápido não pode depender do recurso escasso do ponto 2.
+
+**Por que o snapshot saiu do portão rápido — o achado mais confirmado da revisão cruzada, por cinco
+lentes independentes.** O ponto 1 recusa a ferramenta de limpeza com este argumento: *"com banco por
+frente, o agente suja à vontade e o banco é descartado"*. Se o snapshot ficasse no `npm test`,
+aconteceria isto:
+
+> O agente da frente J-2 cria três colaboradores pela tela para provar um 403 — **explicitamente
+> autorizado**. Roda o portão. O headcount mudou porque **ele** mudou. Vermelho. Não pode limpar (a
+> ferramenta foi recusada), não pode ressemear sem destruir a fixture da própria prova, e com o
+> `SubagentStop` do ponto 7 **não pode nem terminar**.
+
+O ponto 2 apagou a contaminação **entre** agentes; não apagou a que o agente causa em si mesmo. E há
+agravante conferido no disco: `db/semear/01-base.js:776` usa `new Date().getUTCFullYear()` e
+`db/semear/04-clima.js:642` usa `CURRENT_DATE` — **o snapshot fica vermelho na virada do dia mesmo sem
+ninguém sujar nada.**
+
+Snapshot é medida de estado compartilhado; portão de agente é punição individual. Misturar os dois
+reprova quem não errou. Ele vai para o fechamento, contra banco recém-semeado **com data congelada**.
 
 ### As baterias: as DUAS, com propósito declarado
 
@@ -228,12 +317,31 @@ sintática, com lista de exceções.
 **2. `papel ===` em decisão de acesso.** Trivial, com exceção para as travas anti-lockout de
 `usuarios/servico.ts`.
 
-**3. Float de hora ou dinheiro no domínio — ficou VIÁVEL depois de eu contar.** Eu tinha chutado
-"muito falso positivo". Contagem real em `src/dominios/`: **4 ocorrências de `/60`, 9 de `/100`, zero
-`parseFloat`**. Treze linhas, todas fronteira legítima (gravar no banco, formatar tela, montar memória
-de cálculo). Então vale a versão ampla: `parseFloat` proibido (custa nada, hoje pega zero, é
-preventiva) **mais** marcador explícito nas treze — uma anotação única, e daí em diante qualquer
-conversão nova precisa se justificar.
+**3. Float de hora ou dinheiro no domínio — a contagem que a aprovou não se sustenta.**
+
+Eu escrevi aqui: *"4 ocorrências de `/60`, 9 de `/100`, zero `parseFloat`. Treze linhas, todas
+fronteira legítima."* Foi esse número que mudou minha recomendação de "só a regra estreita" para "as
+duas". A revisão cruzada mandou conferir. Medido em 01/08 com o comando ao lado:
+
+| Busca | `src/dominios/**/*.ts` |
+|---|---|
+| `rg --fixed-strings "/ 60"` | **0** |
+| `rg --fixed-strings "/ 100"` | **0** |
+| `rg "parseFloat" src db` | **0** no código (só aparece dentro do JSON do próprio mapa) |
+| `rg --pcre2 '/\s*[0-9]+'` (ampla) | **132**, quase toda ruído: `Lei 8.213/91`, `0047/0048`, `nota/5` |
+
+**Os treze não existem.** Não é que fossem poucos ou muitos — eu não consigo reproduzir o número, e
+ele era o argumento inteiro.
+
+**O que fica de pé:** `parseFloat` proibido em `src/dominios` e em `db/`. É preventiva, custa nada e
+hoje pega zero — e agora "zero" é medido, com o comando registrado.
+
+**O que fica EM ABERTO:** a marcação das fronteiras legítimas. Ela dependia de existir uma lista curta
+para anotar de uma vez; sem os treze, a lista precisa ser levantada de verdade antes de a regra ser
+escrita. Vai junto do conserto dos 36 arquivos que o mapa não enxerga.
+
+> A lição, que o próprio ponto 3 já exigia do mapa e eu não apliquei a mim mesmo: **número que decide
+> coisa vem com o comando ao lado.** O meu não tinha.
 
 Motivo da convenção, com evidência desta sessão: o corretor da folha registrou que *"somar float de
 hora devolveria 346.90999999999997"*. Ele percebeu; o próximo pode não perceber.
@@ -252,7 +360,27 @@ independente perguntou *"e se eu passar `centro_custo_id=999999`?"* e recebeu 58
 | Escrever o caso de teste | **quem escreveu** — ele conhece as bordas |
 | **Julgar se a cobertura basta** | **outro** |
 | **Procurar o que mais quebrou** | **outro** |
-| **Julgar se um achado é real** | **outro ainda**, de preferência três |
+| **Julgar se um achado é real** | **um cético por LENTE** — ver abaixo |
+| **Escolher as lentes de caça** | **outro** — quem não dirigiu a onda |
+| **Julgar se o enunciado da onda casa com o escopo** | **outro** — o enunciado errado já custou uma reprovação |
+
+As duas últimas linhas faltavam. O escopo do ponto 3 é "derivado, não escrito", **menos** as lentes de
+caça, que são escolha humana e ficavam com quem dirigiu a onda — quer dizer, quem tem o mesmo ponto
+cego. E o enunciado tem evidência própria: escrevi *"varre ponto e folha"* para um agente proibido de
+tocar em ponto, e o verificador teve que apontar que **quem afirmou "ponto e folha" foi o enunciado**.
+
+**Quantos céticos: um por lente, não três por achado.** Este ponto dizia "de preferência três" e o
+ponto 2 já tinha derrubado isso pela aritmética: 29 achados × 3 céticos = 87 agentes, boa parte
+precisando de HTTP, com **uma vaga de servidor** — a camada de maior valor viraria a maior fila. O
+desenho é **um cético por lente julgando o lote inteiro**: menos custo de partida, mesma independência
+entre lentes, e foi o que rodou de fato na contestação de 01/08 (3 lentes × 10 eixos + juiz).
+
+A redundância de três fica reservada a achado de **acesso, dinheiro ou fundação** — onde errar para o
+lado do falso negativo é caro.
+
+> **Cuidado com o vocabulário:** "eixo" (ponto 3, dez regras violáveis) e "lente" (ponto 2, ângulo de
+> ceticismo) não são a mesma lista e não devem ser usados como sinônimos. Na contestação de 01/08 as
+> lentes foram três — reprodução, consequência, já-tratado — aplicadas a cada um dos dez eixos.
 
 A linha do meio é a mais sutil: **escrever o próprio teste é boa prática; decidir que ele é suficiente
 é onde a pessoa se engana.** Já funcionou aqui — o agente que parametrizou a hora noturna escreveu os
@@ -340,10 +468,26 @@ mesmo movimento do ponto 7: o que era prosa vira trava.
 | **Achado** | o que já quebrou aqui | `docs/achados/<onda>.md` | quando vira portão (sobra a linha histórica) |
 | **Número de referência** | quanto tem que dar | `docs/snapshots/` versionado | quando a regra muda — e a mudança é registrada junto |
 | **Pendência externa** | o que espera terceiro | `docs/pendencias.md` | quando o terceiro responde |
+| **Prova** | que a correção funciona | `fast-pessoas/provas/<onda>/` versionado | quando o caso vira teste em arquivo |
+| **Estado da onda** | o que falta e quanto já foi | a lista de tarefas | no fechamento da onda |
+| **Resposta a uma pendência** | o que o terceiro respondeu | vira **Decisão**, com a data e quem respondeu | nunca |
 | **Contexto de sessão** | o que eu estava fazendo | o transcript | no fim da sessão — **descarta** |
 
-A última linha é a que quase ninguém escreve e a que mais custa: 195 transcrições de agente não são
-memória, são entulho com o valor já extraído.
+**As três linhas do meio foram acrescentadas em 01/08, e a razão é constrangedora.** A tabela tinha
+cinco tipos, e três artefatos que os pontos 3, 6 e 7 usam como instrumento **não se encaixavam em
+nenhum** — então caíam por eliminação na linha que manda descartar:
+
+- **A prova.** O ponto 6 põe a evidência de cada passo no informe de posição, que é contexto de sessão.
+  A prova da onda I (91/91 telas, 45/45 chamadas) morava em `.tmp-i3/` e **eu a apaguei**. Por um dia a
+  única evidência foi uma frase dentro de uma mensagem de commit.
+- **O estado da onda.** O ponto 6 usa "tarefas fechadas sobre tarefas da onda" como o percentual que o
+  dono lê. Se a lista é contexto de sessão, o indicador dele não tem denominador.
+- **A resposta a uma pendência.** O `pendencias.md` diz quando a linha morre — "quando o terceiro
+  responde" — e não dizia para onde a **resposta** vai. Sem isso, a decisão do contador sobre o 5º dia
+  útil sumiria junto com a linha que a pediu.
+
+A última linha continua sendo a que quase ninguém escreve e a que mais custa: 195 transcrições de
+agente não são memória, são entulho com o valor já extraído.
 
 ### Duas memórias que não se misturam
 
@@ -569,17 +713,71 @@ certo é **regra de permissão mais hook**, não um só.
 | **não declara pronto com portão vermelho** | **`SubagentStop`** | é o ponto 3 inteiro virando trava |
 | não commita lixo | `PreToolUse` em `Bash(git commit *)` | lixo em quatro commits |
 | **não apaga prova** | `PreToolUse` em `Bash(rm *)` sobre pasta de prova | **eu apaguei a prova da onda I** — a regra de que eu mais precisava era contra mim |
-| **não retrata o mapa** (só o fechamento retrata) | deny em `Bash(node db/mapa.js retrato*)` | agente que retrata apaga o próprio gatilho — ver conflito E |
+| **não retrata o mapa nem o snapshot** | deny em **escrita** a `db/mapa-baseline.json` e a `docs/snapshots/` | agente que retrata apaga o próprio gatilho |
+| não usa `--sem-portao` | `PreToolUse` em Bash | a bandeira faz o mapa sair 0 mesmo com arquivo novo |
+
+**Os denys miram o EFEITO, não a grafia do comando.** Correção de 01/08: eu tinha escrito o deny do
+retrato como `Bash(node db/mapa.js retrato*)` — e **eu mesmo havia acrescentado `npm run mapa:retrato`
+ao `package.json` duas horas antes**. O atalho versionado passava por cima da regra. Regra geral: hook
+que bloqueia comando é contornável por qualquer alias novo; hook que bloqueia **escrita no arquivo**
+não é.
+
+**O `SubagentStop` precisa de válvula.** Do jeito que estava escrito, portão vermelho por causa alheia
+prende o agente — e o impede até de escalar que está preso. É um impasse construído. Fica: ele avalia o
+portão **sobre a partição daquele agente**, e **libera a saída** quando o agente devolve um relatório
+de bloqueio classificado (o quê, desde quando, por que não é dele). O relatório vira evento "bloqueio"
+do ponto 6.
+
+---
+
+## O fechamento da onda — o ato que faltava
+
+Quatro pontos penduravam obrigação em "o fechamento", e **o fechamento não era ator, nem ato, nem
+comando**. Ninguém dizia quem declara a onda encerrada. Pior: como não era ator, o deny do ponto 7
+negaria o retrato para todo mundo — inclusive para o fechamento — e o baseline nunca seria regravado;
+ou eu me autodeclararia "o fechamento" e a regra de ouro viraria decoração. Não havia terceira opção
+escrita.
+
+E faltava o principal: **o merge para a `main` não aparecia em nenhum dos sete pontos.** Desenhamos
+branch por onda, bancada por frente, portão e fechamento — e nunca escrevemos o caminho de volta. É por
+isso que a onda I está parada em `onda-i` até hoje.
+
+**Fica assim:** `npm run fechar-onda` é o ato, rodado **pelo agente principal, depois do de-acordo do
+dono** — e é o único contexto em que os denys de retrato são liberados.
+
+| # | Passo | Vem do ponto |
+|---|---|---|
+| 1 | `npm test` e `npm run test:e2e` verdes, com **snapshot** contra banco recém-semeado e data congelada | 3 |
+| 2 | `db/migracoes.js conferir` nos dois bancos (local e Supabase) | 2 |
+| 3 | Smoke contra o Supabase — **subida, migrations e o subconjunto somente-leitura** | 1, 2 |
+| 4 | Conferir que a bateria em arquivo e a do banco batem | 3 |
+| 5 | **`node db/mapa.js`** — o diff que decide se o adversarial roda | 3 |
+| 6 | **Camada adversarial**, se o passo 5 acusou eixo tocado | 3 |
+| 7 | Fechar `docs/achados/<onda>.md`: todo achado vira portão ou é aceito e assinado | 4 |
+| 8 | **Merge para a `main`** | 2 |
+| 9 | **`node db/mapa.js retrato`** — último, nunca antes do passo 6 | 3 |
+| 10 | `db/bancada.js destruir` das bancadas da onda, e `orfaos` para conferir | 2 |
+| 11 | Apagar `docs/onda-atual.md` e destruir worktree experimental | 2, 5 |
+| 12 | Relatório ao dono, no formato do ponto 6 | 6 |
+
+A ordem dos passos 5, 6 e 9 é rígida: **conferir → julgar → retratar.** Retratar antes de julgar apaga
+a evidência que o adversarial consome.
+
+O passo 8 vem antes do 9 de propósito: o retrato tem que descrever o estado que **de fato** entrou na
+`main`, não um estado que ainda podia mudar no merge.
 
 ---
 
 ## Ordem de execução
 
-1. **Ferramentas** (item 1) — maior desperdício medido, e as outras dependem dela
+1. **Ferramentas** (item 1) — maior desperdício medido, e as outras dependem dela.
+   **Cada ferramenta nasce com o hook que a torna obrigatória** — ferramenta sem trava é ferramenta
+   opcional, e opcional é ignorada. Isto adianta um pedaço do item 7 para cá, de propósito.
 2. **Sandbox** (item 2) — banco local por frente; o Postgres já está pronto
-3. **Verificação** (item 3) — `npm test` + regras de lint
+3. **Verificação** (item 3) — `npm test` + regras de lint, **incluindo `db/`**, que hoje o lint ignora
 4. **Memória** (item 4) e **Contexto** (item 5) — baratos, feitos junto
-5. **Hooks** (item 6) e **Prompt** (item 7) — consequência dos anteriores
+5. **Hooks** (item 6) e **Prompt** (item 7) — o resto das regras de ouro
+6. **O fechamento** — só depois que os cinco existirem, porque ele os invoca em sequência
 
 ## O que isso custa e o que devolve
 
