@@ -23,7 +23,25 @@
 // não enxerga fs.writeFileSync de um subprocesso node. Hook guarda o que o agente faz direto;
 // script guarda o que script faz.
 
+const { execFileSync } = require('child_process');
+const path = require('path');
+
 const SENTINELA = 'ARNES_FECHAMENTO=1';
+const RAIZ = path.resolve(__dirname, '..', '..');
+
+/** Arquivo já versionado = já foi escrito e commitado uma vez. */
+function estaNoGit(caminho) {
+  // O comando pode citar o caminho relativo à raiz ou a fast-pessoas/. Tenta as duas leituras.
+  for (const base of [RAIZ, path.join(RAIZ, 'fast-pessoas')]) {
+    try {
+      execFileSync('git', ['ls-files', '--error-unmatch', caminho], { cwd: base, stdio: 'ignore' });
+      return true;
+    } catch {
+      /* tenta a próxima base */
+    }
+  }
+  return false;
+}
 
 // Cada regra: nome, quando casa, e o que dizer. A explicação importa tanto quanto a barreira —
 // o agente barrado precisa saber o que fazer em vez de tentar de novo com outra grafia.
@@ -58,12 +76,32 @@ const REGRAS = [
     faca: 'Se o arquivo é lixo mesmo, diga qual e por quê no relatório, e deixe a decisão subir.',
   },
   {
-    nome: 'migration ja aplicada',
-    casa: (c) => /\b(rm|Remove-Item|git\s+rm)\b[^|;&]*db[\/\\]migrations/i.test(c),
+    nome: 'migration ja versionada',
+    // Barra só o que JÁ ESTÁ NO GIT. Migration recém-criada pelo `migracoes.js nova` é
+    // untracked, e apagá-la é trabalho legítimo — errar o nome acontece.
+    //
+    // A primeira versão barrava qualquer rm sobre db/migrations, e na primeira hora de uso um
+    // agente ficou preso: criou 0054 e 0055 testando o `nova`, não conseguiu apagar, e teve de
+    // contornar por PowerShell. Ele escreveu isso no relatório em vez de deixar passar — e
+    // ainda apontou a consequência que eu não tinha visto: lixo em db/migrations/ é exatamente
+    // o que quebra a alocação do próximo número, ou seja, a regra criava o problema que a
+    // ferramenta vizinha existe para resolver.
+    casa: (c) => {
+      if (!/\b(rm|Remove-Item|del|git\s+rm)\b/i.test(c)) return false;
+      const alvos = c.match(/[\w./\\-]*db[\/\\]migrations[\/\\][\w.-]+\.sql/gi);
+      if (!alvos) {
+        // Apagar a PASTA inteira, ou com curinga, sempre barra: não dá para conferir um a um.
+        return /db[\/\\]migrations(\s|$|[\/\\](\*|$))/i.test(c);
+      }
+      return alvos.some((a) => estaNoGit(a));
+    },
     porque:
-      'Migration aplicada é imutável por desenho: o db/migrar.js guarda o SHA-256 de cada uma e ' +
-      'trava o runner inteiro se o conteúdo mudar. Apagar o arquivo quebra isso para todo mundo.',
-    faca: 'Mudança de schema é migration NOVA. Use: node db/migracoes.js nova <nome>',
+      'Migration versionada é imutável por desenho: o db/migrar.js guarda o SHA-256 de cada uma e ' +
+      'trava o runner inteiro se o conteúdo mudar. Apagar o arquivo quebra isso para todo mundo, ' +
+      'não só para você.',
+    faca:
+      'Mudança de schema é migration NOVA: node db/migracoes.js nova <nome>. ' +
+      'Migration que você acabou de criar e ainda não commitou pode ser apagada normalmente.',
   },
   {
     nome: 'escrita no Supabase',

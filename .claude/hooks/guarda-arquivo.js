@@ -67,11 +67,18 @@ const REGRAS = [
   },
   {
     nome: 'contrato de conexao',
+    // SÓ PARA SUBAGENTE. O propósito da regra é impedir que agentes em paralelo disputem um
+    // arquivo compartilhado — e quem consolida é o principal, que não tem com quem competir.
+    // Aplicá-la ao principal barrava exatamente quem deveria aplicar a mudança pedida, e foi o
+    // que aconteceu na primeira hora de uso: um agente reportou um defeito real no parser de
+    // argumentos e o hook impediu o conserto. Regra que barra quem devia agir não é contenção,
+    // é impasse.
+    soSubagente: true,
     casa: (rel) => /^fast-pessoas\/db\/lib\/banco\.js$/.test(rel),
     porque:
       'É o contrato de conexão de TODAS as ferramentas do arnês. Ele existe porque cada verificador ' +
       'reimplementava conexão do seu jeito e cada um errava diferente. Mudança aqui atinge toda ' +
-      'ferramenta, inclusive as que outros agentes estão escrevendo agora, em paralelo.',
+      'ferramenta, inclusive as que outros agentes possam estar escrevendo agora, em paralelo.',
     faca: 'Escreva o pedido de mudança no seu relatório final e resolva localmente. A alteração sobe.',
   },
 ];
@@ -92,8 +99,11 @@ process.stdin.on('end', () => {
   // O ato de fechamento se declara. Não é segredo: é intenção explícita.
   if (String(dados?.tool_input?.new_string || '').includes(SENTINELA)) process.exit(0);
 
+  // agent_type só vem preenchido quando quem chamou é subagente. O laço principal não tem.
+  const ehSubagente = Boolean(dados.agent_type);
+
   const rel = relativo(caminho);
-  const regra = REGRAS.find((r) => r.casa(rel, caminho));
+  const regra = REGRAS.find((r) => (!r.soSubagente || ehSubagente) && r.casa(rel, caminho));
   if (!regra) process.exit(0);
 
   const quem = dados.agent_type ? ` (agente ${dados.agent_type})` : '';

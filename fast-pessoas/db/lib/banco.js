@@ -25,12 +25,28 @@ const { Client } = require('pg');
 
 const LOCAIS = new Set(['127.0.0.1', 'localhost', '::1']);
 
+// Bandeiras que levam VALOR. Toda outra é booleana.
+//
+// A lista existe por um defeito medido, não por gosto. A primeira versão olhava o argumento
+// seguinte e engolia qualquer coisa que não começasse com "--". Resultado:
+//
+//   db/migracoes.js --permitir-remoto conferir --banco fast_pessoas_dev
+//   -> "Falta o subcomando." (saída 1)
+//
+// porque `--permitir-remoto` comeu o "conferir". Achado pelo agente que escreveu o migracoes.js,
+// rodando a ferramenta de verdade. Com a lista, bandeira desconhecida é booleana e o subcomando
+// sobrevive na ordem em que a pessoa quiser escrever.
+const COM_VALOR = new Set(['banco', 'limite', 'arquivo', 'url', 'formato', 'saida', 'desde']);
+
 /**
  * Lê as bandeiras de uma linha de comando, sem depender de biblioteca.
  * Devolve { livres: [...], bandeiras: { nome: valor|true } }.
- * `--banco x` vira bandeiras.banco = 'x'; `--json` vira bandeiras.json = true.
+ * `--banco x` e `--banco=x` viram bandeiras.banco = 'x'; `--json` vira bandeiras.json = true.
+ *
+ * `extras` acrescenta nomes que levam valor, para a ferramenta que tiver os seus.
  */
-function lerArgumentos(argv) {
+function lerArgumentos(argv, extras = []) {
+  const levaValor = new Set([...COM_VALOR, ...extras]);
   const livres = [];
   const bandeiras = {};
   for (let i = 0; i < argv.length; i++) {
@@ -39,9 +55,15 @@ function lerArgumentos(argv) {
       livres.push(a);
       continue;
     }
+    const igual = a.indexOf('=');
+    // Forma --banco=x: o valor vem colado e não há ambiguidade nenhuma.
+    if (igual !== -1) {
+      bandeiras[a.slice(2, igual)] = a.slice(igual + 1);
+      continue;
+    }
     const nome = a.slice(2);
     const proximo = argv[i + 1];
-    if (proximo !== undefined && !proximo.startsWith('--')) {
+    if (levaValor.has(nome) && proximo !== undefined && !proximo.startsWith('--')) {
       bandeiras[nome] = proximo;
       i++;
     } else {

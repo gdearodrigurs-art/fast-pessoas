@@ -49,6 +49,11 @@ const CASOS_BASH = [
   // --------------------------------------------------- prova e migration
   ['rm -rf fast-pessoas/provas/onda-i', true],
   ['rm db/migrations/0048_transferencia_entre_empresas.sql', true],
+  // Migration recém-criada pelo `nova` e ainda não commitada: apagar é trabalho legítimo.
+  // Foi este caso que prendeu um agente na primeira hora de uso do hook.
+  ['rm db/migrations/0054_errei_o_nome.sql', false],
+  ['rm db/migrations/*.sql', true],
+  ['rm -rf db/migrations', true],
   // --------------------------------------------------- Supabase
   ['node --env-file=.env db/migrar.js', true],
   ['npm run db:migrar', true],
@@ -63,15 +68,18 @@ const CASOS_BASH = [
   ['ARNES_FECHAMENTO=1 npm run db:migrar', false],
 ];
 
+// [caminho, barra para SUBAGENTE, barra para o PRINCIPAL]
 const CASOS_ARQUIVO = [
-  [p('fast-pessoas', 'db', 'migrations', '0048_transferencia_entre_empresas.sql'), true],
-  [p('fast-pessoas', 'db', 'migrations', '0054_ainda_nao_commitada.sql'), false],
-  [p('fast-pessoas', 'db', 'mapa-baseline.json'), true],
-  [p('fast-pessoas', 'db', 'lib', 'banco.js'), true],
-  [p('docs', 'snapshots', 'antes-j.json'), true],
-  [p('fast-pessoas', 'src', 'dominios', 'folha', 'servico.ts'), false],
-  [p('docs', '13-arnes-do-projeto.md'), false],
-  [p('fast-pessoas', 'db', 'mapa.js'), false],
+  [p('fast-pessoas', 'db', 'migrations', '0048_transferencia_entre_empresas.sql'), true, true],
+  [p('fast-pessoas', 'db', 'migrations', '0054_ainda_nao_commitada.sql'), false, false],
+  [p('fast-pessoas', 'db', 'mapa-baseline.json'), true, true],
+  [p('docs', 'snapshots', 'antes-j.json'), true, true],
+  [p('fast-pessoas', 'src', 'dominios', 'folha', 'servico.ts'), false, false],
+  [p('docs', '13-arnes-do-projeto.md'), false, false],
+  [p('fast-pessoas', 'db', 'mapa.js'), false, false],
+  // O contrato de conexão é o único caso que separa os dois: barra o subagente (que pode estar
+  // competindo com outro pelo mesmo arquivo) e deixa passar o principal, que é quem consolida.
+  [p('fast-pessoas', 'db', 'lib', 'banco.js'), true, false],
 ];
 
 let erros = 0;
@@ -84,13 +92,24 @@ for (const [comando, deve] of CASOS_BASH) {
   linha(b === deve, b ? 'BARRA' : 'passa', comando.slice(0, 64));
 }
 
-console.log('\n--- guarda-arquivo ---');
+console.log('\n--- guarda-arquivo (subagente) ---');
 for (const [caminho, deve] of CASOS_ARQUIVO) {
+  const b = barrou(ARQUIVO, {
+    tool_name: 'Edit',
+    tool_input: { file_path: caminho, new_string: 'x' },
+    agent_type: 'general-purpose',
+  });
+  if (b !== deve) erros++;
+  linha(b === deve, b ? 'BARRA' : 'passa', path.relative(RAIZ, caminho).replace(/\\/g, '/'));
+}
+
+console.log('\n--- guarda-arquivo (agente principal) ---');
+for (const [caminho, , deve] of CASOS_ARQUIVO) {
   const b = barrou(ARQUIVO, { tool_name: 'Edit', tool_input: { file_path: caminho, new_string: 'x' } });
   if (b !== deve) erros++;
   linha(b === deve, b ? 'BARRA' : 'passa', path.relative(RAIZ, caminho).replace(/\\/g, '/'));
 }
 
-const total = CASOS_BASH.length + CASOS_ARQUIVO.length;
+const total = CASOS_BASH.length + CASOS_ARQUIVO.length * 2;
 console.log('\n' + (erros ? `${erros} de ${total} ERRADOS` : `${total} casos, todos certos`));
 process.exit(erros ? 1 : 0);
