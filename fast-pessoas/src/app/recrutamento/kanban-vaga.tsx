@@ -380,8 +380,10 @@ function CartaoCandidatura({
   const [pareceres, setPareceres] = useState<Parecer[] | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-  const [recomendacao, setRecomendacao] =
-    useState<RecomendacaoParecer>("aprovar");
+  // Nasce VAZIA e volta ao vazio a cada envio: a recomendação é a opinião do
+  // entrevistador sobre uma pessoa, não estado de UI que se herda do parecer
+  // anterior.
+  const [recomendacao, setRecomendacao] = useState<RecomendacaoParecer | "">("");
   const [observacoes, setObservacoes] = useState("");
   const [enviando, setEnviando] = useState(false);
 
@@ -431,6 +433,7 @@ function CartaoCandidatura({
       );
       const dados = await respostaHttp.json().catch(() => ({}));
       if (respostaHttp.ok) {
+        setRecomendacao("");
         setObservacoes("");
         await carregarPareceres();
       } else {
@@ -598,11 +601,15 @@ function CartaoCandidatura({
                   <select
                     className={comum.campo}
                     aria-label="Recomendação"
+                    required
                     value={recomendacao}
                     onChange={(e) =>
-                      setRecomendacao(e.target.value as RecomendacaoParecer)
+                      setRecomendacao(e.target.value as RecomendacaoParecer | "")
                     }
                   >
+                    <option value="" disabled>
+                      Escolha a recomendação…
+                    </option>
                     {RECOMENDACOES_PARECER.map((r) => (
                       <option key={r} value={r}>
                         {ROTULOS_RECOMENDACAO[r]}
@@ -620,7 +627,7 @@ function CartaoCandidatura({
                   <button
                     className={comum.botaoMiudo}
                     type="submit"
-                    disabled={enviando}
+                    disabled={enviando || recomendacao === ""}
                   >
                     {enviando ? "Registrando…" : "Registrar parecer"}
                   </button>
@@ -935,7 +942,9 @@ function DialogoReprovacao({
   aoFechar: () => void;
   aoConcluir: () => void;
 }) {
-  const [motivo, setMotivo] = useState<MotivoMovimentacao>("perfil");
+  // Nasce VAZIO: o motivo do desfecho negativo é a peça de defesa jurídica
+  // (Lei 9.029). Semear o primeiro item do catálogo anula o próprio catálogo.
+  const [motivo, setMotivo] = useState<MotivoMovimentacao | "">("");
   const [observacao, setObservacao] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -985,10 +994,19 @@ function DialogoReprovacao({
           <select
             className={comum.campo}
             id="reprova-motivo"
+            required
             value={motivo}
-            onChange={(e) => setMotivo(e.target.value as MotivoMovimentacao)}
+            onChange={(e) =>
+              setMotivo(e.target.value as MotivoMovimentacao | "")
+            }
           >
-            {MOTIVOS_MOVIMENTACAO.map((m) => (
+            <option value="" disabled>
+              Escolha o motivo…
+            </option>
+            {/* "desistencia" não é desfecho de REPROVAÇÃO: ela tem diálogo
+                próprio (resposta à oferta). Oferecer aqui é permitir gravar
+                status 'reprovada' com motivo de desistência. */}
+            {MOTIVOS_MOVIMENTACAO.filter((m) => m !== "desistencia").map((m) => (
               <option key={m} value={m}>
                 {ROTULOS_MOTIVO_MOVIMENTACAO[m]}
               </option>
@@ -1015,7 +1033,7 @@ function DialogoReprovacao({
             <button
               className={comum.botaoPrimario}
               type="submit"
-              disabled={enviando}
+              disabled={enviando || motivo === ""}
             >
               {enviando ? "Registrando…" : "Reprovar"}
             </button>
@@ -1253,11 +1271,12 @@ function DialogoIniciarAdmissao({
 }) {
   const [matricula, setMatricula] = useState("");
   const [cpf, setCpf] = useState("");
-  const [tipoVinculo, setTipoVinculo] = useState<TipoVinculo>(
-    TIPOS_VINCULO[0]
-  );
+  // Ambos nascem SEM valor. TIPOS_VINCULO[0] era 'clt' só por ordem do array,
+  // e "tem contrato de experiência" marcado por padrão fazia o portal do
+  // gestor alertar marco de 45/90 dias de aprendiz e estagiário.
+  const [tipoVinculo, setTipoVinculo] = useState<TipoVinculo | "">("");
   const [dataInicio, setDataInicio] = useState("");
-  const [experiencia, setExperiencia] = useState(true);
+  const [experiencia, setExperiencia] = useState<boolean | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -1331,9 +1350,13 @@ function DialogoIniciarAdmissao({
           <select
             className={comum.campo}
             id="adm-vinculo"
+            required
             value={tipoVinculo}
-            onChange={(e) => setTipoVinculo(e.target.value as TipoVinculo)}
+            onChange={(e) => setTipoVinculo(e.target.value as TipoVinculo | "")}
           >
+            <option value="" disabled>
+              Escolha o tipo de vínculo…
+            </option>
             {TIPOS_VINCULO.map((t) => (
               <option key={t} value={t}>
                 {ROTULOS_VINCULO[t]}
@@ -1351,14 +1374,30 @@ function DialogoIniciarAdmissao({
             value={dataInicio}
             onChange={(e) => setDataInicio(e.target.value)}
           />
-          <label className={comum.linhaMarcacao} htmlFor="adm-experiencia">
-            <input
-              id="adm-experiencia"
-              type="checkbox"
-              checked={experiencia}
-              onChange={(e) => setExperiencia(e.target.checked)}
-            />
+          <span className={comum.rotuloCampo}>
             Contrato de experiência (45 + 45 dias — art. 445 CLT)
+          </span>
+          <label className={comum.linhaMarcacao} htmlFor="adm-experiencia-sim">
+            <input
+              id="adm-experiencia-sim"
+              name="adm-experiencia"
+              type="radio"
+              required
+              checked={experiencia === true}
+              onChange={() => setExperiencia(true)}
+            />
+            Sim — abre os marcos de 45 e 90 dias
+          </label>
+          <label className={comum.linhaMarcacao} htmlFor="adm-experiencia-nao">
+            <input
+              id="adm-experiencia-nao"
+              name="adm-experiencia"
+              type="radio"
+              required
+              checked={experiencia === false}
+              onChange={() => setExperiencia(false)}
+            />
+            Não
           </label>
           {erro && <p className={comum.erroAcao}>{erro}</p>}
           <div className={comum.acoesDialogo}>
@@ -1372,7 +1411,7 @@ function DialogoIniciarAdmissao({
             <button
               className={comum.botaoPrimario}
               type="submit"
-              disabled={enviando}
+              disabled={enviando || tipoVinculo === "" || experiencia === null}
             >
               {enviando ? "Iniciando…" : "Iniciar admissão"}
             </button>

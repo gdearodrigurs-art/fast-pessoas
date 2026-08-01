@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { ROTULOS_VINCULO, TIPOS_VINCULO, TipoVinculo } from "@/dominios/colaboradores/esquemas";
 import {
   ROTULOS_TIPO_MOVIMENTACAO,
   TIPOS_MOVIMENTACAO,
@@ -32,6 +33,15 @@ export function FormularioMovimentacao({
   const [cargoDestino, setCargoDestino] = useState("");
   const [unidadeDestino, setUnidadeDestino] = useState("");
   const [centroCusto, setCentroCusto] = useState("");
+  // Transferência entre empresas do grupo (0048): o vínculo NOVO precisa de
+  // registro, lotação, centro de custo e matrícula própria.
+  const [empresaDestino, setEmpresaDestino] = useState("");
+  const [matriculaDestino, setMatriculaDestino] = useState("");
+  const [vinculoDestino, setVinculoDestino] = useState<"" | TipoVinculo>("");
+  // Líder NA EMPRESA DESTINO (0053). Nasce vazio e vazio é resposta: o vínculo
+  // novo nasce sem líder e o DP designa. O que não existe mais é herdar o
+  // líder de origem, que fica em outro CNPJ.
+  const [gestorDestino, setGestorDestino] = useState("");
   const [salario, setSalario] = useState("");
   const [justificativaExcecao, setJustificativaExcecao] = useState("");
   const [dataPretendida, setDataPretendida] = useState("");
@@ -107,6 +117,22 @@ export function FormularioMovimentacao({
 
   const alvo = opcoes?.alvos.find((item) => String(item.id) === colaboradorId);
 
+  // A transferência entre empresas do grupo só aparece para quem tem a chave
+  // `movimentacao.transferir_empresa` — e a lista de empresas vem vazia da API
+  // para quem não tem, então o servidor manda e a tela obedece.
+  const podeTransferirEmpresa = (opcoes?.empresas.length ?? 0) > 0;
+  // Candidatos a líder recortados pela empresa destino escolhida: quem lidera
+  // "lá" tem de estar registrado lá.
+  const gestoresDoDestino = (opcoes?.gestores ?? []).filter(
+    (gestor) =>
+      empresaDestino !== "" &&
+      String(gestor.empresa_id) === empresaDestino &&
+      String(gestor.colaborador_id) !== colaboradorId
+  );
+  const tiposOferecidos = TIPOS_MOVIMENTACAO.filter(
+    (chave) => chave !== "transferencia_empresa" || podeTransferirEmpresa
+  );
+
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
     setEnviando(true);
@@ -126,9 +152,18 @@ export function FormularioMovimentacao({
         if (foraDaFaixa && justificativaExcecao.trim()) {
           corpo.justificativa_excecao = justificativaExcecao.trim();
         }
+      } else if (tipo === "transferencia_empresa") {
+        corpo.empresa_destino_id = Number(empresaDestino);
+        corpo.estabelecimento_destino_id = Number(unidadeDestino);
+        corpo.centro_custo_destino_id = Number(centroCusto);
+        corpo.matricula_destino = matriculaDestino.trim();
+        if (vinculoDestino) corpo.tipo_vinculo_destino = vinculoDestino;
+        if (gestorDestino) {
+          corpo.gestor_destino_colaborador_id = Number(gestorDestino);
+        }
       } else {
         corpo.estabelecimento_destino_id = Number(unidadeDestino);
-        if (centroCusto.trim()) corpo.centro_custo_destino = centroCusto.trim();
+        if (centroCusto) corpo.centro_custo_destino_id = Number(centroCusto);
       }
       const resposta = await fetch("/api/demandas/movimentacao", {
         method: "POST",
@@ -172,7 +207,7 @@ export function FormularioMovimentacao({
             value={tipo}
             onChange={(e) => setTipo(e.target.value as TipoMovimentacao)}
           >
-            {TIPOS_MOVIMENTACAO.map((chave) => (
+            {tiposOferecidos.map((chave) => (
               <option key={chave} value={chave}>
                 {ROTULOS_TIPO_MOVIMENTACAO[chave]}
               </option>
@@ -270,6 +305,140 @@ export function FormularioMovimentacao({
                 </>
               )}
             </>
+          ) : tipo === "transferencia_empresa" ? (
+            <>
+              <div className={comum.avisoFaixa}>
+                Este pedido <b>encerra o vínculo na empresa atual e abre outro</b>{" "}
+                na empresa destino, na data de vigência. A <b>pessoa é a mesma</b>:
+                mesmo CPF, mesma conta de acesso e a linha do tempo atravessa os
+                dois contratos. Cargo e salário são mantidos; o período aquisitivo
+                de férias recomeça e o banco de horas é acertado na saída.
+              </div>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-empresa">
+                Empresa destino (registro)
+              </label>
+              <select
+                className={comum.campo}
+                id="mov-empresa"
+                required
+                value={empresaDestino}
+                onChange={(e) => setEmpresaDestino(e.target.value)}
+              >
+                <option value="">selecione…</option>
+                {opcoes?.empresas.map((empresa) => (
+                  <option key={empresa.id} value={empresa.id}>
+                    {empresa.nome_fantasia}
+                    {empresa.cnpj ? ` (${empresa.cnpj})` : " (sem CNPJ informado)"}
+                  </option>
+                ))}
+              </select>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-gestor-destino">
+                Líder na empresa destino
+              </label>
+              <select
+                className={comum.campo}
+                id="mov-gestor-destino"
+                value={gestorDestino}
+                disabled={empresaDestino === ""}
+                onChange={(e) => setGestorDestino(e.target.value)}
+              >
+                <option value="">
+                  {empresaDestino === ""
+                    ? "escolha a empresa destino primeiro"
+                    : "sem líder definido (o DP designa depois)"}
+                </option>
+                {gestoresDoDestino.map((gestor) => (
+                  <option
+                    key={gestor.colaborador_id}
+                    value={gestor.colaborador_id}
+                  >
+                    {gestor.nome_completo}
+                    {gestor.cargo_atual ? ` — ${gestor.cargo_atual}` : ""}
+                  </option>
+                ))}
+              </select>
+              <p className={comum.dicaSla}>
+                Só aparece quem está registrado na empresa destino. O líder de
+                hoje NÃO atravessa: liderar dá acesso à ficha, ao ponto e à
+                aprovação, e ele fica em outro CNPJ. Sem escolha aqui, o vínculo
+                novo nasce sem líder e o DP designa.
+              </p>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-empresa-unidade">
+                Lotação destino (local de trabalho)
+              </label>
+              <select
+                className={comum.campo}
+                id="mov-empresa-unidade"
+                required
+                value={unidadeDestino}
+                onChange={(e) => setUnidadeDestino(e.target.value)}
+              >
+                <option value="">selecione…</option>
+                {opcoes?.unidades.map((unidade) => (
+                  <option key={unidade.id} value={unidade.id}>
+                    {unidade.unidade}
+                  </option>
+                ))}
+              </select>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-empresa-cc">
+                Centro de custo destino
+              </label>
+              <select
+                className={comum.campo}
+                id="mov-empresa-cc"
+                required
+                value={centroCusto}
+                onChange={(e) => setCentroCusto(e.target.value)}
+              >
+                <option value="">selecione…</option>
+                {opcoes?.centros_custo.map((centro) => (
+                  <option key={centro.id} value={centro.id}>
+                    {centro.codigo} — {centro.nome}
+                    {centro.empresa_nome ? ` (${centro.empresa_nome})` : ""}
+                  </option>
+                ))}
+              </select>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-matricula">
+                Matrícula na empresa destino
+              </label>
+              <input
+                className={comum.campo}
+                id="mov-matricula"
+                type="text"
+                required
+                maxLength={30}
+                value={matriculaDestino}
+                onChange={(e) => setMatriculaDestino(e.target.value)}
+              />
+              <p className={comum.dicaSla}>
+                A matrícula é única no grupo inteiro: dois contratos, duas
+                matrículas.
+              </p>
+
+              <label className={comum.rotuloCampo} htmlFor="mov-vinculo">
+                Tipo de vínculo na empresa destino
+              </label>
+              <select
+                className={comum.campo}
+                id="mov-vinculo"
+                value={vinculoDestino}
+                onChange={(e) =>
+                  setVinculoDestino(e.target.value as "" | TipoVinculo)
+                }
+              >
+                <option value="">manter o atual</option>
+                {TIPOS_VINCULO.map((chave) => (
+                  <option key={chave} value={chave}>
+                    {ROTULOS_VINCULO[chave]}
+                  </option>
+                ))}
+              </select>
+            </>
           ) : (
             <>
               <label className={comum.rotuloCampo} htmlFor="mov-unidade">
@@ -292,14 +461,20 @@ export function FormularioMovimentacao({
               <label className={comum.rotuloCampo} htmlFor="mov-cc">
                 Centro de custo destino (em branco mantém o atual)
               </label>
-              <input
+              <select
                 className={comum.campo}
                 id="mov-cc"
-                type="text"
-                maxLength={60}
                 value={centroCusto}
                 onChange={(e) => setCentroCusto(e.target.value)}
-              />
+              >
+                <option value="">manter o atual</option>
+                {opcoes?.centros_custo.map((centro) => (
+                  <option key={centro.id} value={centro.id}>
+                    {centro.codigo} — {centro.nome}
+                    {centro.empresa_nome ? ` (${centro.empresa_nome})` : ""}
+                  </option>
+                ))}
+              </select>
             </>
           )}
 

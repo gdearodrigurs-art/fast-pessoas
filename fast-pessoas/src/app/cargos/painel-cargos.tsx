@@ -30,15 +30,6 @@ interface CargoResumo {
   ocupantes: number;
 }
 
-interface EstabelecimentoResumo {
-  id: number;
-  cnpj: string;
-  razao_social: string | null;
-  unidade: string | null;
-  endereco_resumido: string | null;
-  inicio_vigencia: string | null;
-}
-
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
   return `${dia}/${mes}/${ano}`;
@@ -48,9 +39,6 @@ function formatarSalario(valor: number): string {
   return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function formatarCnpj(cnpj: string): string {
-  return `${cnpj.slice(0, 2)}.${cnpj.slice(2, 5)}.${cnpj.slice(5, 8)}/${cnpj.slice(8, 12)}-${cnpj.slice(12)}`;
-}
 
 /** CHA aceita ";" ou quebra de linha como separador (listas curtas). */
 function listaCha(texto: string): string[] | undefined {
@@ -151,14 +139,6 @@ function corpoRcf(formulario: FormularioRcf): Record<string, unknown> {
 }
 
 const NOVA_FAIXA_VAZIA = { faixa_min: "", faixa_max: "", inicio_vigencia: "" };
-
-const NOVO_ESTABELECIMENTO_VAZIO = {
-  cnpj: "",
-  razao_social: "",
-  unidade: "",
-  endereco_resumido: "",
-  inicio_vigencia: "",
-};
 
 /**
  * Formulário do RCF na ordem do documento. O mesmo componente serve para criar
@@ -360,15 +340,15 @@ function CamposRcf({
 
 export function PainelCargos({
   podeAdministrar,
-  podeAdminEstabelecimento,
+  podeAdminEstrutura,
 }: {
   /** false = leitura do RCF apenas (chave rh.cargo.ver): sem formulários,
    *  sem faixa salarial (que a API já não envia). */
   podeAdministrar: boolean;
-  podeAdminEstabelecimento: boolean;
+  /** Só para oferecer o atalho: os catálogos moram na tela de estrutura. */
+  podeAdminEstrutura: boolean;
 }) {
   const [cargos, setCargos] = useState<CargoResumo[]>([]);
-  const [estabelecimentos, setEstabelecimentos] = useState<EstabelecimentoResumo[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
@@ -389,36 +369,21 @@ export function PainelCargos({
   const [novaFaixa, setNovaFaixa] = useState(NOVA_FAIXA_VAZIA);
   const [erroEdicao, setErroEdicao] = useState<string | null>(null);
 
-  const [novoEstabelecimento, setNovoEstabelecimento] = useState(
-    NOVO_ESTABELECIMENTO_VAZIO
-  );
-  const [erroEstabelecimento, setErroEstabelecimento] = useState<string | null>(null);
-
   const carregar = useCallback(async () => {
     try {
-      const requisicoes: Promise<Response>[] = [fetch("/api/cargos")];
-      if (podeAdminEstabelecimento) {
-        requisicoes.push(fetch("/api/estabelecimentos"));
-      }
-      const respostas = await Promise.all(requisicoes);
-      const dadosCargos = await respostas[0].json().catch(() => ({}));
-      if (respostas[0].ok) {
+      const resposta = await fetch("/api/cargos");
+      const dadosCargos = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
         setCargos(dadosCargos.cargos ?? []);
       } else {
         setErro(dadosCargos.erro ?? "Não foi possível carregar os cargos.");
-      }
-      if (podeAdminEstabelecimento && respostas[1]) {
-        const dadosEstabelecimentos = await respostas[1].json().catch(() => ({}));
-        if (respostas[1].ok) {
-          setEstabelecimentos(dadosEstabelecimentos.estabelecimentos ?? []);
-        }
       }
     } catch {
       setErro("Falha de conexão. Recarregue a página.");
     } finally {
       setCarregando(false);
     }
-  }, [podeAdminEstabelecimento]);
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -506,38 +471,6 @@ export function PainelCargos({
       setNovaFaixa(NOVA_FAIXA_VAZIA);
     } catch {
       setErroEdicao("Falha de conexão. Tente novamente.");
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  async function criarEstabelecimento(evento: FormEvent<HTMLFormElement>) {
-    evento.preventDefault();
-    setSalvando(true);
-    setErroEstabelecimento(null);
-    try {
-      const resposta = await fetch("/api/estabelecimentos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cnpj: novoEstabelecimento.cnpj,
-          razao_social: novoEstabelecimento.razao_social,
-          unidade: novoEstabelecimento.unidade,
-          endereco_resumido: novoEstabelecimento.endereco_resumido.trim() || undefined,
-          inicio_vigencia: novoEstabelecimento.inicio_vigencia,
-        }),
-      });
-      const dados = await resposta.json().catch(() => ({}));
-      if (!resposta.ok) {
-        setErroEstabelecimento(
-          dados.erro ?? "Não foi possível criar o estabelecimento."
-        );
-        return;
-      }
-      setEstabelecimentos(dados.estabelecimentos ?? []);
-      setNovoEstabelecimento(NOVO_ESTABELECIMENTO_VAZIO);
-    } catch {
-      setErroEstabelecimento("Falha de conexão. Tente novamente.");
     } finally {
       setSalvando(false);
     }
@@ -854,149 +787,17 @@ export function PainelCargos({
           )}
         </section>
 
-        {podeAdminEstabelecimento && (
+        {podeAdminEstrutura && (
           <section className={estilos.cartao}>
-            <h2>Estabelecimentos (unidades)</h2>
+            <h2>Estrutura do grupo</h2>
             <p className={estilos.aviso}>
-              Identidade estável é o CNPJ; dados descritivos mudam por versão com
-              vigência. As unidades alimentam a lotação dos colaboradores.
+              Empresa do grupo (registro), lotação (local de trabalho) e centro
+              de custo saíram daqui e viraram tela própria — os três são
+              independentes e cada um tem catálogo com nome versionado.
             </p>
-            {estabelecimentos.length === 0 ? (
-              <p className={estilos.vazio}>Nenhum estabelecimento cadastrado.</p>
-            ) : (
-              <div className={estilos.tabelaEnvolucro}>
-                <table className={estilos.tabela}>
-                  <thead>
-                    <tr>
-                      <th>Unidade</th>
-                      <th>Razão social</th>
-                      <th>CNPJ</th>
-                      <th>Vigência desde</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {estabelecimentos.map((estabelecimento) => (
-                      <tr key={estabelecimento.id}>
-                        <td>{estabelecimento.unidade ?? "(sem versão ativa)"}</td>
-                        <td>{estabelecimento.razao_social ?? "—"}</td>
-                        <td>{formatarCnpj(estabelecimento.cnpj)}</td>
-                        <td>
-                          {estabelecimento.inicio_vigencia
-                            ? formatarData(estabelecimento.inicio_vigencia)
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <form
-              className={estilos.formulario}
-              onSubmit={criarEstabelecimento}
-              style={{ marginTop: 14 }}
-            >
-              <div className={estilos.campoGrupo}>
-                <label className={estilos.rotulo} htmlFor="esCnpj">
-                  CNPJ
-                </label>
-                <input
-                  className={estilos.campo}
-                  id="esCnpj"
-                  type="text"
-                  required
-                  maxLength={18}
-                  value={novoEstabelecimento.cnpj}
-                  onChange={(e) =>
-                    setNovoEstabelecimento((atual) => ({
-                      ...atual,
-                      cnpj: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className={estilos.campoGrupo}>
-                <label className={estilos.rotulo} htmlFor="esRazao">
-                  Razão social
-                </label>
-                <input
-                  className={estilos.campo}
-                  id="esRazao"
-                  type="text"
-                  required
-                  maxLength={200}
-                  value={novoEstabelecimento.razao_social}
-                  onChange={(e) =>
-                    setNovoEstabelecimento((atual) => ({
-                      ...atual,
-                      razao_social: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className={estilos.campoGrupo}>
-                <label className={estilos.rotulo} htmlFor="esUnidade">
-                  Nome da unidade
-                </label>
-                <input
-                  className={estilos.campo}
-                  id="esUnidade"
-                  type="text"
-                  required
-                  maxLength={120}
-                  placeholder="ex.: Loja Centro"
-                  value={novoEstabelecimento.unidade}
-                  onChange={(e) =>
-                    setNovoEstabelecimento((atual) => ({
-                      ...atual,
-                      unidade: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className={estilos.campoGrupo}>
-                <label className={estilos.rotulo} htmlFor="esEndereco">
-                  Endereço resumido (opcional)
-                </label>
-                <input
-                  className={estilos.campo}
-                  id="esEndereco"
-                  type="text"
-                  maxLength={300}
-                  value={novoEstabelecimento.endereco_resumido}
-                  onChange={(e) =>
-                    setNovoEstabelecimento((atual) => ({
-                      ...atual,
-                      endereco_resumido: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className={estilos.campoGrupo}>
-                <label className={estilos.rotulo} htmlFor="esInicio">
-                  Início da vigência
-                </label>
-                <input
-                  className={estilos.campo}
-                  id="esInicio"
-                  type="date"
-                  required
-                  value={novoEstabelecimento.inicio_vigencia}
-                  onChange={(e) =>
-                    setNovoEstabelecimento((atual) => ({
-                      ...atual,
-                      inicio_vigencia: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <button className={estilos.botao} type="submit" disabled={salvando}>
-                {salvando ? "Criando…" : "Criar estabelecimento"}
-              </button>
-            </form>
-            {erroEstabelecimento && (
-              <p className={estilos.erro}>{erroEstabelecimento}</p>
-            )}
+            <Link className={estilos.botaoLinha} href="/estrutura">
+              Abrir estrutura do grupo
+            </Link>
           </section>
         )}
       </main>

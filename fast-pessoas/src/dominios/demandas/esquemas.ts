@@ -1,4 +1,7 @@
 import { z } from "zod";
+// O tipo de vínculo é do domínio de colaboradores; a transferência entre
+// empresas do grupo escolhe um deles para o contrato que nasce (0048).
+import { TIPOS_VINCULO } from "../colaboradores/esquemas";
 
 export const STATUS_DEMANDA = [
   "aguardando_aprovacao",
@@ -133,13 +136,21 @@ export const FLUXOS_DEMANDA = ["padrao", "movimentacao"] as const;
 
 export type FluxoDemanda = (typeof FLUXOS_DEMANDA)[number];
 
-export const TIPOS_MOVIMENTACAO = ["promocao", "transferencia_unidade"] as const;
+export const TIPOS_MOVIMENTACAO = [
+  "promocao",
+  "transferencia_unidade",
+  // Migration 0048: mudar de CNPJ dentro do grupo. É a terceira movimentação,
+  // e a única que ENCERRA um vínculo e ABRE outro — a pessoa (rh.pessoa) é a
+  // mesma, o contrato é que muda de empregador.
+  "transferencia_empresa",
+] as const;
 
 export type TipoMovimentacao = (typeof TIPOS_MOVIMENTACAO)[number];
 
 export const ROTULOS_TIPO_MOVIMENTACAO: Record<TipoMovimentacao, string> = {
   promocao: "Promoção",
   transferencia_unidade: "Transferência de unidade",
+  transferencia_empresa: "Transferência entre empresas do grupo",
 };
 
 export const NIVEIS_APROVACAO = ["lider", "diretoria"] as const;
@@ -174,7 +185,19 @@ export const esquemaCriacaoMovimentacao = z
     colaborador_id: z.number().int().positive(),
     cargo_destino_id: z.number().int().positive().optional(),
     estabelecimento_destino_id: z.number().int().positive().optional(),
-    centro_custo_destino: z.string().trim().min(1).max(60).optional(),
+    // Centro de custo destino é ESCOLHA de catálogo desde a 0047 — antes era
+    // texto livre, e um zero a menos criava um centro novo em silêncio.
+    centro_custo_destino_id: z.number().int().positive().optional(),
+    // REGISTRO destino (0048): só na transferência entre empresas do grupo.
+    empresa_destino_id: z.number().int().positive().optional(),
+    matricula_destino: z.string().trim().min(1).max(30).optional(),
+    // O tipo de vínculo pode mudar de empresa para empresa — exemplo do dono:
+    // CLT na Supply, PJ na DCS. Ausente = mantém o do vínculo de origem.
+    tipo_vinculo_destino: z.enum(TIPOS_VINCULO).optional(),
+    // Quem lidera a pessoa NO DESTINO (0053). Ausente é resposta legítima:
+    // "ninguém ainda" — o vínculo novo nasce sem líder e o DP designa. O que
+    // NÃO é opção é herdar o líder de origem, que está em outro CNPJ.
+    gestor_destino_colaborador_id: z.number().int().positive().optional(),
     // Remuneração é opcional: promoção sem mudança de salário existe.
     salario_proposto: z.number().nonnegative().max(9_999_999.99).optional(),
     justificativa_excecao: z.string().trim().min(1).max(2000).optional(),
@@ -197,6 +220,42 @@ export const esquemaCriacaoMovimentacao = z
       message: "Escolha a unidade destino",
       path: ["estabelecimento_destino_id"],
     }
+  )
+  // Transferir de CNPJ exige os TRÊS campos da 0047 (registro, lotação e
+  // centro de custo) mais a matrícula na empresa nova: o vínculo que nasce
+  // precisa existir inteiro no primeiro dia, não pela metade.
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.empresa_destino_id !== undefined,
+    { message: "Escolha a empresa destino", path: ["empresa_destino_id"] }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.estabelecimento_destino_id !== undefined,
+    {
+      message: "Escolha a lotação destino",
+      path: ["estabelecimento_destino_id"],
+    }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.centro_custo_destino_id !== undefined,
+    {
+      message: "Escolha o centro de custo destino",
+      path: ["centro_custo_destino_id"],
+    }
+  )
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.matricula_destino !== undefined,
+    {
+      message: "Informe a matrícula na empresa destino",
+      path: ["matricula_destino"],
+    }
   );
 
 export type CriacaoMovimentacao = z.infer<typeof esquemaCriacaoMovimentacao>;
@@ -214,6 +273,103 @@ export const esquemaDecisaoEtapa = z
   );
 
 export type DecisaoEtapa = z.infer<typeof esquemaDecisaoEtapa>;
+
+// ------------------------------------------------------------------ efeito programado
+//
+// A APROVAÇÃO E O EFEITO SÃO DOIS ATOS, e a data pretendida separa os dois.
+//
+// Até aqui a última aprovação escrevia o efeito na hora, com a vigência
+// pretendida no futuro. Uma transferência aprovada em 31/07 com vigência em
+// 03/08 já deixava o vínculo 'desligado' em 31/07 — a pessoa sumia das listas,
+// do organograma e do portal do gestor três dias antes de sair. E não era só a
+// transferência: como o projeto inteiro lê "vigente" por `fim_vigencia IS NULL`
+// (convenção uniforme, ver pesquisas/repositorio.ts), uma PROMOÇÃO aprovada
+// hoje com vigência amanhã já entra como posição vigente hoje — inclusive na
+// base de cálculo da folha do mês que ainda não acabou.
+//
+// A CORREÇÃO, e por que esta e não outra:
+//
+//   • recusar a aprovação com data futura seria matar o planejamento: a data
+//     pretendida existe justamente para decidir antes; forçar a diretoria a
+//     aprovar no próprio dia devolve o pedido ao "canal aleatório" que o módulo
+//     veio acabar;
+//   • fazer todo leitor virar sensível à data exigiria reescrever a convenção
+//     de vigência em uma dúzia de domínios — e ainda assim não resolveria
+//     `rh.colaborador.status`, que é bandeira sem vigência nenhuma;
+//   • então a decisão é AGENDAR: a aprovação decide e manda a demanda para a
+//     fila do DP; o efeito só é escrito na data pretendida ou depois.
+//
+// O FREIO VALE PARA TODAS AS PORTAS, não só para esta. Faltava dizer isto aqui,
+// e foi a frase que faltou que deixou a porta dos fundos aberta: as três rotas
+// diretas da ficha (POST /api/colaboradores/[id]/lotacao, .../posicao e
+// .../gestor) gravavam a linha de vigência na hora, com qualquer data, e a
+// vigência de setembro virava a vigente de agosto em ~20 consultas de uma vez.
+// Sem agendador nessas rotas, elas RECUSAM data futura — ver
+// `esquemaVigenciaNaoFutura` em colaboradores/esquemas.ts, cuja mensagem manda
+// quem quer decidir antes para cá. Quem um dia der agendamento à ficha muda os
+// dois lugares juntos.
+//
+// QUEM DISPARA. Não há agendador neste sistema — nenhum cron, nenhuma fila,
+// nenhum processo de fundo (procurado: não existe). Inventar um seria inventar
+// infraestrutura que ninguém executa. Quem dispara é o DP, pela demanda que a
+// aprovação já colocou na fila dele: a transferência entre empresas, por
+// exemplo, já lhe rende rescisão na origem, eSocial na destino, ASO admissional
+// e readesão de benefícios — todos na data da vigência. Aplicar o efeito é mais
+// um item dessa lista, no mesmo dia e na mesma tela, e o cartão fica marcado
+// como VENCIDO quando a data chega para ninguém esquecer.
+//
+// Se um agendador existir um dia, ele chama a mesma rota; nada aqui muda.
+
+export const SITUACOES_EFEITO = [
+  "aguardando_aprovacao",
+  "programado",
+  "a_aplicar",
+  "aplicado",
+  "cancelado",
+] as const;
+
+export type SituacaoEfeito = (typeof SITUACOES_EFEITO)[number];
+
+/**
+ * Em que pé está o efeito de uma movimentação. Derivada, não armazenada: as
+ * quatro fontes (cadeia, status da demanda, `aplicada_em` e a data pretendida)
+ * já dizem tudo, e uma coluna a mais só criaria um segundo lugar para a verdade
+ * divergir.
+ */
+export function situacaoDoEfeito(entrada: {
+  status_demanda: StatusDemanda;
+  aplicada_em: string | null;
+  efeito_vencido: boolean;
+  etapas: { status: StatusEtapa }[];
+}): SituacaoEfeito {
+  if (entrada.aplicada_em !== null) return "aplicado";
+  // Recusa (do gestor na cadeia ou do DP na fila) é o cancelamento do efeito
+  // agendado: não há o que aplicar depois, e é assim que se desmarca um
+  // agendamento sem precisar de um verbo novo.
+  if (entrada.status_demanda === "recusada") return "cancelado";
+  if (entrada.etapas.some((etapa) => etapa.status === "pendente")) {
+    return "aguardando_aprovacao";
+  }
+  return entrada.efeito_vencido ? "a_aplicar" : "programado";
+}
+
+export function rotuloSituacaoEfeito(
+  situacao: SituacaoEfeito,
+  dataPretendidaFormatada: string
+): string {
+  switch (situacao) {
+    case "aplicado":
+      return "Efeito aplicado";
+    case "cancelado":
+      return "Pedido encerrado sem efeito";
+    case "aguardando_aprovacao":
+      return "Aguardando aprovação";
+    case "programado":
+      return `Aprovada — efeito programado para ${dataPretendidaFormatada}`;
+    case "a_aplicar":
+      return `Aprovada — efeito a aplicar (vigência em ${dataPretendidaFormatada})`;
+  }
+}
 
 /**
  * Rótulo do estágio da cadeia para o cartão/fila — a demanda continua com

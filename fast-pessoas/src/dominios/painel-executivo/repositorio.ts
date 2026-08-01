@@ -25,6 +25,7 @@
 // vínculo vivo.
 
 import { consultar } from "../../lib/banco";
+import { ENTRADA_NO_GRUPO, SAIDA_DO_GRUPO } from "../../lib/sql-vinculo";
 import { RUBRICA_FGTS } from "./esquemas";
 
 const HOJE_SP = "(now() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -33,6 +34,36 @@ const HOJE_SP = "(now() AT TIME ZONE 'America/Sao_Paulo')::date";
 const ATIVO_EM = (alias: string, parametro: string) =>
   `${alias}.data_admissao <= ${parametro}::date
      AND (${alias}.data_desligamento IS NULL OR ${alias}.data_desligamento > ${parametro}::date)`;
+
+// Turnover é sobre o GRUPO, não sobre o CNPJ. Quem é transferido de uma
+// empresa do grupo para outra (migration 0048) aparece em rh.colaborador como
+// um vínculo desligado e outro admitido — e sem estes dois filtros o painel
+// contaria uma demissão e uma admissão que nunca aconteceram, inflando os dois
+// lados do indicador que a diretoria olha. SAIDA_DO_GRUPO/ENTRADA_NO_GRUPO
+// moram em lib/sql-vinculo.ts para que toda tela que conta quadro use a mesma.
+
+/**
+ * O dia é feriado PARA AQUELE VÍNCULO. Nacional vale para todos; o da unidade
+ * (municipal) vale para quem estava lotado nela naquele dia — mesma regra e
+ * mesma subconsulta de `feriadosDoColaborador` (ponto/repositorio.ts), que é
+ * quem manda no assunto. 'ponto_facultativo' NÃO entra: para o motor do ponto
+ * ele é dia útil.
+ */
+const EH_FERIADO = (expressaoDia: string, aliasColaborador: string) => `EXISTS (
+  SELECT 1
+    FROM rh.feriado f
+   WHERE f.data = ${expressaoDia}
+     AND f.tipo = 'feriado'
+     AND (f.abrangencia = 'nacional'
+          OR f.estabelecimento_id = (
+               SELECT l.estabelecimento_id
+                 FROM rh.lotacao l
+                WHERE l.colaborador_id = ${aliasColaborador}.id
+                  AND l.inicio_vigencia <= f.data
+                  AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= f.data)
+                ORDER BY l.inicio_vigencia DESC, l.id DESC
+                LIMIT 1))
+)`;
 
 /** Lotação vigente na data $n (a unidade DA ÉPOCA, não a de hoje). */
 const LOTACAO_EM = (alias: string, parametro: string) =>
@@ -101,6 +132,18 @@ export async function headcountEm(data: string): Promise<number> {
   return linhas[0]?.total ?? 0;
 }
 
+/**
+ * Quebra do headcount por unidade NA DATA — inclusive o NOME da unidade.
+ *
+ * O nome sai de `rh.estabelecimento_versao_em(estabelecimento_id, $1)`, nunca da
+ * versão `status = 'ativa'`: a versão ativa é a de HOJE, e usá-la faria uma
+ * consulta com data no passado responder com o nome de hoje. A função de
+ * escolha da linha (`LOTACAO_EM`) já respeitava a data; o rótulo não respeitava.
+ *
+ * E o GROUP BY é por `estabelecimento_id` — o rótulo é rótulo, não chave: duas
+ * unidades diferentes que hoje se chamam igual são duas linhas, e uma unidade
+ * renomeada continua sendo uma só.
+ */
 export async function headcountPorUnidade(
   data: string
 ): Promise<LinhaContagemBruta[]> {
@@ -108,10 +151,10 @@ export async function headcountPorUnidade(
     `SELECT ev.unidade AS rotulo, COUNT(*)::int AS quantidade
        FROM rh.colaborador c
        JOIN rh.lotacao l ON l.colaborador_id = c.id AND ${LOTACAO_EM("l", "$1")}
-       JOIN rh.estabelecimento_versao ev
-         ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
+       LEFT JOIN rh.estabelecimento_versao ev
+         ON ev.id = rh.estabelecimento_versao_em(l.estabelecimento_id, $1::date)
       WHERE ${ATIVO_EM("c", "$1")}
-      GROUP BY ev.unidade
+      GROUP BY l.estabelecimento_id, ev.unidade
       ORDER BY 2 DESC, 1`,
     [data]
   );
@@ -171,10 +214,12 @@ export async function turnoverJanela(
 ): Promise<TurnoverBruto> {
   const linhas = await consultar<TurnoverBruto>(
     `SELECT
-       (SELECT COUNT(*)::int FROM rh.colaborador
-         WHERE data_desligamento > $1::date AND data_desligamento <= $2::date) AS desligados,
-       (SELECT COUNT(*)::int FROM rh.colaborador
-         WHERE data_admissao > $1::date AND data_admissao <= $2::date) AS admitidos,
+       (SELECT COUNT(*)::int FROM rh.colaborador c
+         WHERE c.data_desligamento > $1::date AND c.data_desligamento <= $2::date
+           AND ${SAIDA_DO_GRUPO("c")}) AS desligados,
+       (SELECT COUNT(*)::int FROM rh.colaborador c
+         WHERE c.data_admissao > $1::date AND c.data_admissao <= $2::date
+           AND ${ENTRADA_NO_GRUPO("c")}) AS admitidos,
        (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$1")}) AS hc_inicio,
        (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$2")}) AS hc_fim`,
     [inicio, fim]
@@ -190,7 +235,8 @@ export async function serieDesligamentos(
     `SELECT to_char(g.mes, 'YYYY-MM') AS mes,
             (SELECT COUNT(*)::int FROM rh.colaborador c
               WHERE c.data_desligamento >= g.mes::date
-                AND c.data_desligamento < (g.mes + interval '1 month')::date) AS valor
+                AND c.data_desligamento < (g.mes + interval '1 month')::date
+                AND ${SAIDA_DO_GRUPO("c")}) AS valor
        FROM generate_series($1::date, date_trunc('month', $2::date)::date,
                             interval '1 month') AS g(mes)
       ORDER BY 1`,
@@ -262,30 +308,49 @@ export interface CustoUnidadeBruto extends Record<string, unknown> {
   encargo_fgts: string;
 }
 
+/**
+ * Rateio do custo por unidade e centro de custo DA COMPETÊNCIA.
+ *
+ * A fonte é `rh_folha.apropriacao_competencia` (migration 0047), a mesma view
+ * que a folha usa para dizer onde cada linha cai: ela resolve lotação, centro de
+ * custo e os NOMES dos dois na data da competência (último dia), via
+ * `rh.estrutura_em`. Não existe parâmetro de referência aqui de propósito — a
+ * data é derivada da própria competência, e assim o rateio não pode divergir do
+ * que a apropriação da folha diz.
+ *
+ * O que a versão anterior errava: escolhia a linha de lotação pela data certa,
+ * mas buscava o nome na versão `status = 'ativa'` — a de hoje. Renomear uma
+ * unidade hoje reescrevia o rateio de uma competência FECHADA, contradizendo a
+ * frase que o próprio card publica ("usa a lotação vigente em <data>, não a de
+ * hoje"). Agrava-se por agrupar pelo nome: rótulo virava chave de agregação.
+ * Agora o GROUP BY é por `estabelecimento_id` + `centro_custo_id`.
+ *
+ * `lotacao_id IS NOT NULL` mantém fora do rateio quem não tinha lotação vigente
+ * na competência — é essa diferença que o serviço publica como `sem_lotacao`.
+ */
 export async function custoPorUnidade(
-  competenciaId: number,
-  referencia: string
+  competenciaId: number
 ): Promise<CustoUnidadeBruto[]> {
   return consultar<CustoUnidadeBruto>(
-    `SELECT ev.unidade, l.centro_custo,
+    `SELECT ap.lotacao_nome AS unidade,
+            ap.centro_custo_codigo AS centro_custo,
             COUNT(*)::int AS pessoas,
-            SUM(f.total_proventos) AS proventos,
+            SUM(ap.total_proventos) AS proventos,
             COALESCE(SUM(g.fgts), 0) AS encargo_fgts
-       FROM rh_folha.folha_colaborador f
-       JOIN rh.lotacao l ON l.colaborador_id = f.colaborador_id AND ${LOTACAO_EM("l", "$2")}
-       JOIN rh.estabelecimento_versao ev
-         ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
+       FROM rh_folha.apropriacao_competencia ap
        LEFT JOIN LATERAL (
          SELECT SUM(i.valor) AS fgts
            FROM rh_folha.item_calculo i
            JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
-           JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id AND r.codigo = $3
-          WHERE i.folha_colaborador_id = f.id
+           JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id AND r.codigo = $2
+          WHERE i.folha_colaborador_id = ap.folha_colaborador_id
        ) g ON TRUE
-      WHERE f.competencia_id = $1
-      GROUP BY ev.unidade, l.centro_custo
+      WHERE ap.competencia_id = $1
+        AND ap.lotacao_id IS NOT NULL
+      GROUP BY ap.estabelecimento_id, ap.lotacao_nome,
+               ap.centro_custo_id, ap.centro_custo_codigo
       ORDER BY 4 DESC, 1`,
-    [competenciaId, referencia, RUBRICA_FGTS]
+    [competenciaId, RUBRICA_FGTS]
   );
 }
 
@@ -406,8 +471,23 @@ export interface LinhaAbsenteismo extends Record<string, unknown> {
  * Denominador: para cada dia útil, quantos vínculos existiam — o que a empresa
  * de fato esperava receber de trabalho, já descontando quem ainda não tinha
  * entrado e quem já havia saído.
- * Dia útil = segunda a sexta. Feriado não entra: não existe calendário de
- * feriados em nenhum lugar do sistema (registrado como evolução em esquemas.ts).
+ *
+ * Dia útil = segunda a sexta MENOS os feriados de rh.feriado. O calendário de
+ * feriados nasceu na migration 0027, é administrado em /ponto/parâmetros e o
+ * motor do ponto já o usa; este card dizia na tela que ele "não existe no
+ * sistema" e reimplementava um calendário próprio e pior, inflando o
+ * denominador com os ~11 feriados nacionais que caem em dia de semana numa
+ * janela de 12 meses e subestimando o percentual na mesma proporção.
+ *
+ * A regra de alcance é a MESMA de `feriadosDoColaborador` (ponto/repositorio):
+ * nacional vale para todo mundo; o municipal/da unidade vale para quem estava
+ * lotado naquele estabelecimento NAQUELE DIA. Ponto facultativo continua sendo
+ * dia útil — é assim que o motor do ponto o trata.
+ *
+ * O que AINDA não entra, e está registrado como evolução em esquemas.ts: a
+ * ESCALA de cada pessoa. Quem está em 6x1 ou 12x36 continua tratado como
+ * seg–sex, porque "dia esperado de trabalho" derivado da escala é conta do
+ * motor do ponto e o card ainda não a consome.
  */
 export async function absenteismoMensal(
   inicio: string,
@@ -425,6 +505,7 @@ export async function absenteismoMensal(
          JOIN rh.colaborador c
            ON dia >= c.data_admissao
           AND (c.data_desligamento IS NULL OR dia <= c.data_desligamento)
+        WHERE NOT ${EH_FERIADO("dia", "c")}
         GROUP BY 1
      ),
      ausentes AS (
@@ -437,6 +518,7 @@ export async function absenteismoMensal(
            ON c.id = a.colaborador_id
           AND d.dia >= c.data_admissao
           AND (c.data_desligamento IS NULL OR d.dia <= c.data_desligamento)
+        WHERE NOT ${EH_FERIADO("d.dia", "c")}
         GROUP BY 1
      )
      SELECT to_char(p.mes, 'YYYY-MM') AS mes, p.dias AS previstos,

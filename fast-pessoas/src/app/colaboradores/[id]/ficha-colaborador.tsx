@@ -21,6 +21,7 @@ import {
   TIPOS_VINCULO,
   TipoOcorrencia,
   TipoVinculo,
+  hojeNaOperacao,
 } from "@/dominios/colaboradores/esquemas";
 import { formatarMinutos } from "@/dominios/ponto/esquemas";
 import type { PermissoesFicha } from "./page";
@@ -142,14 +143,36 @@ interface Ficha {
   email: string;
   usuario_ativo: boolean;
   cargo_nome: string | null;
+  /** REGISTRO vigente: em qual empresa do grupo este vínculo está registrado. */
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  /** LOTAÇÃO vigente: o local físico. */
   unidade: string | null;
+  /** CENTRO DE CUSTO vigente: código e nome. */
   centro_custo: string | null;
+  centro_custo_nome: string | null;
   gestor_id: number | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
   dias_desde_feedback: number | null;
   dias_desde_admissao: number;
   feedback_vencido: boolean;
+  /** A pessoa por trás desta ficha, e todos os contratos dela no grupo. */
+  pessoa_id: number;
+  vinculos: VinculoDaPessoa[];
+}
+
+interface VinculoDaPessoa {
+  id: number;
+  matricula: string;
+  tipo_vinculo: TipoVinculo;
+  status: StatusColaborador;
+  data_admissao: string;
+  data_desligamento: string | null;
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  sucede_vinculo_id: number | null;
+  sucedido_por_vinculo_id: number | null;
 }
 
 interface Evento {
@@ -157,6 +180,9 @@ interface Evento {
   tipo: string;
   ocorrido_em: string;
   resumo: string;
+  /** Em qual contrato o fato caiu — a linha do tempo atravessa vínculos. */
+  vinculo_id: number;
+  vinculo_matricula: string;
 }
 
 interface Ocorrencia {
@@ -210,13 +236,67 @@ interface RelacaoGestor {
   fim_vigencia: string | null;
 }
 
+/** Uma linha de vigência da alocação: os três campos juntos. */
 interface Lotacao {
   id: number;
+  empresa_id: number;
+  empresa_nome: string | null;
   estabelecimento_id: number;
   unidade: string | null;
+  centro_custo_id: number;
   centro_custo: string;
+  centro_custo_nome: string | null;
   inicio_vigencia: string;
   fim_vigencia: string | null;
+}
+
+const ALOCACAO_VAZIA = {
+  empresa_id: "",
+  estabelecimento_id: "",
+  centro_custo_id: "",
+  inicio_vigencia: "",
+};
+
+/**
+ * SEMEADURA da nova alocação — o padrão de SecaoJornadas (ponto) e
+ * SecaoParametrosGerais (folha): o formulário NÃO inventa valor de negócio; ele
+ * repete o que está VIGENTE agora, para quem só quer trocar um dos três não ter
+ * que redigitar os outros dois. Sem alocação vigente, os três nascem vazios.
+ *
+ * `inicio_vigencia` NUNCA é semeado — hoje não é "a data certa" de nada, e
+ * chutá-la abriria uma vigência com data que ninguém escolheu.
+ */
+function semearAlocacao(historico: Lotacao[]): typeof ALOCACAO_VAZIA {
+  const vigente =
+    historico.find((linha) => linha.fim_vigencia === null) ??
+    [...historico].sort((a, b) =>
+      a.inicio_vigencia === b.inicio_vigencia
+        ? b.id - a.id
+        : a.inicio_vigencia < b.inicio_vigencia
+          ? 1
+          : -1
+    )[0];
+  if (!vigente) return ALOCACAO_VAZIA;
+  return {
+    empresa_id: String(vigente.empresa_id),
+    estabelecimento_id: String(vigente.estabelecimento_id),
+    centro_custo_id: String(vigente.centro_custo_id),
+    inicio_vigencia: "",
+  };
+}
+
+interface EmpresaOpcao {
+  id: number;
+  nome: string;
+  cnpj: string | null;
+}
+
+interface CentroCustoOpcao {
+  id: number;
+  codigo: string;
+  nome: string;
+  empresa_id: number;
+  empresa_nome: string | null;
 }
 
 interface CargoOpcao {
@@ -227,7 +307,8 @@ interface CargoOpcao {
 interface EstabelecimentoOpcao {
   id: number;
   unidade: string | null;
-  cnpj: string;
+  cnpj: string | null;
+  inativado_em: string | null;
 }
 
 interface ColaboradorOpcao {
@@ -295,6 +376,13 @@ const formatoDataUtc = new Intl.DateTimeFormat("pt-BR", {
   year: "numeric",
 });
 
+// Teto dos três campos de vigência que gravam DIRETO na ficha (posição, gestor
+// e alocação). O servidor é quem manda — `esquemaVigenciaNaoFutura` recusa data
+// futura porque o sistema inteiro lê "vigente" por `fim_vigencia IS NULL` e a
+// linha de amanhã já responderia por hoje. Aqui é só o aviso antes de digitar:
+// quem quer decidir antes vai pela movimentação, que agenda o efeito.
+const HOJE_NA_OPERACAO = hojeNaOperacao();
+
 function formatarDataEvento(iso: string): string {
   const data = new Date(iso);
   if (Number.isNaN(data.getTime())) return iso;
@@ -346,6 +434,9 @@ export function FichaColaborador({
   const [lotacoes, setLotacoes] = useState<Lotacao[] | null>(null);
   const [cargos, setCargos] = useState<CargoOpcao[] | null>(null);
   const [estabelecimentos, setEstabelecimentos] = useState<EstabelecimentoOpcao[] | null>(null);
+  // Catálogos de REGISTRO e CENTRO DE CUSTO (migration 0047): só os ativos.
+  const [empresasOpcoes, setEmpresasOpcoes] = useState<EmpresaOpcao[] | null>(null);
+  const [centrosCustoOpcoes, setCentrosCustoOpcoes] = useState<CentroCustoOpcao[] | null>(null);
   const [colaboradoresOpcoes, setColaboradoresOpcoes] = useState<ColaboradorOpcao[] | null>(null);
 
   const [erroAba, setErroAba] = useState<string | null>(null);
@@ -357,7 +448,9 @@ export function FichaColaborador({
 
   const [novaOcorrencia, setNovaOcorrencia] = useState({
     ocorrida_em: "",
-    tipo: "positivo" as TipoOcorrencia,
+    // Classificação da conduta nasce VAZIA: o sinal (positivo/negativo) é o
+    // que a ficha registra sobre a pessoa — a tela não chuta por ordem do enum.
+    tipo: "" as TipoOcorrencia | "",
     restrita: false,
     descricao: "",
     impacto: "",
@@ -381,14 +474,12 @@ export function FichaColaborador({
     cargo_id: "",
     salario: "",
     inicio_vigencia: "",
-    motivo: "promocao" as MotivoPosicao,
+    // Motivo nasce VAZIO: é o rótulo que distingue promoção de reajuste
+    // coletivo, mérito e enquadramento no histórico de posições.
+    motivo: "" as MotivoPosicao | "",
   });
   const [novoGestor, setNovoGestor] = useState({ gestor_colaborador_id: "", inicio_vigencia: "" });
-  const [novaLotacao, setNovaLotacao] = useState({
-    estabelecimento_id: "",
-    centro_custo: "",
-    inicio_vigencia: "",
-  });
+  const [novaLotacao, setNovaLotacao] = useState(ALOCACAO_VAZIA);
 
   const carregarFicha = useCallback(async () => {
     try {
@@ -470,13 +561,22 @@ export function FichaColaborador({
       fetch(`/api/colaboradores/${colaboradorId}/lotacao`).then(async (resposta) => {
         if (resposta.ok) {
           const dados = await resposta.json();
-          setLotacoes(dados.historico ?? []);
+          const historico: Lotacao[] = dados.historico ?? [];
+          setLotacoes(historico);
+          setNovaLotacao(semearAlocacao(historico));
         }
       });
       fetch("/api/estabelecimentos").then(async (resposta) => {
         if (resposta.ok) {
           const dados = await resposta.json();
           setEstabelecimentos(dados.estabelecimentos ?? []);
+        }
+      });
+      fetch("/api/estrutura/opcoes").then(async (resposta) => {
+        if (resposta.ok) {
+          const dados = await resposta.json();
+          setEmpresasOpcoes(dados.empresas ?? []);
+          setCentrosCustoOpcoes(dados.centros_custo ?? []);
         }
       });
     }
@@ -543,7 +643,7 @@ export function FichaColaborador({
       }
       setNovaOcorrencia({
         ocorrida_em: "",
-        tipo: "positivo",
+        tipo: "",
         restrita: false,
         descricao: "",
         impacto: "",
@@ -691,7 +791,7 @@ export function FichaColaborador({
         return;
       }
       setPosicoes(dados.posicoes ?? []);
-      setNovaPosicao({ cargo_id: "", salario: "", inicio_vigencia: "", motivo: "promocao" });
+      setNovaPosicao({ cargo_id: "", salario: "", inicio_vigencia: "", motivo: "" });
       await carregarFicha();
     } catch {
       setErroAba("Falha de conexão. Tente novamente.");
@@ -744,18 +844,22 @@ export function FichaColaborador({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          empresa_id: Number(novaLotacao.empresa_id),
           estabelecimento_id: Number(novaLotacao.estabelecimento_id),
-          centro_custo: novaLotacao.centro_custo,
+          centro_custo_id: Number(novaLotacao.centro_custo_id),
           inicio_vigencia: novaLotacao.inicio_vigencia,
         }),
       });
       const dados = await resposta.json().catch(() => ({}));
       if (!resposta.ok) {
-        setErroAba(dados.erro ?? "Não foi possível atualizar a lotação.");
+        setErroAba(dados.erro ?? "Não foi possível atualizar a alocação.");
         return;
       }
-      setLotacoes(dados.historico ?? []);
-      setNovaLotacao({ estabelecimento_id: "", centro_custo: "", inicio_vigencia: "" });
+      const historico: Lotacao[] = dados.historico ?? [];
+      setLotacoes(historico);
+      // Semeia de novo a partir do que ACABOU de virar vigente — o formulário
+      // continua espelhando o estado atual, nunca o que foi digitado antes.
+      setNovaLotacao(semearAlocacao(historico));
       await carregarFicha();
     } catch {
       setErroAba("Falha de conexão. Tente novamente.");
@@ -804,6 +908,15 @@ export function FichaColaborador({
       </div>
     );
   }
+
+  // Quem foi demitido e recontratado em outra empresa do grupo tem mais de um
+  // contrato. Só nesse caso a linha do tempo precisa dizer em qual cada fato
+  // caiu — para quem tem um vínculo só, a tela fica exatamente como era.
+  const temMaisDeUmVinculo = (ficha.vinculos?.length ?? 1) > 1;
+  // Vínculo encerrado: os três campos da 0047 e o cargo mostram o que valia no
+  // fim do contrato, não o que vale hoje — o contrato acabou.
+  const vinculoEncerrado = ficha.status === "desligado";
+  const sufixoEncerrado = vinculoEncerrado ? " no encerramento" : "";
 
   return (
     <div className={estilos.pagina}>
@@ -956,15 +1069,39 @@ export function FichaColaborador({
                     : ""}
                 </div>
               </div>
+              {/* Contrato encerrado não tem nada "vigente" — tem o que valia no
+                  último dia. O rótulo diz qual dos dois está na tela para o DP
+                  não ler o passado como se fosse hoje. */}
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>Unidade (lotação vigente)</div>
-                <div className={estilos.val}>
-                  {ficha.unidade ?? "—"}
-                  {ficha.centro_custo ? ` · CC ${ficha.centro_custo}` : ""}
+                <div className={estilos.rot}>
+                  Registro (empresa do grupo){sufixoEncerrado}
                 </div>
+                <div className={estilos.val}>{ficha.empresa_nome ?? "—"}</div>
               </div>
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>Cargo (posição vigente)</div>
+                <div className={estilos.rot}>
+                  Lotação (local de trabalho){sufixoEncerrado}
+                </div>
+                <div className={estilos.val}>{ficha.unidade ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Centro de custo{sufixoEncerrado}</div>
+                <div className={estilos.val}>
+                  {ficha.centro_custo
+                    ? `${ficha.centro_custo}${ficha.centro_custo_nome && ficha.centro_custo_nome !== ficha.centro_custo ? ` — ${ficha.centro_custo_nome}` : ""}`
+                    : "—"}
+                </div>
+                {permissoes.podeAdminLotacao && (
+                  <div className={estilos.notaRestrito}>
+                    o histórico dos três, com a vigência de cada troca, está na
+                    aba Administração → Alocação
+                  </div>
+                )}
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>
+                  {vinculoEncerrado ? "Cargo (última posição)" : "Cargo (posição vigente)"}
+                </div>
                 <div className={estilos.val}>{ficha.cargo_nome ?? "—"}</div>
               </div>
               <div className={estilos.campoDado}>
@@ -991,6 +1128,69 @@ export function FichaColaborador({
                 </div>
               )}
             </div>
+
+            {/* VÍNCULOS DA PESSOA NO GRUPO. Só aparece quando há mais de um —
+                quem tem um contrato só vê a ficha exatamente como antes. É a
+                resposta visível ao "ele demite e recontrata na outra empresa,
+                mas não queria perder os dados e histórico": os dois contratos,
+                com a empresa e o período de cada um, numa pessoa só. */}
+            {temMaisDeUmVinculo && (
+              <div className={estilos.cartao} style={{ marginTop: 16 }}>
+                <h2>Vínculos desta pessoa no grupo</h2>
+                <p className={estilos.notaRestrito}>
+                  Mesmo CPF, mesma conta de acesso e uma linha do tempo só —
+                  cada contrato guarda o que aconteceu nele.
+                </p>
+                <table className={estilos.tabela}>
+                  <thead>
+                    <tr>
+                      <th>Empresa (registro)</th>
+                      <th>Matrícula</th>
+                      <th>Vínculo</th>
+                      <th>Período</th>
+                      <th>Situação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ficha.vinculos.map((vinculo) => (
+                      <tr
+                        key={vinculo.id}
+                        className={vinculo.id === ficha.id ? estilos.linhaAtual : undefined}
+                      >
+                        <td>{vinculo.empresa_nome ?? "—"}</td>
+                        <td>
+                          {vinculo.id === ficha.id ? (
+                            <b>{vinculo.matricula}</b>
+                          ) : (
+                            <Link href={`/colaboradores/${vinculo.id}`}>
+                              {vinculo.matricula}
+                            </Link>
+                          )}
+                        </td>
+                        <td>{ROTULOS_VINCULO[vinculo.tipo_vinculo]}</td>
+                        <td>
+                          {formatarData(vinculo.data_admissao)}
+                          {" → "}
+                          {vinculo.data_desligamento
+                            ? formatarData(vinculo.data_desligamento)
+                            : "hoje"}
+                        </td>
+                        <td>
+                          {ROTULOS_STATUS[vinculo.status]}
+                          {vinculo.sucedido_por_vinculo_id !== null
+                            ? " · transferido para outra empresa do grupo"
+                            : ""}
+                          {vinculo.sucede_vinculo_id !== null
+                            ? " · veio por transferência interna"
+                            : ""}
+                          {vinculo.id === ficha.id ? " · ficha aberta" : ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <BlocoPontoFicha colaboradorId={colaboradorId} />
 
@@ -1287,6 +1487,12 @@ export function FichaColaborador({
                           {tipo.rotulo}
                         </span>
                         <span>{formatarDataEvento(evento.ocorrido_em)}</span>
+                        {/* Só aparece quando a pessoa tem mais de um contrato
+                            no grupo: aí saber em QUAL o fato caiu deixa de ser
+                            ruído e passa a ser a informação. */}
+                        {temMaisDeUmVinculo && (
+                          <span>matrícula {evento.vinculo_matricula}</span>
+                        )}
                       </div>
                       <div className={estilos.eventoResumo}>{evento.resumo}</div>
                     </div>
@@ -1327,14 +1533,16 @@ export function FichaColaborador({
                     <select
                       className={estilos.campo}
                       id="ocTipo"
+                      required
                       value={novaOcorrencia.tipo}
                       onChange={(e) =>
                         setNovaOcorrencia((atual) => ({
                           ...atual,
-                          tipo: e.target.value as TipoOcorrencia,
+                          tipo: e.target.value as TipoOcorrencia | "",
                         }))
                       }
                     >
+                      <option value="">selecione…</option>
                       {TIPOS_OCORRENCIA.map((opcao) => (
                         <option key={opcao} value={opcao}>
                           {ROTULOS_OCORRENCIA[opcao]}
@@ -1750,6 +1958,7 @@ export function FichaColaborador({
                         className={estilos.campo}
                         id="poInicio"
                         type="date"
+                        max={HOJE_NA_OPERACAO}
                         required
                         value={novaPosicao.inicio_vigencia}
                         onChange={(e) =>
@@ -1767,14 +1976,16 @@ export function FichaColaborador({
                       <select
                         className={estilos.campo}
                         id="poMotivo"
+                        required
                         value={novaPosicao.motivo}
                         onChange={(e) =>
                           setNovaPosicao((atual) => ({
                             ...atual,
-                            motivo: e.target.value as MotivoPosicao,
+                            motivo: e.target.value as MotivoPosicao | "",
                           }))
                         }
                       >
+                        <option value="">selecione…</option>
                         {MOTIVOS_POSICAO.map((opcao) => (
                           <option key={opcao} value={opcao}>
                             {ROTULOS_MOTIVO_POSICAO[opcao]}
@@ -1862,6 +2073,7 @@ export function FichaColaborador({
                       className={estilos.campo}
                       id="geInicio"
                       type="date"
+                      max={HOJE_NA_OPERACAO}
                       required
                       value={novoGestor.inicio_vigencia}
                       onChange={(e) =>
@@ -1892,7 +2104,14 @@ export function FichaColaborador({
 
             {permissoes.podeAdminLotacao && (
               <div className={estilos.cartao}>
-                <h2>Lotação (unidade × centro de custo)</h2>
+                <h2>Alocação (registro × lotação × centro de custo)</h2>
+                <p className={estilos.ajuda}>
+                  Os três são independentes: a pessoa pode estar registrada numa
+                  empresa do grupo, trabalhar no prédio de outra e ter o custo
+                  caindo num terceiro lugar. Mudar qualquer um deles abre uma
+                  vigência nova — o que já passou continua apontando para o que
+                  valia na época.
+                </p>
                 {lotacoes === null ? (
                   <p className={estilos.vazio}>Carregando…</p>
                 ) : lotacoes.length === 0 ? (
@@ -1902,7 +2121,8 @@ export function FichaColaborador({
                     <table className={estilos.tabela}>
                       <thead>
                         <tr>
-                          <th>Unidade</th>
+                          <th>Registro</th>
+                          <th>Lotação</th>
                           <th>Centro de custo</th>
                           <th>Início</th>
                           <th>Fim</th>
@@ -1911,8 +2131,15 @@ export function FichaColaborador({
                       <tbody>
                         {lotacoes.map((lotacao) => (
                           <tr key={lotacao.id}>
+                            <td>{lotacao.empresa_nome ?? "—"}</td>
                             <td>{lotacao.unidade ?? "—"}</td>
-                            <td>{lotacao.centro_custo}</td>
+                            <td>
+                              {lotacao.centro_custo}
+                              {lotacao.centro_custo_nome &&
+                              lotacao.centro_custo_nome !== lotacao.centro_custo
+                                ? ` — ${lotacao.centro_custo_nome}`
+                                : ""}
+                            </td>
                             <td>{formatarData(lotacao.inicio_vigencia)}</td>
                             <td>
                               {lotacao.fim_vigencia
@@ -1931,8 +2158,33 @@ export function FichaColaborador({
                   style={{ marginTop: 14 }}
                 >
                   <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="loEmpresa">
+                      Registro (empresa do grupo)
+                    </label>
+                    <select
+                      className={estilos.campo}
+                      id="loEmpresa"
+                      required
+                      value={novaLotacao.empresa_id}
+                      onChange={(e) =>
+                        setNovaLotacao((atual) => ({
+                          ...atual,
+                          empresa_id: e.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">Selecione…</option>
+                      {(empresasOpcoes ?? []).map((opcao) => (
+                        <option key={opcao.id} value={opcao.id}>
+                          {opcao.nome}
+                          {opcao.cnpj ? ` (${opcao.cnpj})` : " (sem CNPJ)"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className={estilos.campoGrupo}>
                     <label className={estilos.rotulo} htmlFor="loEstab">
-                      Estabelecimento
+                      Lotação (local de trabalho)
                     </label>
                     <select
                       className={estilos.campo}
@@ -1947,31 +2199,39 @@ export function FichaColaborador({
                       }
                     >
                       <option value="">Selecione…</option>
-                      {(estabelecimentos ?? []).map((opcao) => (
-                        <option key={opcao.id} value={opcao.id}>
-                          {opcao.unidade ?? `CNPJ ${opcao.cnpj}`}
-                        </option>
-                      ))}
+                      {(estabelecimentos ?? [])
+                        .filter((opcao) => opcao.inativado_em === null)
+                        .map((opcao) => (
+                          <option key={opcao.id} value={opcao.id}>
+                            {opcao.unidade ?? `local ${opcao.id}`}
+                          </option>
+                        ))}
                     </select>
                   </div>
                   <div className={estilos.campoGrupo}>
                     <label className={estilos.rotulo} htmlFor="loCc">
                       Centro de custo
                     </label>
-                    <input
+                    <select
                       className={estilos.campo}
                       id="loCc"
-                      type="text"
                       required
-                      maxLength={30}
-                      value={novaLotacao.centro_custo}
+                      value={novaLotacao.centro_custo_id}
                       onChange={(e) =>
                         setNovaLotacao((atual) => ({
                           ...atual,
-                          centro_custo: e.target.value,
+                          centro_custo_id: e.target.value,
                         }))
                       }
-                    />
+                    >
+                      <option value="">Selecione…</option>
+                      {(centrosCustoOpcoes ?? []).map((opcao) => (
+                        <option key={opcao.id} value={opcao.id}>
+                          {opcao.codigo} — {opcao.nome}
+                          {opcao.empresa_nome ? ` (${opcao.empresa_nome})` : ""}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className={estilos.campoGrupo}>
                     <label className={estilos.rotulo} htmlFor="loInicio">
@@ -1981,6 +2241,7 @@ export function FichaColaborador({
                       className={estilos.campo}
                       id="loInicio"
                       type="date"
+                      max={HOJE_NA_OPERACAO}
                       required
                       value={novaLotacao.inicio_vigencia}
                       onChange={(e) =>

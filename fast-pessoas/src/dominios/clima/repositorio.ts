@@ -74,7 +74,7 @@ export async function buscarColaboradorPorUsuario(
   const linhas = await consultar<{ id: string; nome_completo: string }>(
     `SELECT id, nome_completo
        FROM rh.colaborador
-      WHERE usuario_id = $1`,
+      WHERE id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   if (linhas.length === 0) return null;
@@ -90,9 +90,15 @@ export async function listarRespostasDoDia(
     nota: number;
     comentario: string | null;
   }>(
+    // Pela PESSOA, não pelo contrato: no dia da transferência entre empresas
+    // do grupo o vínculo já é outro, e perguntar por colaborador_id fazia o
+    // check-in do dia aparecer em branco para quem já o tinha respondido de
+    // manhã — a tela convidava para a segunda resposta que a trava da 0052
+    // agora recusa.
     `SELECT pergunta_versao_id, nota, comentario
        FROM rh_clima.checkin_resposta
-      WHERE colaborador_id = $1 AND data_referencia = $2`,
+      WHERE pessoa_id = (SELECT c.pessoa_id FROM rh.colaborador c WHERE c.id = $1)
+        AND data_referencia = $2`,
     [colaboradorId, dataReferencia]
   );
   return linhas.map((linha) => ({
@@ -186,9 +192,41 @@ export async function agregadoGeral(
 }
 
 /**
- * Agregado POR UNIDADE (lotação vigente), com a média da janela inteira e o
- * recorte dos últimos `diasRecentes` dias contra o período anterior — é assim
- * que uma queda localizada aparece, em vez de sumir na média da rede.
+ * Agregado POR UNIDADE, com a média da janela inteira e o recorte dos últimos
+ * `diasRecentes` dias contra o período anterior — é assim que uma queda
+ * localizada aparece, em vez de sumir na média da rede.
+ *
+ * A unidade de cada resposta é a de QUANDO A RESPOSTA FOI DADA
+ * (`rh.estrutura_em(colaborador, data_referencia)`), nunca a de hoje. Antes
+ * daqui a consulta lia a lotação aberta (`fim_vigencia IS NULL`), e isso
+ * reescrevia o passado: transferir alguém hoje arrastava TODAS as respostas
+ * passadas dela para a unidade nova e mexia na média histórica das duas
+ * unidades de uma vez — a queda que a unidade teve em julho passava a aparecer
+ * em quem a recebeu em agosto. Medido numa transferência simulada de uma
+ * pessoa com 42 respostas na janela de 30 dias: pela consulta antiga, a origem
+ * ia de 3,9355 para 3,9438 e o destino de 3,4809 para 3,5343, com 42 respostas
+ * mudando de linha; por esta, nenhuma das cinco unidades se mexeu.
+ *
+ * A mudança também atravessava o piso de anonimato — os respondentes por
+ * unidade mudavam junto (20 → 19 na origem, 10 → 11 no destino), então uma
+ * unidade podia cruzar ou deixar de cruzar `minimoRespondentes`
+ * retroativamente. E quem já não tem lotação aberta (desligado) sumia inteiro
+ * do corte embora continuasse no agregado geral: na mesma janela, as unidades
+ * somavam 1667 das 1740 respostas. Agora somam 1738.
+ *
+ * As 2 que ainda faltam são de uma pessoa cuja `rh.lotacao` fechou na véspera
+ * do desligamento e que respondeu no próprio dia do desligamento. É buraco no
+ * registro de lotação (o desligamento fecha a alocação em
+ * `data_termino_efetiva`, não na véspera), não desta consulta — e resolver aqui
+ * seria inventar uma segunda regra de onde a pessoa estava.
+ *
+ * O RÓTULO é resolvido uma vez por unidade, pelo nome vigente no fim da janela
+ * (`rh.estabelecimento_versao_em(..., $2)`), e não por resposta: como o nome é
+ * função de `estabelecimento_id` e da data fixa `$2`, cada unidade é sempre UMA
+ * linha, mesmo renomeada no meio do período. Isso ainda tira do caminho o
+ * `status = 'ativa'`, que fazia unidade encerrada desaparecer da tela levando
+ * as respostas junto — encerrar a versão da Filial Norte sumia com ela e com as
+ * 235 respostas dela; agora a linha continua lá.
  *
  * Continua sendo agregado: média e contagens, nunca autor. O HAVING de
  * `minimoRespondentes` existe para que uma unidade com pouquíssima gente não
@@ -201,7 +239,7 @@ export async function agregadoPorUnidade(
   minimoRespondentes: number
 ): Promise<AgregadoUnidade[]> {
   return consultar<AgregadoUnidade & Record<string, unknown>>(
-    `SELECT lot.unidade,
+    `SELECT ev.unidade,
             AVG(r.nota)::float8 AS media,
             AVG(r.nota) FILTER (
               WHERE r.data_referencia > $2::date - $3::int
@@ -212,19 +250,14 @@ export async function agregadoPorUnidade(
             COUNT(*)::int AS respostas,
             COUNT(DISTINCT r.colaborador_id)::int AS respondentes
        FROM rh_clima.checkin_resposta r
-       JOIN rh.colaborador c ON c.id = r.colaborador_id
-       JOIN LATERAL (
-         SELECT ev.unidade
-           FROM rh.lotacao l
-           JOIN rh.estabelecimento_versao ev
-             ON ev.estabelecimento_id = l.estabelecimento_id
-            AND ev.status = 'ativa'
-          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
-       ) lot ON TRUE
+       JOIN LATERAL rh.estrutura_em(r.colaborador_id, r.data_referencia) est
+         ON TRUE
+       JOIN rh.estabelecimento_versao ev
+         ON ev.id = rh.estabelecimento_versao_em(est.estabelecimento_id, $2::date)
       WHERE r.data_referencia BETWEEN $1 AND $2
-      GROUP BY lot.unidade
+      GROUP BY est.estabelecimento_id, ev.unidade
      HAVING COUNT(DISTINCT r.colaborador_id) >= $4::int
-      ORDER BY lot.unidade`,
+      ORDER BY ev.unidade`,
     [inicio, fim, diasRecentes, minimoRespondentes]
   );
 }

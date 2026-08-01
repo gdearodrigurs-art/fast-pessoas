@@ -9,8 +9,13 @@
 export interface NoBase {
   chave: string;
   nivel: number;
+  /** Os TRÊS campos da 0047 — vaga em aberto só tem lotação. */
+  empresa_id: number | null;
+  empresa_nome: string | null;
   estabelecimento_id: number | null;
   unidade: string | null;
+  centro_custo_id: number | null;
+  centro_custo: string | null;
   cargo_id: number | null;
   cargo_nome: string | null;
   destacado: boolean;
@@ -53,7 +58,11 @@ export interface Organograma {
     vagas_em_aberto: number;
     lacuna: number;
   } | null;
-  unidades: Opcao[];
+  estrutura_opcoes: {
+    empresas: Opcao[];
+    lotacoes: Opcao[];
+    centros_custo: Opcao[];
+  };
   cargos: Opcao[];
   destacados: number;
   avisos: string[];

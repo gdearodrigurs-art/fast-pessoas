@@ -1,8 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { acaoCabecalho, Cabecalho } from "@/app/cabecalho";
+import {
+  FILTRO_ESTRUTURA_VAZIO,
+  FiltroEstrutura,
+  filtroEstruturaAtivo,
+  type OpcoesFiltroEstrutura,
+  parametrosFiltroEstrutura,
+  type ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
 import {
   EstadoCompetencia,
   formatarCompetencia,
@@ -32,6 +46,10 @@ interface Impedido {
   nome_completo: string;
   matricula: string;
   motivo: string;
+}
+
+interface AvisoProporcional extends Impedido {
+  entra_no_calculo: boolean;
 }
 
 interface Variavel {
@@ -91,6 +109,15 @@ interface Folha {
   total_proventos_centavos: number;
   total_descontos_centavos: number;
   liquido_centavos: number;
+  // Apropriação NA DATA DA COMPETÊNCIA (rh_folha.apropriacao_competencia): é
+  // onde o custo daquele mês caiu, não onde a pessoa está alocada hoje.
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  estabelecimento_id: number | null;
+  lotacao_nome: string | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
   itens: ItemFolha[];
 }
 
@@ -103,11 +130,18 @@ interface Visao {
   };
   competencia: Competencia;
   impedidos: Impedido[];
+  avisos_proporcional: AvisoProporcional[];
   variaveis: Variavel[];
   rubricas_lancaveis: RubricaLancavel[];
   colaboradores: ColaboradorOpcao[];
   tabelas_conferidas: SituacaoConferencia[];
+  /** JÁ recortadas pelo servidor: o que não cai no recorte não vem. */
   folhas: Folha[];
+  /** Quantas a competência tem no total — o "de N" ao lado da contagem. */
+  folhas_na_competencia: number;
+  /** Da competência inteira, não do recorte: filtrar não apaga os seletores. */
+  opcoes_estrutura: OpcoesFiltroEstrutura;
+  /** Do RECORTE: soma exatamente as linhas de `folhas`. */
   totais: {
     total_proventos_centavos: number;
     total_descontos_centavos: number;
@@ -160,6 +194,8 @@ function classeEtiquetaNatureza(natureza: NaturezaRubrica): string {
 export function PainelCompetencia({ id }: { id: number }) {
   const [visao, setVisao] = useState<Visao | null>(null);
   const [carregando, setCarregando] = useState(true);
+  /** Qual recorte o `visao` na tela representa — null enquanto nada chegou. */
+  const [recorteCarregado, setRecorteCarregado] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [versao, setVersao] = useState(0);
 
@@ -175,14 +211,29 @@ export function PainelCompetencia({ id }: { id: number }) {
   const [avisoAcao, setAvisoAcao] = useState<AvisoAcao | null>(null);
   const [detalheAberto, setDetalheAberto] = useState<number | null>(null);
   const [codigoAprovacao, setCodigoAprovacao] = useState("");
+  // Recorte dos três campos: nasce VAZIO (em branco = a competência inteira).
+  const [estrutura, setEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
 
   const recarregar = useCallback(() => setVersao((atual) => atual + 1), []);
+
+  // O recorte vai na CONSULTA: quem filtra é o SQL, não o navegador. Numa folha
+  // de 700 pessoas, mandar as 700 linhas (salário e memória de cálculo de cada
+  // uma) para o cliente esconder 690 não é filtrar — é vazar o que ninguém
+  // pediu e ainda somar o total errado embaixo da lista curta.
+  const consultaRecorte = useMemo(
+    () => parametrosFiltroEstrutura(estrutura).toString(),
+    [estrutura]
+  );
 
   useEffect(() => {
     let ativo = true;
     (async () => {
       try {
-        const resposta = await fetch(`/api/folha/${id}`);
+        const resposta = await fetch(
+          `/api/folha/${id}${consultaRecorte ? `?${consultaRecorte}` : ""}`
+        );
         const dados = await resposta.json().catch(() => ({}));
         if (!ativo) return;
         if (resposta.ok) {
@@ -194,13 +245,19 @@ export function PainelCompetencia({ id }: { id: number }) {
       } catch {
         if (ativo) setErro("Falha de conexão. Recarregue a página.");
       } finally {
-        if (ativo) setCarregando(false);
+        if (ativo) {
+          setCarregando(false);
+          setRecorteCarregado(consultaRecorte);
+        }
       }
     })();
     return () => {
       ativo = false;
     };
-  }, [id, versao]);
+  }, [id, versao, consultaRecorte]);
+
+  /** O recorte escolhido ainda não voltou do servidor. */
+  const recortando = recorteCarregado !== consultaRecorte;
 
   const rubricaEscolhida = visao?.rubricas_lancaveis.find(
     (rubrica) => rubrica.rubrica_id === Number(rubricaId)
@@ -321,6 +378,20 @@ export function PainelCompetencia({ id }: { id: number }) {
   const tabelasPendentes = (visao?.tabelas_conferidas ?? []).filter(
     (tabela) => tabela.versao_id === null || !tabela.conferido_dp
   );
+
+  // Tudo abaixo já vem recortado do servidor: as linhas, e os totais que são a
+  // soma EXATA delas. As opções dos seletores vêm da competência inteira — se
+  // saíssem do resultado filtrado, escolher um centro de custo apagaria os
+  // outros da lista e não haveria como voltar.
+  const folhasDoRecorte = visao?.folhas ?? [];
+  const opcoesEstrutura = visao?.opcoes_estrutura ?? null;
+  const folhasNaCompetencia = visao?.folhas_na_competencia ?? 0;
+  const recorteAtivo = filtroEstruturaAtivo(estrutura);
+  const totaisDoRecorte = visao?.totais ?? {
+    total_proventos_centavos: 0,
+    total_descontos_centavos: 0,
+    liquido_centavos: 0,
+  };
 
   return (
     <div className={estilos.pagina}>
@@ -562,6 +633,47 @@ export function PainelCompetencia({ id }: { id: number }) {
               </section>
             )}
 
+            {visao.avisos_proporcional.length > 0 &&
+              competencia.estado !== "fechada" && (
+                <section className={estilos.cartao}>
+                  <h2>
+                    Mudaram de estado neste mês (
+                    {visao.avisos_proporcional.length})
+                  </h2>
+                  <div className={estilos.aviso}>
+                    Esta folha é a <b>mensal ordinária</b>: ela não faz
+                    proporcional de admissão nem de desligamento. Quem entrou ou
+                    saiu no meio do mês precisa de tratamento manual — por
+                    lançamento de variável aqui, ou pela rescisão, conforme o
+                    caso. Transferência entre empresas do grupo aparece dos dois
+                    lados, com as duas empresas nomeadas: o dinheiro atravessa
+                    CNPJ.
+                  </div>
+                  <div className={estilos.tabelaEnvolucro}>
+                    <table className={estilos.tabela}>
+                      <thead>
+                        <tr>
+                          <th>Colaborador</th>
+                          <th>Matrícula</th>
+                          <th>Entra no cálculo?</th>
+                          <th>O que aconteceu</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visao.avisos_proporcional.map((aviso) => (
+                          <tr key={aviso.colaborador_id}>
+                            <td>{aviso.nome_completo}</td>
+                            <td>{aviso.matricula}</td>
+                            <td>{aviso.entra_no_calculo ? "Sim" : "Não"}</td>
+                            <td>{aviso.motivo}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+
             {competencia.estado === "aberta" && visao.pode.operar && (
               <section className={estilos.cartao}>
                 <h2>Lançar variável</h2>
@@ -755,29 +867,56 @@ export function PainelCompetencia({ id }: { id: number }) {
               </div>
             </section>
 
-            {visao.folhas.length > 0 && (
+            {/* A seção aparece quando a COMPETÊNCIA tem linhas, não quando o
+                recorte tem: um filtro que devolve zero não pode fazer sumir o
+                próprio filtro e prender o DP na tela vazia. */}
+            {folhasNaCompetencia > 0 && (
               <section className={estilos.cartao}>
-                <h2>Folhas calculadas ({visao.folhas.length})</h2>
+                <h2>
+                  Folhas calculadas ({folhasDoRecorte.length}
+                  {recorteAtivo ? ` de ${folhasNaCompetencia}` : ""})
+                </h2>
+                {/* Recorte pelos TRÊS campos, resolvido NO SQL: cada mudança
+                    refaz a consulta e o servidor devolve só o recorte — com os
+                    totais do recorte. Cada leitura destas é leitura de salário
+                    e entra na trilha de dado sensível, como tem que ser. */}
+                <FiltroEstrutura
+                  prefixoId="folha"
+                  opcoes={opcoesEstrutura}
+                  valor={estrutura}
+                  aoMudar={setEstrutura}
+                  desabilitado={recortando}
+                />
+                <p className={estilos.notaRodape}>
+                  Registro, lotação e centro de custo <strong>da
+                  competência</strong> — a alocação que valia no último dia do
+                  mês. Mudar a alocação de alguém hoje não move uma linha de
+                  folha já calculada.
+                </p>
                 <div className={estilos.cartoesResumo}>
                   <div className={estilos.cartaoResumo}>
                     <strong>
-                      {formatarMoedaCentavos(visao.totais.total_proventos_centavos)}
+                      {formatarMoedaCentavos(totaisDoRecorte.total_proventos_centavos)}
                     </strong>
-                    <span>Total de proventos</span>
+                    <span>
+                      Total de proventos{recorteAtivo ? " (recorte)" : ""}
+                    </span>
                   </div>
                   <div className={estilos.cartaoResumo}>
                     <strong>
-                      {formatarMoedaCentavos(visao.totais.total_descontos_centavos)}
+                      {formatarMoedaCentavos(totaisDoRecorte.total_descontos_centavos)}
                     </strong>
-                    <span>Total de descontos</span>
+                    <span>
+                      Total de descontos{recorteAtivo ? " (recorte)" : ""}
+                    </span>
                   </div>
                   <div
                     className={`${estilos.cartaoResumo} ${estilos.cartaoResumoDestaque}`}
                   >
                     <strong>
-                      {formatarMoedaCentavos(visao.totais.liquido_centavos)}
+                      {formatarMoedaCentavos(totaisDoRecorte.liquido_centavos)}
                     </strong>
-                    <span>Líquido total</span>
+                    <span>Líquido total{recorteAtivo ? " (recorte)" : ""}</span>
                   </div>
                 </div>
                 <div className={estilos.tabelaEnvolucro}>
@@ -785,6 +924,9 @@ export function PainelCompetencia({ id }: { id: number }) {
                     <thead>
                       <tr>
                         <th>Colaborador</th>
+                        <th>Registro</th>
+                        <th>Lotação</th>
+                        <th>Centro de custo</th>
                         <th className={estilos.numero}>Salário congelado</th>
                         <th className={estilos.numero}>Dep. IRRF</th>
                         <th className={estilos.numero}>Proventos</th>
@@ -794,7 +936,7 @@ export function PainelCompetencia({ id }: { id: number }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {visao.folhas.map((folha) => (
+                      {folhasDoRecorte.map((folha) => (
                         <FragmentoFolha
                           key={folha.id}
                           folha={folha}
@@ -806,6 +948,15 @@ export function PainelCompetencia({ id }: { id: number }) {
                           }
                         />
                       ))}
+                      {folhasDoRecorte.length === 0 && (
+                        <tr>
+                          <td colSpan={10}>
+                            {recortando
+                              ? "Aplicando o recorte…"
+                              : "Nenhuma folha desta competência caiu neste recorte de registro, lotação e centro de custo."}
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -840,6 +991,18 @@ function FragmentoFolha({
         <td>
           {folha.colaborador_nome} ({folha.matricula})
         </td>
+        <td>{folha.empresa_nome ?? "—"}</td>
+        <td>{folha.lotacao_nome ?? "—"}</td>
+        <td>
+          {folha.centro_custo_codigo
+            ? `${folha.centro_custo_codigo}${
+                folha.centro_custo_nome &&
+                folha.centro_custo_nome !== folha.centro_custo_codigo
+                  ? ` — ${folha.centro_custo_nome}`
+                  : ""
+              }`
+            : "—"}
+        </td>
         <td className={estilos.numero}>
           {formatarMoedaCentavos(folha.salario_base_centavos)}
         </td>
@@ -865,7 +1028,7 @@ function FragmentoFolha({
       </tr>
       {aberto && (
         <tr className={estilos.linhaDetalhe}>
-          <td colSpan={7}>
+          <td colSpan={10}>
             <table className={estilos.tabela}>
               <thead>
                 <tr>

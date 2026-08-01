@@ -1,6 +1,7 @@
 import { ErroHttp } from "../../lib/sessao";
 import type { Escopo } from "../colaboradores/repositorio";
 import { resolverEscopo } from "../colaboradores/servico";
+import { listarOpcoesDeFiltroEstrutura } from "../estrutura/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import {
   ConsultaOrganograma,
@@ -16,7 +17,6 @@ import {
   LinhaVagaEmAberto,
   listarCargos,
   listarPessoasDoQuadro,
-  listarUnidades,
   listarVagasEmAberto,
 } from "./repositorio";
 
@@ -58,8 +58,12 @@ function novoNo(linha: LinhaPessoa, foraDaHierarquia: boolean, gestorForaDoQuadr
     status: linha.status,
     cargo_id: linha.cargo_id,
     cargo_nome: linha.cargo_nome,
+    empresa_id: linha.empresa_id,
+    empresa_nome: linha.empresa_nome,
     estabelecimento_id: linha.estabelecimento_id,
     unidade: linha.unidade,
+    centro_custo_id: linha.centro_custo_id,
+    centro_custo: linha.centro_custo,
     diretos: 0,
     total_subarvore: 0,
     gestor_fora_do_quadro: gestorForaDoQuadro,
@@ -80,8 +84,14 @@ function noDeVaga(linha: LinhaVagaEmAberto, nivel: number): NoVaga {
     prazo_alvo: linha.prazo_alvo,
     cargo_id: linha.cargo_id,
     cargo_nome: linha.cargo_nome,
+    // A requisição de vaga aponta para um estabelecimento (a lotação prevista);
+    // registro e centro de custo só existem depois que alguém é admitido nela.
+    empresa_id: null,
+    empresa_nome: null,
     estabelecimento_id: linha.estabelecimento_id,
     unidade: linha.unidade,
+    centro_custo_id: null,
+    centro_custo: null,
     destacado: false,
   };
 }
@@ -335,15 +345,27 @@ function semAcento(texto: string): string {
 }
 
 interface Criterios {
+  /** Os TRÊS da 0047 — independentes entre si e combináveis. */
+  empresaId: number | null;
   estabelecimentoId: number | null;
+  centroCustoId: number | null;
   cargoId: number | null;
   busca: string | null;
 }
 
 function casaCriterios(no: NoOrganograma, criterios: Criterios): boolean {
+  if (criterios.empresaId !== null && no.empresa_id !== criterios.empresaId) {
+    return false;
+  }
   if (
     criterios.estabelecimentoId !== null &&
     no.estabelecimento_id !== criterios.estabelecimentoId
+  ) {
+    return false;
+  }
+  if (
+    criterios.centroCustoId !== null &&
+    no.centro_custo_id !== criterios.centroCustoId
   ) {
     return false;
   }
@@ -420,10 +442,10 @@ export async function montarOrganograma(
   consulta: ConsultaOrganograma
 ): Promise<Organograma> {
   const escopo = await resolverEscopo(sessao);
-  const [pessoas, vagas, unidades, cargos] = await Promise.all([
+  const [pessoas, vagas, estruturaOpcoes, cargos] = await Promise.all([
     listarPessoasDoQuadro(),
     listarVagasEmAberto(),
-    listarUnidades(),
+    listarOpcoesDeFiltroEstrutura(),
     listarCargos(),
   ]);
 
@@ -488,12 +510,16 @@ export async function montarOrganograma(
   }
 
   const criterios: Criterios = {
+    empresaId: consulta.empresa_id ?? null,
     estabelecimentoId: consulta.estabelecimento_id ?? null,
+    centroCustoId: consulta.centro_custo_id ?? null,
     cargoId: consulta.cargo_id ?? null,
     busca: consulta.busca ? semAcento(consulta.busca) : null,
   };
   const temCriterio =
+    criterios.empresaId !== null ||
     criterios.estabelecimentoId !== null ||
+    criterios.centroCustoId !== null ||
     criterios.cargoId !== null ||
     criterios.busca !== null;
   const contador = { destacados: 0 };
@@ -507,7 +533,7 @@ export async function montarOrganograma(
     // Vaga órfã só para quem vê a empresa toda — é achado de DP/RH, não de gestor.
     vagas_sem_no: escopo.alcance === "todos" ? arvore.vagasSemNo : [],
     headcount,
-    unidades,
+    estrutura_opcoes: estruturaOpcoes,
     cargos,
     destacados: contador.destacados,
     avisos,

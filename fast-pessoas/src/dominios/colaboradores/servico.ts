@@ -1,17 +1,36 @@
 import { hash } from "bcryptjs";
 import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
-import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
+import {
+  ErroHttpCampo,
+  ErroHttpConfirmavel,
+  violacaoUnica,
+} from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
+import { exigirVigenciaNaoFutura } from "../../lib/vigencia";
 import { PayloadSessao } from "../identidade/esquemas";
+// Catálogos de REGISTRO e CENTRO DE CUSTO (migration 0047). A alocação escolhe
+// os três campos, e dois deles moram no domínio "estrutura".
+import {
+  FiltroEstrutura,
+  OpcoesFiltroEstrutura,
+} from "../estrutura/esquemas";
+import {
+  buscarCentroCusto as buscarCentroCustoDaEstrutura,
+  buscarEmpresa as buscarEmpresaDaEstrutura,
+  listarOpcoesDeFiltroEstrutura,
+} from "../estrutura/repositorio";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
+  AdmissaoNovoVinculo,
+  AdmissaoPessoaNova,
   AtualizacaoAcao,
   AtualizacaoColaborador,
   CADENCIA_FEEDBACK_DIAS,
   Cha,
   CriacaoAcao,
+  ehAdmissaoDeNovoVinculo,
   CriacaoCargo,
   CriacaoColaborador,
   CriacaoEstabelecimento,
@@ -46,13 +65,22 @@ import {
   Aniversariante,
   atualizar,
   atualizarAcao,
+  atualizarPessoa,
   buscarAcaoParaAtualizar,
   buscarBasico,
+  buscarContaDaPessoa,
+  buscarPessoaPorCpf,
+  CamposPessoa,
+  criarPessoa,
+  listarVinculosDaPessoaNaTransacao,
+  reativarUsuario,
+  VinculoConhecido,
+  vincularContaAPessoa,
   buscarCargoVersaoAtiva,
   buscarRcfPorCargo,
   contarCoberturaNascimento,
   contarHeadcountPorCargo,
-  contarHeadcountPorUnidade,
+  contarHeadcountPorCampoDaEstrutura,
   contarHeadcountPorVinculo,
   contarPorGenero,
   contarPorIdade,
@@ -73,6 +101,7 @@ import {
   colaboradorIdDoUsuario,
   colaboradorNoEscopo,
   ColaboradorResumo,
+  VinculoCriado,
   criar,
   desativarUsuario,
   encerrarFaixaSalarial,
@@ -81,6 +110,7 @@ import {
   encerrarRelacaoGestor,
   encerrarVersaoCargo,
   encerrarVersaoEstabelecimento,
+  definirInativacaoEstabelecimento,
   Escopo,
   EstabelecimentoResumo,
   EventoLinhaTempo,
@@ -111,7 +141,6 @@ import {
   listarOcorrencias,
   listarPosicoes,
   listarRelacoesGestor,
-  listarUnidadesDoQuadro,
   Lotacao,
   cadenciaFeedback,
   Ocorrencia,
@@ -123,6 +152,8 @@ import {
 } from "./repositorio";
 
 const ORIGEM_COLABORADOR = "rh.colaborador";
+/** O ser humano por trás do vínculo (migration 0046) — trilha própria. */
+const ORIGEM_PESSOA = "rh.pessoa";
 
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
@@ -195,8 +226,18 @@ function mapearConflito(erro: unknown): never {
       "matricula"
     );
   }
-  if (restricao === "colaborador_cpf_key") {
-    throw new ErroHttpCampo(409, "Já existe um colaborador com este CPF.", "cpf");
+  // Desde a 0046 o CPF é único em rh.pessoa, não em rh.colaborador: o UNIQUE
+  // que estourava aqui mudou de nome junto com a coluna que o carrega. Hoje o
+  // serviço trata o CPF repetido ANTES (reconhecendo a pessoa); chegar aqui é
+  // corrida entre duas admissões simultâneas do mesmo CPF, e a saída é a mesma:
+  // recomeçar, que aí a tela reconhece quem já foi gravado.
+  if (restricao === "pessoa_cpf_key") {
+    throw new ErroHttpCampo(
+      409,
+      "Este CPF acabou de ser cadastrado por outro atendimento. Recarregue a tela: " +
+        "se for a mesma pessoa, ela vai aparecer para você confirmar o novo vínculo.",
+      "cpf"
+    );
   }
   throw erro;
 }
@@ -216,9 +257,19 @@ function feedbackVencido(
 export async function listarColaboradores(
   sessao: PayloadSessao,
   filtro: FiltroColaboradores
-): Promise<{ colaboradores: ColaboradorListado[]; alcance: Escopo["alcance"] }> {
+): Promise<{
+  colaboradores: ColaboradorListado[];
+  alcance: Escopo["alcance"];
+  estrutura_opcoes: OpcoesFiltroEstrutura;
+}> {
   const escopo = await resolverEscopo(sessao);
-  const colaboradores = await listar(filtro, escopo);
+  // As opções dos três seletores vêm junto com a lista: sem endpoint novo e
+  // sem chave nova. São nomes de catálogo (empresa, local, centro de custo),
+  // não dado de pessoa — o mesmo que o organograma já devolve em `unidades`.
+  const [colaboradores, estrutura_opcoes] = await Promise.all([
+    listar(filtro, escopo),
+    listarOpcoesDeFiltroEstrutura(),
+  ]);
   return {
     colaboradores: colaboradores.map((colaborador) => ({
       ...colaborador,
@@ -228,6 +279,7 @@ export async function listarColaboradores(
       ),
     })),
     alcance: escopo.alcance,
+    estrutura_opcoes,
   };
 }
 
@@ -247,7 +299,10 @@ export async function obterColaborador(
     sessao.usuario_id,
     "rh.ocorrencia.restrita.ver"
   );
-  const linhaDoTempo = await listarEventos(id, podeVerRestritas);
+  // O MESMO escopo que autorizou a ficha recorta a linha do tempo: sem isto,
+  // passar no escopo de UM contrato entregava os fatos de TODOS os contratos
+  // daquela pessoa, em qualquer empresa do grupo.
+  const linhaDoTempo = await listarEventos(id, podeVerRestritas, escopo);
   return {
     colaborador: {
       ...ficha,
@@ -260,34 +315,174 @@ export async function obterColaborador(
   };
 }
 
+// ================================================================ ADMISSÃO
+// Um CPF que já existe NÃO é mais sinônimo de erro. Desde a 0046 o CPF é da
+// PESSOA e o contrato é do VÍNCULO, e o caso que abriu a onda — "demite e
+// recontrata na outra empresa do grupo sem perder o histórico" — é exatamente
+// uma pessoa com dois vínculos. Então a admissão tem dois caminhos, e o que
+// decide qual é o estado da pessoa no grupo, não um campo do formulário:
+//
+//   CPF não existe .................... pessoa nova: nascem pessoa, conta e vínculo.
+//   CPF existe, sem vínculo em pé ..... a tela DIZ de quem é o CPF e pergunta.
+//                                       Confirmado, nasce só o vínculo, ligado
+//                                       à mesma pessoa e à mesma conta.
+//   CPF existe, com vínculo EM PÉ ..... recusa. Ou o CPF foi digitado errado,
+//                                       ou o que se quer é transferência entre
+//                                       empresas — que é ato único e passa pela
+//                                       cadeia de aprovação, não por readmissão.
+//
+// DECISÃO, e vale registrar porque é mais restritiva do que "recusar só quando
+// o vínculo ativo é na MESMA empresa": a admissão não escolhe registro
+// (empresa) — nem poderia, porque quem admite (chave rh.colaborador.editar)
+// não é necessariamente quem mexe em alocação (rh.estabelecimento.administrar),
+// e a alocação da 0047 exige os TRÊS campos de uma vez. Sem saber a empresa de
+// destino não há como distinguir "segundo vínculo em outro CNPJ" de "erro de
+// digitação no mesmo CNPJ" — e o caminho de quem realmente muda de empresa
+// mantendo o vínculo aberto já existe, com aprovação: a transferência. Por
+// isso a recusa cita a empresa onde a pessoa está ativa e aponta a porta certa.
+
+/**
+ * O que a tela precisa MOSTRAR para perguntar "é a mesma pessoa?". Só dado de
+ * cadastro e de contrato: nada de nascimento, gênero ou salário — a pergunta é
+ * de identidade, e o resto seria vazamento a troco de nada.
+ */
+interface PessoaReconhecida {
+  id: number;
+  nome_completo: string;
+  conta_email: string | null;
+  conta_ativa: boolean;
+  vinculos: VinculoConhecido[];
+}
+
+function frasearVinculo(vinculo: VinculoConhecido): string {
+  const onde = vinculo.empresa_nome
+    ? `na ${vinculo.empresa_nome}`
+    : "sem registro definido";
+  const quando =
+    vinculo.status === "desligado" && vinculo.data_desligamento
+      ? `encerrado em ${formatarData(vinculo.data_desligamento)}`
+      : `${ROTULOS_STATUS[vinculo.status].toLowerCase()} desde ${formatarData(vinculo.data_admissao)}`;
+  return `${onde} (matrícula ${vinculo.matricula}) ${quando}`;
+}
+
+async function reconhecerPessoa(
+  cliente: Parameters<typeof listarVinculosDaPessoaNaTransacao>[0],
+  pessoa: { id: number; nome_completo: string }
+): Promise<PessoaReconhecida> {
+  const [vinculos, conta] = await Promise.all([
+    listarVinculosDaPessoaNaTransacao(cliente, pessoa.id),
+    buscarContaDaPessoa(cliente, pessoa.id),
+  ]);
+  return {
+    id: pessoa.id,
+    nome_completo: pessoa.nome_completo,
+    conta_email: conta?.email ?? null,
+    conta_ativa: conta?.ativo ?? false,
+    vinculos,
+  };
+}
+
+/** A recusa de quem ainda está na casa — a mesma nos dois caminhos. */
+function recusarPorVinculoEmPe(
+  reconhecida: PessoaReconhecida,
+  emPe: VinculoConhecido
+): never {
+  throw new ErroHttpCampo(
+    409,
+    `CPF já cadastrado: ${reconhecida.nome_completo}, com vínculo ${ROTULOS_STATUS[emPe.status].toUpperCase()} ` +
+      `${frasearVinculo(emPe)}. Admissão não abre um segundo vínculo em paralelo: se o CPF ` +
+      `foi digitado errado, corrija; se a pessoa vai passar para outra empresa do grupo, ` +
+      `o caminho é a transferência entre empresas, aberta em Demandas.`,
+    "cpf"
+  );
+}
+
+export interface ResultadoAdmissao {
+  colaborador: VinculoCriado;
+  /**
+   * Só existe quando a CONTA nasceu agora. Vínculo novo de quem já esteve na
+   * casa reaproveita a conta e a senha que ela já tinha — devolver uma senha
+   * nova aqui seria trocar a dela sem pedir.
+   */
+  senha_temporaria: string | null;
+  /** Preenchido quando o vínculo nasceu para uma pessoa que já era do grupo. */
+  pessoa_reaproveitada: {
+    id: number;
+    nome_completo: string;
+    conta_email: string | null;
+    conta_reativada: boolean;
+    vinculo_anterior: string | null;
+  } | null;
+}
+
 export async function criarColaborador(
   sessao: PayloadSessao,
   dados: CriacaoColaborador
-): Promise<{ colaborador: ColaboradorResumo; senha_temporaria: string }> {
+): Promise<ResultadoAdmissao> {
+  return ehAdmissaoDeNovoVinculo(dados)
+    ? abrirNovoVinculo(sessao, dados)
+    : admitirPessoaNova(sessao, dados);
+}
+
+async function admitirPessoaNova(
+  sessao: PayloadSessao,
+  dados: AdmissaoPessoaNova
+): Promise<ResultadoAdmissao> {
   const senhaTemporaria = gerarSenhaTemporaria();
   const senhaHash = await hash(senhaTemporaria, 12);
   try {
     const colaborador = await comTransacao(
       sessao.usuario_id,
       async (cliente) => {
+        // A PESSOA nasce primeiro (0046): é dela o CPF, e é a ela que a conta
+        // de acesso se liga. Depois vem o VÍNCULO.
+        //
+        // Se já existe pessoa com este CPF, este caminho para aqui — mas não
+        // como "erro de CPF duplicado" e sim como PERGUNTA: o corpo do 409 leva
+        // de quem é o CPF e que vínculos essa pessoa teve, para a tela mostrar
+        // antes de o operador confirmar. É a diferença entre reconhecer alguém
+        // e juntar duas pessoas em silêncio.
+        const jaExiste = await buscarPessoaPorCpf(cliente, dados.cpf);
+        if (jaExiste) {
+          const reconhecida = await reconhecerPessoa(cliente, jaExiste);
+          const emPe = reconhecida.vinculos.find(
+            (vinculo) => vinculo.status !== "desligado"
+          );
+          if (emPe) recusarPorVinculoEmPe(reconhecida, emPe);
+          const ultimo = reconhecida.vinculos[0] ?? null;
+          throw new ErroHttpConfirmavel(
+            409,
+            `CPF já cadastrado: ${reconhecida.nome_completo}` +
+              (ultimo ? `, vínculo anterior ${frasearVinculo(ultimo)}` : "") +
+              `. É a mesma pessoa? Confirme para abrir um novo vínculo reaproveitando ` +
+              `o cadastro e a conta de acesso dela` +
+              (reconhecida.conta_email ? ` (${reconhecida.conta_email})` : "") +
+              `. Se NÃO for a mesma pessoa, o CPF está errado — corrija.`,
+            "pessoa_ja_cadastrada",
+            { pessoa: reconhecida }
+          );
+        }
+        const pessoaId = await criarPessoa(cliente, {
+          cpf: dados.cpf,
+          nome_completo: dados.nome_completo,
+          data_nascimento: dados.data_nascimento,
+          genero: dados.genero,
+          retrato: dados.retrato ?? null,
+          contexto: dados.contexto ?? null,
+        });
         const usuario = await criarUsuario(cliente, {
           email: dados.email,
           nome: dados.nome_completo,
           papel: "funcionario",
           senhaHash,
         });
+        await vincularContaAPessoa(cliente, usuario.id, pessoaId);
         const criado = await criar(cliente, {
-          usuario_id: usuario.id,
+          pessoa_id: pessoaId,
           matricula: dados.matricula,
           matricula_esocial: dados.matricula,
-          cpf: dados.cpf,
-          nome_completo: dados.nome_completo,
           tipo_vinculo: dados.tipo_vinculo,
           data_admissao: dados.data_admissao,
-          data_nascimento: dados.data_nascimento,
-          genero: dados.genero,
-          retrato: dados.retrato ?? null,
-          contexto: dados.contexto ?? null,
         });
         await inserirEvento(cliente, {
           colaborador_id: criado.id,
@@ -315,15 +510,12 @@ export async function criarColaborador(
             Ativo: { de: null, para: "Sim" },
           },
         });
-        const diffColaborador: Diff = {
-          "Matrícula": { de: null, para: dados.matricula },
+        // Trilha em DUAS entidades porque agora são duas: o que é do ser
+        // humano (CPF, nome, nascimento, gênero, retrato, contexto) é da
+        // pessoa; o que é do contrato é do vínculo.
+        const diffPessoa: Diff = {
           CPF: { de: null, para: dados.cpf },
           "Nome completo": { de: null, para: dados.nome_completo },
-          "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
-          "Data de admissão": {
-            de: null,
-            para: formatarData(dados.data_admissao),
-          },
           "Data de nascimento": {
             de: null,
             para: formatarData(dados.data_nascimento),
@@ -335,26 +527,203 @@ export async function criarColaborador(
             de: null,
             para: ROTULOS_GENERO[dados.genero],
           },
-          Status: { de: null, para: ROTULOS_STATUS.ativo },
         };
         if (dados.retrato) {
-          diffColaborador.Retrato = { de: null, para: dados.retrato };
+          diffPessoa.Retrato = { de: null, para: dados.retrato };
         }
         if (dados.contexto) {
-          diffColaborador.Contexto = { de: null, para: dados.contexto };
+          diffPessoa.Contexto = { de: null, para: dados.contexto };
         }
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "criacao",
+          tabela: ORIGEM_PESSOA,
+          registroId: String(pessoaId),
+          diff: diffPessoa,
+        });
         await registrarAlteracao(cliente, {
           usuarioId: sessao.usuario_id,
           papel: sessao.papel,
           acao: "criacao",
           tabela: ORIGEM_COLABORADOR,
           registroId: String(criado.id),
-          diff: diffColaborador,
+          diff: {
+            "Matrícula": { de: null, para: dados.matricula },
+            "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
+            "Data de admissão": {
+              de: null,
+              para: formatarData(dados.data_admissao),
+            },
+            Status: { de: null, para: ROTULOS_STATUS.ativo },
+          },
         });
         return criado;
       }
     );
-    return { colaborador, senha_temporaria: senhaTemporaria };
+    return {
+      colaborador,
+      senha_temporaria: senhaTemporaria,
+      pessoa_reaproveitada: null,
+    };
+  } catch (erro) {
+    mapearConflito(erro);
+  }
+}
+
+/**
+ * O SEGUNDO vínculo de quem já é do grupo. Não cria pessoa, não cria conta e
+ * não escreve nada do ser humano: CPF, nome, nascimento, gênero, retrato e
+ * contexto são da pessoa e descem sozinhos pelo trigger da 0046. O que nasce
+ * aqui é só contrato — e é por isso que o formulário deste caminho tem quatro
+ * campos, não onze.
+ */
+async function abrirNovoVinculo(
+  sessao: PayloadSessao,
+  dados: AdmissaoNovoVinculo
+): Promise<ResultadoAdmissao> {
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      // Resolve pela CHAVE que o operador digitou (o CPF, travado em
+      // `buscarPessoaPorCpf`), não pelo id que veio do cliente. O id é
+      // conferência: se ele não bate com o dono do CPF, a tela que perguntou
+      // está velha — e abrir o vínculo assim mesmo seria pendurar contrato na
+      // pessoa errada.
+      const pessoa = await buscarPessoaPorCpf(cliente, dados.cpf);
+      if (!pessoa) {
+        throw new ErroHttpCampo(
+          409,
+          "Este CPF não é de ninguém cadastrado — não há vínculo anterior a reaproveitar. " +
+            "Recarregue a tela e admita como pessoa nova.",
+          "cpf"
+        );
+      }
+      if (pessoa.id !== dados.confirmar_pessoa_id) {
+        throw new ErroHttpCampo(
+          409,
+          "A confirmação não corresponde à pessoa deste CPF. Nada foi gravado — " +
+            "recarregue a tela e confirme de novo.",
+          "cpf"
+        );
+      }
+      const reconhecida = await reconhecerPessoa(cliente, pessoa);
+      const emPe = reconhecida.vinculos.find(
+        (vinculo) => vinculo.status !== "desligado"
+      );
+      if (emPe) recusarPorVinculoEmPe(reconhecida, emPe);
+
+      // Contrato novo não pode começar antes de o anterior acabar: sobreposição
+      // aqui viraria duas folhas do mesmo mês para a mesma pessoa.
+      const anterior = reconhecida.vinculos[0] ?? null;
+      if (
+        anterior?.data_desligamento &&
+        dados.data_admissao <= anterior.data_desligamento
+      ) {
+        throw new ErroHttpCampo(
+          409,
+          `A admissão (${formatarData(dados.data_admissao)}) precisa ser posterior ao ` +
+            `desligamento do vínculo anterior (${formatarData(anterior.data_desligamento)}).`,
+          "data_admissao"
+        );
+      }
+
+      const conta = await buscarContaDaPessoa(cliente, pessoa.id);
+      if (!conta) {
+        throw new ErroHttp(
+          409,
+          `${pessoa.nome_completo} está cadastrada como pessoa, mas não tem conta de acesso ` +
+            "ligada. Regularize a conta em Usuários antes de abrir o vínculo."
+        );
+      }
+      // Contrapartida do desligamento, que fecha o acesso quando não sobra
+      // vínculo em pé: quem volta reencontra a conta aberta, com a MESMA senha.
+      const contaReativada = await reativarUsuario(cliente, conta.id);
+
+      const criado = await criar(cliente, {
+        pessoa_id: pessoa.id,
+        matricula: dados.matricula,
+        matricula_esocial: dados.matricula,
+        tipo_vinculo: dados.tipo_vinculo,
+        data_admissao: dados.data_admissao,
+      });
+
+      const origem = anterior
+        ? ` — readmissão: vínculo anterior ${frasearVinculo(anterior)}`
+        : "";
+      await inserirEvento(cliente, {
+        colaborador_id: criado.id,
+        tipo: "admissao",
+        ocorrido_em: `${dados.data_admissao}T00:00:00Z`,
+        origem_tabela: ORIGEM_COLABORADOR,
+        origem_id: criado.id,
+        resumo: `Admissão de ${pessoa.nome_completo} (matrícula ${dados.matricula}) como ${ROTULOS_VINCULO[dados.tipo_vinculo]} em ${formatarData(dados.data_admissao)}${origem}`,
+        payload: {
+          tipo_vinculo: dados.tipo_vinculo,
+          data_admissao: dados.data_admissao,
+          pessoa_id: pessoa.id,
+          vinculo_anterior_id: anterior?.id ?? null,
+        },
+        registrado_por: sessao.usuario_id,
+      });
+
+      // Trilha só do que MUDOU. Não há linha em rh.pessoa porque nada da pessoa
+      // foi tocado — e registrar "criação" de quem já existia seria mentira na
+      // auditoria.
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: ORIGEM_COLABORADOR,
+        registroId: String(criado.id),
+        diff: {
+          Pessoa: {
+            de: null,
+            para: `${pessoa.nome_completo} (pessoa ${pessoa.id}) — cadastro e CPF reaproveitados`,
+          },
+          "Vínculo anterior": {
+            de: null,
+            para: anterior
+              ? frasearVinculo(anterior)
+              : "nenhum",
+          },
+          "Matrícula": { de: null, para: dados.matricula },
+          "Vínculo": { de: null, para: ROTULOS_VINCULO[dados.tipo_vinculo] },
+          "Data de admissão": {
+            de: null,
+            para: formatarData(dados.data_admissao),
+          },
+          Status: { de: null, para: ROTULOS_STATUS.ativo },
+        },
+      });
+      if (contaReativada) {
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "alteracao",
+          tabela: "sistema.usuario",
+          registroId: String(conta.id),
+          diff: {
+            Ativo: { de: "Não", para: "Sim" },
+            Motivo: {
+              de: null,
+              para: `Novo vínculo (matrícula ${dados.matricula}) para a mesma pessoa`,
+            },
+          },
+        });
+      }
+
+      return {
+        colaborador: criado,
+        senha_temporaria: null,
+        pessoa_reaproveitada: {
+          id: pessoa.id,
+          nome_completo: pessoa.nome_completo,
+          conta_email: conta.email,
+          conta_reativada: contaReativada,
+          vinculo_anterior: anterior ? frasearVinculo(anterior) : null,
+        },
+      };
+    });
   } catch (erro) {
     mapearConflito(erro);
   }
@@ -371,26 +740,31 @@ export async function atualizarColaborador(
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
 
+    // Duas gavetas: o que muda no ser humano vai para rh.pessoa e desce
+    // sozinho para todos os contratos dele; o que muda no contrato fica no
+    // vínculo. Quem separa é aqui — abaixo o repositório só executa.
     const campos: CamposColaborador = {};
+    const camposPessoa: CamposPessoa = {};
     const diff: Diff = {};
+    const diffPessoa: Diff = {};
 
     if (
       dados.nome_completo !== undefined &&
       dados.nome_completo !== atual.nome_completo
     ) {
-      campos.nome_completo = dados.nome_completo;
-      diff["Nome completo"] = {
+      camposPessoa.nome_completo = dados.nome_completo;
+      diffPessoa["Nome completo"] = {
         de: atual.nome_completo,
         para: dados.nome_completo,
       };
     }
     if (dados.retrato !== undefined && dados.retrato !== atual.retrato) {
-      campos.retrato = dados.retrato;
-      diff.Retrato = { de: atual.retrato, para: dados.retrato };
+      camposPessoa.retrato = dados.retrato;
+      diffPessoa.Retrato = { de: atual.retrato, para: dados.retrato };
     }
     if (dados.contexto !== undefined && dados.contexto !== atual.contexto) {
-      campos.contexto = dados.contexto;
-      diff.Contexto = { de: atual.contexto, para: dados.contexto };
+      camposPessoa.contexto = dados.contexto;
+      diffPessoa.Contexto = { de: atual.contexto, para: dados.contexto };
     }
     if (
       dados.data_nascimento !== undefined &&
@@ -403,8 +777,8 @@ export async function atualizarColaborador(
           "data_nascimento"
         );
       }
-      campos.data_nascimento = dados.data_nascimento;
-      diff["Data de nascimento"] = {
+      camposPessoa.data_nascimento = dados.data_nascimento;
+      diffPessoa["Data de nascimento"] = {
         de: atual.data_nascimento ? formatarData(atual.data_nascimento) : null,
         para: formatarData(dados.data_nascimento),
       };
@@ -413,8 +787,8 @@ export async function atualizarColaborador(
     // valor atual em nenhum payload de leitura (o formulário é "cego"). A
     // trilha registra a mudança — é lá que se audita quem tocou no campo.
     if (dados.genero !== undefined && dados.genero !== atual.genero) {
-      campos.genero = dados.genero;
-      diff["Gênero (autodeclarado)"] = {
+      camposPessoa.genero = dados.genero;
+      diffPessoa["Gênero (autodeclarado)"] = {
         de: ROTULOS_GENERO[atual.genero],
         para: ROTULOS_GENERO[dados.genero],
       };
@@ -463,17 +837,22 @@ export async function atualizarColaborador(
       }
     }
 
-    if (Object.keys(campos).length === 0) {
+    if (
+      Object.keys(campos).length === 0 &&
+      Object.keys(camposPessoa).length === 0
+    ) {
       return;
     }
 
+    await atualizarPessoa(cliente, atual.pessoa_id, camposPessoa);
     await atualizar(cliente, id, campos);
 
     const desligando =
       campos.status === "desligado" && dados.data_desligamento !== undefined;
     if (desligando && dados.data_desligamento) {
-      if (atual.usuario_ativo) {
-        await desativarUsuario(cliente, atual.usuario_id);
+      // Só trava o acesso se a pessoa não tiver outro contrato de pé — quem
+      // saiu da Supply e continua na DCS não pode perder o login.
+      if (atual.usuario_ativo && (await desativarUsuario(cliente, atual.usuario_id))) {
         await registrarAlteracao(cliente, {
           usuarioId: sessao.usuario_id,
           papel: sessao.papel,
@@ -518,14 +897,26 @@ export async function atualizarColaborador(
       });
     }
 
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "atualizacao",
-      tabela: ORIGEM_COLABORADOR,
-      registroId: String(id),
-      diff,
-    });
+    if (Object.keys(diffPessoa).length > 0) {
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "atualizacao",
+        tabela: ORIGEM_PESSOA,
+        registroId: String(atual.pessoa_id),
+        diff: diffPessoa,
+      });
+    }
+    if (Object.keys(diff).length > 0) {
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "atualizacao",
+        tabela: ORIGEM_COLABORADOR,
+        registroId: String(id),
+        diff,
+      });
+    }
   });
 
   // Quem tem rh.colaborador.editar enxerga tudo — escopo pleno na releitura.
@@ -1054,6 +1445,13 @@ export async function obterLotacoes(
   return { vigente, historico };
 }
 
+/**
+ * Define a ALOCAÇÃO do vínculo: os três campos de uma vez, com vigência.
+ * Registro, lotação e centro de custo são escolhidos separadamente (nenhum é
+ * derivado do outro) e entram numa linha só. Mudar qualquer um encerra a linha
+ * vigente e abre outra — a linha encerrada vira imutável no banco, e é por isso
+ * que trocar o centro de custo hoje não mexe na folha de fevereiro.
+ */
 export async function definirLotacao(
   sessao: PayloadSessao,
   colaboradorId: number,
@@ -1064,6 +1462,14 @@ export async function definirLotacao(
     if (!colaborador) {
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
+    const empresa = await buscarEmpresaDaEstrutura(cliente, dados.empresa_id);
+    if (!empresa || empresa.inativada_em !== null) {
+      throw new ErroHttpCampo(
+        400,
+        "Empresa do grupo inexistente ou inativa.",
+        "empresa_id"
+      );
+    }
     const versaoEstabelecimento = await buscarEstabelecimentoVersaoAtiva(
       cliente,
       dados.estabelecimento_id
@@ -1071,8 +1477,25 @@ export async function definirLotacao(
     if (!versaoEstabelecimento) {
       throw new ErroHttpCampo(
         400,
-        "Estabelecimento inexistente ou sem versão ativa.",
+        "Lotação inexistente ou sem versão ativa.",
         "estabelecimento_id"
+      );
+    }
+    const centro = await buscarCentroCustoDaEstrutura(
+      cliente,
+      dados.centro_custo_id
+    );
+    // Inativar a empresa do grupo tira os centros de custo dela da oferta: a
+    // mesma condição que `listarCentrosCustoAtivos` usa para montar o seletor.
+    if (
+      !centro ||
+      centro.inativado_em !== null ||
+      centro.empresa_inativada_em !== null
+    ) {
+      throw new ErroHttpCampo(
+        400,
+        "Centro de custo indisponível: ou ele foi inativado, ou a empresa do grupo que o mantém foi.",
+        "centro_custo_id"
       );
     }
     const vigente = await buscarLotacaoVigenteParaAtualizar(
@@ -1081,10 +1504,11 @@ export async function definirLotacao(
     );
     if (
       vigente &&
+      vigente.empresa_id === dados.empresa_id &&
       vigente.estabelecimento_id === dados.estabelecimento_id &&
-      vigente.centro_custo === dados.centro_custo
+      vigente.centro_custo_id === dados.centro_custo_id
     ) {
-      throw new ErroHttp(400, "Lotação informada já é a vigente.");
+      throw new ErroHttp(400, "Alocação informada já é a vigente.");
     }
     if (vigente) {
       if (dados.inicio_vigencia <= vigente.inicio_vigencia) {
@@ -1098,22 +1522,35 @@ export async function definirLotacao(
     }
     const lotacaoId = await inserirLotacao(cliente, {
       colaborador_id: colaboradorId,
+      empresa_id: dados.empresa_id,
       estabelecimento_id: dados.estabelecimento_id,
-      centro_custo: dados.centro_custo,
+      centro_custo_id: dados.centro_custo_id,
       inicio_vigencia: dados.inicio_vigencia,
     });
 
-    // Transferência de unidade é fato relevante; a primeira lotação faz parte
-    // do arranjo da admissão e fica só na trilha de audit.
-    if (vigente && vigente.estabelecimento_id !== dados.estabelecimento_id) {
+    // Fato relevante na linha do tempo: mudar de EMPRESA ou de LOCAL. Trocar só
+    // o centro de custo é rearranjo contábil e fica na trilha de audit — a
+    // primeira alocação faz parte do arranjo da admissão, idem.
+    const mudouEmpresa = vigente && vigente.empresa_id !== dados.empresa_id;
+    const mudouLocal =
+      vigente && vigente.estabelecimento_id !== dados.estabelecimento_id;
+    if (vigente && (mudouEmpresa || mudouLocal)) {
+      const de = mudouEmpresa
+        ? (vigente.empresa_nome ?? "empresa anterior")
+        : (vigente.unidade ?? "unidade anterior");
+      const para = mudouEmpresa
+        ? (empresa.nome_fantasia ?? `empresa ${dados.empresa_id}`)
+        : versaoEstabelecimento.unidade;
       await inserirEvento(cliente, {
         colaborador_id: colaboradorId,
         tipo: "transferencia",
         ocorrido_em: `${dados.inicio_vigencia}T00:00:00Z`,
         origem_tabela: "rh.lotacao",
         origem_id: lotacaoId,
-        resumo: `Transferência: ${vigente.unidade ?? "unidade anterior"} → ${versaoEstabelecimento.unidade} em ${formatarData(dados.inicio_vigencia)}`,
+        resumo: `Transferência: ${de} → ${para} em ${formatarData(dados.inicio_vigencia)}`,
         payload: {
+          de_empresa_id: vigente.empresa_id,
+          para_empresa_id: dados.empresa_id,
           de_estabelecimento_id: vigente.estabelecimento_id,
           para_estabelecimento_id: dados.estabelecimento_id,
         },
@@ -1127,13 +1564,17 @@ export async function definirLotacao(
       tabela: "rh.lotacao",
       registroId: String(lotacaoId),
       diff: {
-        Unidade: {
+        Registro: {
+          de: vigente?.empresa_nome ?? null,
+          para: empresa.nome_fantasia,
+        },
+        Lotação: {
           de: vigente?.unidade ?? null,
           para: versaoEstabelecimento.unidade,
         },
         "Centro de custo": {
           de: vigente?.centro_custo ?? null,
-          para: dados.centro_custo,
+          para: centro.codigo,
         },
         "Início da vigência": {
           de: vigente ? formatarData(vigente.inicio_vigencia) : null,
@@ -1456,11 +1897,11 @@ export async function criarEstabelecimento(
     await comTransacao(sessao.usuario_id, async (cliente) => {
       const estabelecimentoId = await inserirEstabelecimento(
         cliente,
-        dados.cnpj
+        dados.cnpj ?? null
       );
       const versaoId = await inserirVersaoEstabelecimento(cliente, {
         estabelecimento_id: estabelecimentoId,
-        razao_social: dados.razao_social,
+        razao_social: dados.razao_social ?? null,
         unidade: dados.unidade,
         endereco_resumido: dados.endereco_resumido ?? null,
         inicio_vigencia: dados.inicio_vigencia,
@@ -1472,8 +1913,8 @@ export async function criarEstabelecimento(
         tabela: "rh.estabelecimento_versao",
         registroId: String(versaoId),
         diff: {
-          CNPJ: { de: null, para: dados.cnpj },
-          "Razão social": { de: null, para: dados.razao_social },
+          CNPJ: { de: null, para: dados.cnpj ?? null },
+          "Razão social": { de: null, para: dados.razao_social ?? null },
           Unidade: { de: null, para: dados.unidade },
           "Início da vigência": {
             de: null,
@@ -1494,6 +1935,37 @@ export async function criarEstabelecimento(
   }
 }
 
+/** Liga/desliga o local físico para uso NOVO. Não apaga e não mexe no passado. */
+export async function definirEstabelecimentoInativo(
+  sessao: PayloadSessao,
+  estabelecimentoId: number,
+  inativo: boolean
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    if (!(await existeEstabelecimento(cliente, estabelecimentoId))) {
+      throw new ErroHttp(404, "Lotação não encontrada.");
+    }
+    await definirInativacaoEstabelecimento(
+      cliente,
+      estabelecimentoId,
+      inativo ? sessao.usuario_id : null
+    );
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "edicao",
+      tabela: "rh.estabelecimento",
+      registroId: String(estabelecimentoId),
+      diff: {
+        Situação: {
+          de: inativo ? "ativa" : "inativa",
+          para: inativo ? "inativa" : "ativa",
+        },
+      },
+    });
+  });
+}
+
 export async function criarVersaoEstabelecimento(
   sessao: PayloadSessao,
   estabelecimentoId: number,
@@ -1503,6 +1975,9 @@ export async function criarVersaoEstabelecimento(
     if (!(await existeEstabelecimento(cliente, estabelecimentoId))) {
       throw new ErroHttp(404, "Estabelecimento não encontrado.");
     }
+    // Mesma trava de empresa e centro de custo: a lotação também é lida por
+    // `status = 'ativa'` em meia dúzia de seletores.
+    await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
     const ativa = await buscarEstabelecimentoVersaoAtiva(
       cliente,
       estabelecimentoId,
@@ -1524,7 +1999,7 @@ export async function criarVersaoEstabelecimento(
     }
     const versaoId = await inserirVersaoEstabelecimento(cliente, {
       estabelecimento_id: estabelecimentoId,
-      razao_social: dados.razao_social,
+      razao_social: dados.razao_social ?? null,
       unidade: dados.unidade,
       endereco_resumido: dados.endereco_resumido ?? null,
       inicio_vigencia: dados.inicio_vigencia,
@@ -1538,7 +2013,7 @@ export async function criarVersaoEstabelecimento(
       diff: {
         "Razão social": {
           de: ativa?.razao_social ?? null,
-          para: dados.razao_social,
+          para: dados.razao_social ?? null,
         },
         Unidade: { de: ativa?.unidade ?? null, para: dados.unidade },
         "Início da vigência": {
@@ -1612,9 +2087,9 @@ function suprimirRecortesPequenos(
 
 export interface RelatorioAniversariantes {
   mes: number;
-  estabelecimento_id: number | null;
   aniversariantes: Aniversariante[];
-  unidades: { estabelecimento_id: number; unidade: string }[];
+  /** Opções dos três seletores — as mesmas da lista e do organograma. */
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   fichas_sem_data_nascimento: number;
 }
 
@@ -1630,21 +2105,23 @@ export async function relatorioAniversariantes(
         month: "numeric",
       }).format(new Date())
     );
-  const [aniversariantes, unidades, cobertura] = await Promise.all([
-    listarAniversariantes(mes, filtro.estabelecimento_id),
-    listarUnidadesDoQuadro(),
-    contarCoberturaNascimento(),
+  const [aniversariantes, estrutura_opcoes, cobertura] = await Promise.all([
+    listarAniversariantes(mes, filtro),
+    listarOpcoesDeFiltroEstrutura(),
+    // A cobertura é do MESMO recorte: dizer "12 fichas sem data de nascimento"
+    // da empresa toda embaixo de um relatório de uma unidade só seria mentira.
+    contarCoberturaNascimento(filtro),
   ]);
   return {
     mes,
-    estabelecimento_id: filtro.estabelecimento_id ?? null,
     aniversariantes,
-    unidades,
+    estrutura_opcoes,
     fichas_sem_data_nascimento: cobertura.sem_data,
   };
 }
 
 export interface RelatorioDiversidade {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   com_data_nascimento: number;
   sem_data_nascimento: number;
@@ -1660,7 +2137,8 @@ export interface RelatorioDiversidade {
  * headcount não geram trilha (não há dado de categoria especial neles).
  */
 export async function relatorioDiversidade(
-  sessao: PayloadSessao
+  sessao: PayloadSessao,
+  filtro: FiltroEstrutura
 ): Promise<RelatorioDiversidade> {
   await registrarLeituraSensivel({
     usuarioId: sessao.usuario_id,
@@ -1668,13 +2146,14 @@ export async function relatorioDiversidade(
     recurso: "relatorio.diversidade",
     registroId: "agregado",
   });
-  const [quadro, genero, idades, cobertura, minimoPorRecorte] =
+  const [quadro, genero, idades, cobertura, minimoPorRecorte, opcoes] =
     await Promise.all([
-      contarQuadro(),
-      contarPorGenero(),
-      contarPorIdade(),
-      contarCoberturaNascimento(),
+      contarQuadro(filtro),
+      contarPorGenero(filtro),
+      contarPorIdade(filtro),
+      contarCoberturaNascimento(filtro),
       lerMinimoPorRecorte(),
+      listarOpcoesDeFiltroEstrutura(),
     ]);
   const porFaixa = FAIXAS_IDADE.map((faixa) => ({
     chave: faixa.chave,
@@ -1684,6 +2163,7 @@ export async function relatorioDiversidade(
       .reduce((soma, linha) => soma + linha.quantidade, 0),
   }));
   return {
+    estrutura_opcoes: opcoes,
     total_quadro: quadro.total,
     com_data_nascimento: cobertura.com_data,
     sem_data_nascimento: cobertura.sem_data,
@@ -1701,6 +2181,7 @@ export async function relatorioDiversidade(
 }
 
 export interface RelatorioComposicaoFamiliar {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   minimo_por_recorte: number;
   idade_limite_crianca: number;
@@ -1714,7 +2195,8 @@ export interface RelatorioComposicaoFamiliar {
 
 /** Dado de terceiro (dependentes): mesmo agregado, a leitura deixa trilha. */
 export async function relatorioComposicaoFamiliar(
-  sessao: PayloadSessao
+  sessao: PayloadSessao,
+  filtro: FiltroEstrutura
 ): Promise<RelatorioComposicaoFamiliar> {
   await registrarLeituraSensivel({
     usuarioId: sessao.usuario_id,
@@ -1722,12 +2204,14 @@ export async function relatorioComposicaoFamiliar(
     recurso: "relatorio.composicao_familiar",
     registroId: "agregado",
   });
-  const [quadro, bruto, minimoPorRecorte] = await Promise.all([
-    contarQuadro(),
-    agregarComposicaoFamiliar(IDADE_LIMITE_CRIANCA),
+  const [quadro, bruto, minimoPorRecorte, opcoes] = await Promise.all([
+    contarQuadro(filtro),
+    agregarComposicaoFamiliar(IDADE_LIMITE_CRIANCA, filtro),
     lerMinimoPorRecorte(),
+    listarOpcoesDeFiltroEstrutura(),
   ]);
   return {
+    estrutura_opcoes: opcoes,
     total_quadro: quadro.total,
     minimo_por_recorte: minimoPorRecorte,
     idade_limite_crianca: IDADE_LIMITE_CRIANCA,
@@ -1759,26 +2243,39 @@ export async function relatorioComposicaoFamiliar(
 }
 
 export interface RelatorioHeadcount {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   ativos: number;
   afastados: number;
-  por_unidade: { rotulo: string; quantidade: number }[];
+  /** Os TRÊS campos, cada um com sua contagem — não são a mesma pergunta. */
+  por_registro: { rotulo: string; quantidade: number }[];
+  por_lotacao: { rotulo: string; quantidade: number }[];
+  por_centro_custo: { rotulo: string; quantidade: number }[];
   por_cargo: { rotulo: string; quantidade: number }[];
   por_vinculo: { rotulo: string; quantidade: number }[];
 }
 
-export async function relatorioHeadcount(): Promise<RelatorioHeadcount> {
-  const [quadro, unidades, cargos, vinculos] = await Promise.all([
-    contarQuadro(),
-    contarHeadcountPorUnidade(),
-    contarHeadcountPorCargo(),
-    contarHeadcountPorVinculo(),
-  ]);
+export async function relatorioHeadcount(
+  filtro: FiltroEstrutura
+): Promise<RelatorioHeadcount> {
+  const [quadro, registros, lotacoes, centros, cargos, vinculos, opcoes] =
+    await Promise.all([
+      contarQuadro(filtro),
+      contarHeadcountPorCampoDaEstrutura("empresa", filtro),
+      contarHeadcountPorCampoDaEstrutura("lotacao", filtro),
+      contarHeadcountPorCampoDaEstrutura("centro_custo", filtro),
+      contarHeadcountPorCargo(filtro),
+      contarHeadcountPorVinculo(filtro),
+      listarOpcoesDeFiltroEstrutura(),
+    ]);
   return {
+    estrutura_opcoes: opcoes,
     total_quadro: quadro.total,
     ativos: quadro.ativos,
     afastados: quadro.afastados,
-    por_unidade: unidades,
+    por_registro: registros,
+    por_lotacao: lotacoes,
+    por_centro_custo: centros,
     por_cargo: cargos,
     por_vinculo: vinculos.map((linha) => ({
       rotulo: ROTULOS_VINCULO[linha.tipo_vinculo],

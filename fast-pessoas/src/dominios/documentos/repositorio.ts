@@ -37,7 +37,11 @@ export interface EscopoLista {
   usuarioId: number;
   /** Quem envia documentos (RH/DP) enxerga o acervo inteiro. */
   verTodos: boolean;
-  colaboradorIdDoUsuario: number | null;
+  /**
+   * TODOS os vínculos de quem está lendo — o documento pessoal do contrato
+   * anterior no mesmo grupo continua sendo dele. Vazio = só o acervo geral.
+   */
+  vinculosDoUsuario: number[];
   incluirSensiveis: boolean;
 }
 
@@ -72,12 +76,13 @@ export async function listar(escopo: EscopoLista): Promise<DocumentoLista[]> {
   const parametros: unknown[] = [escopo.usuarioId];
   const condicoes: string[] = [];
   if (!escopo.verTodos) {
-    if (escopo.colaboradorIdDoUsuario === null) {
+    if (escopo.vinculosDoUsuario.length === 0) {
       condicoes.push("d.colaborador_id IS NULL");
     } else {
-      parametros.push(escopo.colaboradorIdDoUsuario);
+      parametros.push(escopo.vinculosDoUsuario);
       condicoes.push(
-        `(d.colaborador_id IS NULL OR d.colaborador_id = $${parametros.length})`
+        `(d.colaborador_id IS NULL
+          OR d.colaborador_id = ANY($${parametros.length}::bigint[]))`
       );
     }
   }
@@ -132,14 +137,24 @@ export async function buscarMetadados(
   };
 }
 
-export async function colaboradorDoUsuario(
-  usuarioId: number
-): Promise<number | null> {
+/**
+ * TODOS os vínculos de quem está lendo, do mais novo ao mais antigo.
+ *
+ * Era `rh.vinculo_atual` — UM vínculo, o corrente —, e com isso o documento
+ * pessoal do contrato anterior no mesmo grupo (advertência, ASO, rescisão)
+ * desaparecia do portal de quem é o dono dele no dia em que ele mudava de CNPJ.
+ * O contrato acabou; o documento continua sendo da pessoa. Quem ENVIA continua
+ * escolhendo o vínculo de destino; o que muda aqui é só quem consegue LER.
+ */
+export async function vinculosDoUsuario(usuarioId: number): Promise<number[]> {
   const linhas = await consultar<{ id: string }>(
-    "SELECT id FROM rh.colaborador WHERE usuario_id = $1",
+    `SELECT c.id
+       FROM rh.colaborador c
+      WHERE c.pessoa_id = rh.pessoa_do_usuario($1)
+      ORDER BY c.data_admissao DESC, c.id DESC`,
     [usuarioId]
   );
-  return linhas.length > 0 ? Number(linhas[0].id) : null;
+  return linhas.map((linha) => Number(linha.id));
 }
 
 export async function buscarColaborador(

@@ -100,7 +100,7 @@ function cpfValido(rng) {
 
 /**
  * CNPJ FICTÍCIO válido (raiz de 8 dígitos + ordem da filial + DV módulo 11).
- * Formato só de dígitos, como exige o CHECK de rh.estabelecimento.
+ * Formato só de dígitos, como exige o CHECK de rh.empresa_grupo.
  */
 function cnpjValido(raiz8, ordemFilial) {
   const base = String(raiz8).padStart(8, '0') + String(ordemFilial).padStart(4, '0');

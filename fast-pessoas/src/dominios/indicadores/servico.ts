@@ -13,6 +13,7 @@ import {
 import {
   buscarIndicadorAtivo,
   buscarMetaAtivaParaEncerrar,
+  buscarUnidadeDaMeta,
   criarIndicador,
   criarMeta,
   encerrarMeta,
@@ -22,6 +23,7 @@ import {
   listarUnidadesAtivas,
   listarVersoes,
   MetaVigente,
+  UnidadeEscopo,
   VersaoMeta,
 } from "./repositorio";
 
@@ -36,7 +38,7 @@ export interface IndicadorComMetas extends Indicador {
 
 export interface CentralDeMetas {
   indicadores: IndicadorComMetas[];
-  unidades: string[];
+  unidades: UnidadeEscopo[];
   pode_administrar: boolean;
 }
 
@@ -45,8 +47,9 @@ function formatarData(dataIso: string): string {
   return `${dia}/${mes}/${ano}`;
 }
 
-function rotuloEscopo(escopo: string): string {
-  return escopo === ESCOPO_GLOBAL ? "Global (todas as unidades)" : escopo;
+/** Rótulo do escopo para tela e auditoria: nome de hoje, não o congelado. */
+function rotuloEscopo(unidade: string | null): string {
+  return unidade ?? "Global (todas as unidades)";
 }
 
 /** Chave técnica derivada do nome: minúsculas, sem acento, `[a-z0-9_]`. */
@@ -87,10 +90,12 @@ export async function obterCentralDeMetas(
       const doIndicador = porIndicador.get(indicador.id) ?? [];
       return {
         ...indicador,
+        // Global x unidade se decide pela CHAVE (estabelecimento_id nulo ou
+        // não), nunca comparando o rótulo com a string 'global'.
         meta_global:
-          doIndicador.find((meta) => meta.escopo === ESCOPO_GLOBAL) ?? null,
+          doIndicador.find((meta) => meta.estabelecimento_id === null) ?? null,
         metas_unidade: doIndicador.filter(
-          (meta) => meta.escopo !== ESCOPO_GLOBAL
+          (meta) => meta.estabelecimento_id !== null
         ),
       };
     }),
@@ -145,7 +150,49 @@ export async function criarNovoIndicador(
 }
 
 /**
- * Nova versão de meta: encerra a versão ativa do mesmo indicador+escopo e cria
+ * Resolve o escopo pedido em (chave, rótulo de hoje) e diz se a unidade ainda
+ * está ativa. Validar o ID contra rh.estabelecimento — e não o NOME contra uma
+ * lista de nomes ativos — é o que faz a meta sobreviver a uma renomeação.
+ */
+async function resolverEscopo(estabelecimentoId: number | null): Promise<{
+  estabelecimento_id: number | null;
+  escopo: string;
+  unidade: string | null;
+  ativa: boolean;
+}> {
+  if (estabelecimentoId === null) {
+    return {
+      estabelecimento_id: null,
+      escopo: ESCOPO_GLOBAL,
+      unidade: null,
+      ativa: true,
+    };
+  }
+  const unidade = await buscarUnidadeDaMeta(estabelecimentoId);
+  if (!unidade) {
+    throw new ErroHttpCampo(
+      400,
+      "Unidade não encontrada.",
+      "estabelecimento_id"
+    );
+  }
+  if (unidade.unidade === null) {
+    throw new ErroHttpCampo(
+      400,
+      "Unidade sem versão cadastrada — cadastre a unidade em Estrutura antes de definir a meta.",
+      "estabelecimento_id"
+    );
+  }
+  return {
+    estabelecimento_id: unidade.estabelecimento_id,
+    escopo: unidade.unidade,
+    unidade: unidade.unidade,
+    ativa: unidade.ativa,
+  };
+}
+
+/**
+ * Nova versão de meta: encerra a versão ativa do mesmo indicador+unidade e cria
  * a nova NA MESMA transação — valor nunca sofre UPDATE (garantido também por
  * trigger no banco).
  */
@@ -158,24 +205,24 @@ export async function definirMeta(
   if (!indicador) {
     throw new ErroHttp(404, "Indicador não encontrado.");
   }
-  if (dados.escopo !== ESCOPO_GLOBAL) {
-    const unidades = await listarUnidadesAtivas();
-    if (!unidades.includes(dados.escopo)) {
-      throw new ErroHttpCampo(
-        400,
-        "Escopo deve ser global ou uma unidade ativa.",
-        "escopo"
-      );
-    }
-  }
+  const escopo = await resolverEscopo(dados.estabelecimento_id);
 
   try {
     return await comTransacao(sessao.usuario_id, async (cliente) => {
       const anterior = await buscarMetaAtivaParaEncerrar(
         cliente,
         indicadorId,
-        dados.escopo
+        escopo.estabelecimento_id
       );
+      // Unidade inativada não ganha meta NOVA, mas a que ela já tem continua
+      // substituível/encerrável — senão a meta ficaria imortal na tela.
+      if (!escopo.ativa && !anterior) {
+        throw new ErroHttpCampo(
+          400,
+          "Unidade inativada: defina a meta em uma unidade ativa.",
+          "estabelecimento_id"
+        );
+      }
       if (anterior) {
         await encerrarMeta(cliente, anterior.id);
         await registrarAlteracao(cliente, {
@@ -188,7 +235,7 @@ export async function definirMeta(
             Situação: { de: "Ativa", para: "Encerrada" },
             Motivo: {
               de: null,
-              para: `Substituída por nova versão de meta de "${indicador.nome}" (${rotuloEscopo(dados.escopo)})`,
+              para: `Substituída por nova versão de meta de "${indicador.nome}" (${rotuloEscopo(escopo.unidade)})`,
             },
           },
         });
@@ -196,7 +243,8 @@ export async function definirMeta(
 
       const criada = await criarMeta(cliente, {
         indicador_id: indicadorId,
-        escopo: dados.escopo,
+        estabelecimento_id: escopo.estabelecimento_id,
+        escopo: escopo.escopo,
         valor: dados.valor,
         inicio_vigencia: dados.inicio_vigencia,
         criado_por_usuario: sessao.usuario_id,
@@ -209,7 +257,7 @@ export async function definirMeta(
         registroId: String(criada.id),
         diff: {
           Indicador: { de: null, para: indicador.nome },
-          Escopo: { de: null, para: rotuloEscopo(criada.escopo) },
+          Escopo: { de: null, para: rotuloEscopo(escopo.unidade) },
           Meta: {
             de: anterior
               ? formatarValorMeta(anterior.valor, indicador.unidade)
@@ -233,6 +281,56 @@ export async function definirMeta(
     }
     throw erro;
   }
+}
+
+/**
+ * Encerra a meta vigente de um escopo SEM criar substituta — o caminho que
+ * faltava: sem ele, uma meta de unidade só saía da tela sendo trocada, e
+ * unidade inativada (ou meta que não faz mais sentido) ficava para sempre.
+ * Encerrar é versionamento, não apagar: a linha continua no histórico.
+ */
+export async function encerrarMetaVigente(
+  sessao: PayloadSessao,
+  indicadorId: number,
+  estabelecimentoId: number | null
+): Promise<void> {
+  const indicador = await buscarIndicadorAtivo(indicadorId);
+  if (!indicador) {
+    throw new ErroHttp(404, "Indicador não encontrado.");
+  }
+  // Rótulo de hoje para a auditoria, mesmo que a unidade tenha sido renomeada
+  // ou inativada depois que a meta foi pactuada.
+  const unidade =
+    estabelecimentoId === null
+      ? null
+      : await buscarUnidadeDaMeta(estabelecimentoId);
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const vigente = await buscarMetaAtivaParaEncerrar(
+      cliente,
+      indicadorId,
+      estabelecimentoId
+    );
+    if (!vigente) {
+      throw new ErroHttp(404, "Não há meta vigente neste escopo.");
+    }
+    await encerrarMeta(cliente, vigente.id);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_META,
+      registroId: String(vigente.id),
+      diff: {
+        Situação: { de: "Ativa", para: "Encerrada" },
+        Motivo: {
+          de: null,
+          para: `Meta de "${indicador.nome}" (${rotuloEscopo(
+            unidade?.unidade ?? (estabelecimentoId === null ? null : vigente.escopo)
+          )}) encerrada sem substituta`,
+        },
+      },
+    });
+  });
 }
 
 export async function historicoDeMetas(

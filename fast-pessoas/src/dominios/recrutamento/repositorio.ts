@@ -51,14 +51,22 @@ export interface EstabelecimentoDisponivel {
   unidade: string;
 }
 
+/**
+ * Lotações oferecidas na requisição/vaga. "Ativa" é a versão do nome E o
+ * próprio local: estabelecimento inativado sai da oferta de lançamento novo —
+ * abrir vaga para uma loja que fechou é convite a erro. Isto NÃO esconde
+ * histórico: vaga já publicada continua mostrando a unidade dela, que vem da
+ * versão gravada na requisição, não desta lista.
+ */
 export async function listarEstabelecimentosAtivos(): Promise<
   EstabelecimentoDisponivel[]
 > {
   const linhas = await consultar<{ id: string; unidade: string }>(
-    `SELECT id, unidade
-       FROM rh.estabelecimento_versao
-      WHERE status = 'ativa'
-      ORDER BY unidade`
+    `SELECT ev.id, ev.unidade
+       FROM rh.estabelecimento_versao ev
+       JOIN rh.estabelecimento e ON e.id = ev.estabelecimento_id
+      WHERE ev.status = 'ativa' AND e.inativado_em IS NULL
+      ORDER BY ev.unidade`
   );
   return linhas.map((linha) => ({
     estabelecimento_versao_id: Number(linha.id),

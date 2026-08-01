@@ -15,12 +15,12 @@ import {
 import {
   buscarColaborador,
   buscarMetadados,
-  colaboradorDoUsuario,
   DocumentoLista,
   inserirCiencia,
   listar,
   MetadadosDocumento,
   registrarLeituraSensivel,
+  vinculosDoUsuario,
 } from "./repositorio";
 
 const TABELA_DOCUMENTO = "rh.documento";
@@ -66,8 +66,10 @@ async function exigirVisibilidade(
 ): Promise<void> {
   const verTodos = await temPermissao(sessao.usuario_id, CHAVE_VER_TODOS);
   if (!verTodos && metadados.colaborador_id !== null) {
-    const meuColaboradorId = await colaboradorDoUsuario(sessao.usuario_id);
-    if (meuColaboradorId !== metadados.colaborador_id) {
+    // Pela PESSOA, não pelo contrato corrente: o documento do vínculo anterior
+    // no mesmo grupo continua sendo de quem está pedindo.
+    const meusVinculos = await vinculosDoUsuario(sessao.usuario_id);
+    if (!meusVinculos.includes(metadados.colaborador_id)) {
       throw new ErroHttp(404, "Documento não encontrado.");
     }
   }
@@ -107,13 +109,11 @@ export async function listarDocumentos(
     throw new ErroHttp(403, "Sem permissão para ver documentos sensíveis.");
   }
   const verTodos = await temPermissao(sessao.usuario_id, CHAVE_VER_TODOS);
-  const colaboradorIdDoUsuario = verTodos
-    ? null
-    : await colaboradorDoUsuario(sessao.usuario_id);
+  const vinculos = verTodos ? [] : await vinculosDoUsuario(sessao.usuario_id);
   const documentos = await listar({
     usuarioId: sessao.usuario_id,
     verTodos,
-    colaboradorIdDoUsuario,
+    vinculosDoUsuario: vinculos,
     incluirSensiveis,
   });
   if (incluirSensiveis) {

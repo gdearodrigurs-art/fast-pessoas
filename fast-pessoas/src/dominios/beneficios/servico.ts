@@ -45,9 +45,11 @@ import {
   SolicitacaoAdesao,
 } from "./esquemas";
 import {
+  adesoesParaTransferir,
   AdesaoResumo,
   atualizarStatusAdesao,
   BeneficioComRegra,
+  encerrarAdesaoPorFimDoVinculo,
   buscarAdesaoParaAtualizar,
   buscarAdesaoResumo,
   buscarBeneficio,
@@ -1018,6 +1020,83 @@ export function reativarAdesao(
   adesaoId: number
 ): Promise<AdesaoResumo> {
   return mudarStatusAdesao(sessao, adesaoId, "suspensa", "ativa");
+}
+
+// ------------------------------------------------- benefício na transferência entre empresas do grupo
+// Chamado de dentro da transação de `aplicarTransferenciaEntreEmpresas`
+// (demandas/servico.ts), ao lado dos dependentes. Fica AQUI, e não lá, porque
+// a regra é de benefício: quem sabe o que é elegibilidade é este domínio.
+//
+// A REGRA, escrita onde faltava. Benefício é contrato do EMPREGADOR com a
+// operadora, não da pessoa. Quando o contrato de trabalho muda de CNPJ, a
+// adesão do CNPJ que sai TERMINA — e a do CNPJ que entra só nasce se a regra
+// DELE admitir aquela pessoa (tipo de vínculo e unidade podem ser outros).
+// Terminar calado foi o que criou o buraco: o RH via cinco adesões "vigentes"
+// numa matrícula encerrada e a pessoa via zero. Por isso o resultado volta
+// nomeado — o que atravessou e o que ficou para trás vão para o diff do cartão
+// da movimentação, onde o DP lê na hora do ato.
+
+export interface BeneficiosNaTransferencia {
+  /** Benefícios recriados no vínculo novo, com valor e desconto preservados. */
+  atravessaram: string[];
+  /** Encerrados no vínculo velho e NÃO recriados: o critério do destino não admite. */
+  ficaram: string[];
+}
+
+export async function transferirAdesoesEntreVinculos(
+  cliente: PoolClient,
+  vinculoOrigemId: number,
+  vinculoDestinoId: number,
+  data: string
+): Promise<BeneficiosNaTransferencia> {
+  const adesoes = await adesoesParaTransferir(cliente, vinculoOrigemId);
+  const resultado: BeneficiosNaTransferencia = {
+    atravessaram: [],
+    ficaram: [],
+  };
+  if (adesoes.length === 0) return resultado;
+
+  // O perfil do vínculo NOVO — a transferência já gravou a lotação dele antes
+  // de chegar aqui, então tipo de vínculo e unidade do destino já são os reais.
+  const perfilDestino = await perfilPorColaborador(vinculoDestinoId, cliente);
+  if (!perfilDestino) {
+    throw new ErroHttp(
+      500,
+      "O vínculo de destino sumiu no meio da transferência."
+    );
+  }
+
+  for (const adesao of adesoes) {
+    // Fecha na VÉSPERA da admissão nova: o mesmo corte da posição e da
+    // alocação, que é o que faz o desconto parar na competência certa em vez
+    // de sumir sem aviso quando a folha filtra por colaborador ativo.
+    await encerrarAdesaoPorFimDoVinculo(cliente, adesao.id, data);
+    // Sem regra vigente não há critério que barre — é o mesmo entendimento de
+    // `montarVisao`, que oferece ao catálogo o benefício sem regra.
+    const elegivel =
+      adesao.criterio === null || atendeCriterio(adesao.criterio, perfilDestino);
+    if (!elegivel) {
+      resultado.ficaram.push(adesao.beneficio_nome);
+      continue;
+    }
+    const novaId = await inserirAdesao(cliente, {
+      colaborador_id: vinculoDestinoId,
+      beneficio_id: adesao.beneficio_id,
+      inicio: data,
+      // Transferência não é momento de renegociar benefício: o valor e o
+      // desconto que valiam continuam valendo.
+      valor: adesao.valor,
+      desconto: adesao.desconto,
+      demanda_id: null,
+    });
+    // Adesão suspensa atravessa suspensa: a transferência não reativa nada
+    // por conta própria.
+    if (adesao.status === "suspensa") {
+      await atualizarStatusAdesao(cliente, novaId, "suspensa");
+    }
+    resultado.atravessaram.push(adesao.beneficio_nome);
+  }
+  return resultado;
 }
 
 // ------------------------------------------------------------------ dependentes (dado de terceiro — LGPD)

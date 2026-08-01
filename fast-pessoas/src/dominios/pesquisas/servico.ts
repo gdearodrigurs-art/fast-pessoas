@@ -656,7 +656,14 @@ export async function responder(
       });
     });
   } catch (erro) {
-    if (violacaoUnica(erro) === "participacao_pesquisa_unica") {
+    const violada = violacaoUnica(erro);
+    // Duas travas, uma mensagem: a antiga (por vínculo) e a da 0052 (por
+    // PESSOA), que é a que dispara quando quem responde de novo é o vínculo
+    // aberto por transferência entre empresas do grupo.
+    if (
+      violada === "participacao_pesquisa_unica" ||
+      violada === "participacao_pesquisa_unica_por_pessoa"
+    ) {
       throw new ErroHttp(409, "Você já respondeu esta pesquisa.");
     }
     throw erro;

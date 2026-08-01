@@ -67,7 +67,10 @@ export function PainelAfastamentos({
   const [colaboradores, setColaboradores] = useState<ColaboradorOpcao[]>([]);
   const [documentos, setDocumentos] = useState<DocumentoOpcao[]>([]);
   const [colaboradorId, setColaboradorId] = useState("");
-  const [tipo, setTipo] = useState<TipoAfastamento>("atestado");
+  // Nasce VAZIO: acidente de trabalho abre CAT e estabilidade de 12 meses,
+  // maternidade abre estabilidade, INSS é previdenciário. Nada torna
+  // "atestado" mais provável — a tela não escolhe a classificação legal.
+  const [tipo, setTipo] = useState<TipoAfastamento | "">("");
   const [inicio, setInicio] = useState("");
   const [fim, setFim] = useState("");
   const [detalheSaude, setDetalheSaude] = useState("");
@@ -161,7 +164,7 @@ export function PainelAfastamentos({
       const dados = await resposta.json().catch(() => ({}));
       if (resposta.ok) {
         setColaboradorId("");
-        setTipo("atestado");
+        setTipo("");
         setInicio("");
         setFim("");
         setDetalheSaude("");
@@ -221,9 +224,13 @@ export function PainelAfastamentos({
                 <select
                   className={estilos.campo}
                   id="tipo"
+                  required
                   value={tipo}
-                  onChange={(e) => setTipo(e.target.value as TipoAfastamento)}
+                  onChange={(e) =>
+                    setTipo(e.target.value as TipoAfastamento | "")
+                  }
                 >
+                  <option value="">Escolha o tipo</option>
                   {TIPOS_AFASTAMENTO.map((opcao) => (
                     <option key={opcao} value={opcao}>
                       {ROTULOS_TIPO_AFASTAMENTO[opcao]}

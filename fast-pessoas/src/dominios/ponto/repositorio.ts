@@ -460,11 +460,21 @@ export async function listarFeriados(
 
 /**
  * Feriados que valem para UMA pessoa no período. Nacional vale sempre; o que é
- * amarrado a um estabelecimento vale se for o da lotação vigente.
+ * amarrado a um estabelecimento vale se for o da lotação DAQUELE DIA.
  * O estabelecimento ainda não tem UF/município estruturados (endereco_resumido
  * é texto livre) — por isso feriado estadual/municipal só alcança a pessoa
  * quando cadastrado COM estabelecimento_id. Evolução: UF e município em
  * rh.estabelecimento_versao resolvem sem cadastro redundante.
+ *
+ * DIA A DIA, não período: a lotação é resolvida contra `f.data`, e não contra o
+ * período inteiro. Quem muda de lotação no meio do mês tinha o mês INTEIRO
+ * apurado com os feriados do local novo, porque a escolha era "qualquer linha de
+ * rh.lotacao que sobreponha o período, a mais recente" — reapurar o mês depois
+ * de uma transferência apagava o feriado do local antigo dos dias em que a
+ * pessoa ainda estava lá. Como só os dias de feriado precisam de lotação (e são
+ * poucos), a subconsulta correlacionada custa menos que quebrar o período em
+ * intervalos de vigência, e usa `lotacao_por_pessoa (colaborador_id,
+ * inicio_vigencia DESC)`. A regra de escolha é a MESMA de rh.estrutura_em.
  */
 export async function feriadosDoColaborador(
   colaboradorId: number,
@@ -472,23 +482,20 @@ export async function feriadosDoColaborador(
   ate: string
 ): Promise<Feriado[]> {
   const linhas = await consultar<LinhaFeriado>(
-    `WITH lotacao_vigente AS (
-        SELECT l.estabelecimento_id
-          FROM rh.lotacao l
-         WHERE l.colaborador_id = $1
-           AND l.inicio_vigencia <= $3::date
-           AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= $2::date)
-         ORDER BY l.inicio_vigencia DESC
-         LIMIT 1
-     )
-     SELECT f.id, f.data::text AS data, f.nome, f.abrangencia, f.uf, f.municipio,
+    `SELECT f.id, f.data::text AS data, f.nome, f.abrangencia, f.uf, f.municipio,
             f.estabelecimento_id, f.tipo
        FROM rh.feriado f
-       LEFT JOIN lotacao_vigente lv ON TRUE
       WHERE f.data BETWEEN $2::date AND $3::date
         AND (f.abrangencia = 'nacional'
-             OR f.estabelecimento_id = lv.estabelecimento_id)
-      ORDER BY f.data`,
+             OR f.estabelecimento_id = (
+                  SELECT l.estabelecimento_id
+                    FROM rh.lotacao l
+                   WHERE l.colaborador_id = $1
+                     AND l.inicio_vigencia <= f.data
+                     AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= f.data)
+                   ORDER BY l.inicio_vigencia DESC, l.id DESC
+                   LIMIT 1))
+      ORDER BY f.data, f.id`,
     [colaboradorId, de, ate]
   );
   return linhas.map(paraFeriado);
@@ -496,8 +503,12 @@ export async function feriadosDoColaborador(
 
 /**
  * Os mesmos feriados, mas de UMA LISTA de pessoas em UMA ida. Cada pessoa traz a
- * SUA lotação vigente, então o resultado é idêntico ao de chamar a versão de uma
- * pessoa N vezes — 13,7 s viram 0,3 s na apuração de 07/2026.
+ * SUA lotação DE CADA DIA, então o resultado é idêntico ao de chamar a versão de
+ * uma pessoa N vezes — 13,7 s viram 0,3 s na apuração de 07/2026.
+ *
+ * A resolução é por dia pelo mesmo motivo da versão de uma pessoa (ver acima); o
+ * custo é uma subconsulta por (pessoa × dia de feriado), e dias de feriado num
+ * mês são poucos.
  *
  * O `ORDER BY` ganhou `f.id` como desempate: quando dois feriados caem no mesmo
  * dia (nacional + o do estabelecimento), quem chama monta um mapa data → nome e
@@ -510,25 +521,22 @@ export async function feriadosDosColaboradoresEmLote(
 ): Promise<Map<number, Feriado[]>> {
   if (colaboradorIds.length === 0) return new Map();
   const linhas = await consultar<LinhaFeriado & { alvo_id: string }>(
-    `WITH lotacao_vigente AS (
-        SELECT a.colaborador_id,
-               (SELECT l.estabelecimento_id FROM rh.lotacao l
-                 WHERE l.colaborador_id = a.colaborador_id
-                   AND l.inicio_vigencia <= $3::date
-                   AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= $2::date)
-                 ORDER BY l.inicio_vigencia DESC
-                 LIMIT 1) AS estabelecimento_id
-          FROM unnest($1::bigint[]) AS a(colaborador_id)
-     )
-     SELECT lv.colaborador_id::text AS alvo_id,
+    `SELECT a.colaborador_id::text AS alvo_id,
             f.id, f.data::text AS data, f.nome, f.abrangencia, f.uf, f.municipio,
             f.estabelecimento_id, f.tipo
-       FROM lotacao_vigente lv
+       FROM unnest($1::bigint[]) AS a(colaborador_id)
        JOIN rh.feriado f
          ON f.data BETWEEN $2::date AND $3::date
         AND (f.abrangencia = 'nacional'
-             OR f.estabelecimento_id = lv.estabelecimento_id)
-      ORDER BY lv.colaborador_id, f.data, f.id`,
+             OR f.estabelecimento_id = (
+                  SELECT l.estabelecimento_id
+                    FROM rh.lotacao l
+                   WHERE l.colaborador_id = a.colaborador_id
+                     AND l.inicio_vigencia <= f.data
+                     AND (l.fim_vigencia IS NULL OR l.fim_vigencia >= f.data)
+                   ORDER BY l.inicio_vigencia DESC, l.id DESC
+                   LIMIT 1))
+      ORDER BY a.colaborador_id, f.data, f.id`,
     [colaboradorIds, de, ate]
   );
   const porColaborador = new Map<number, Feriado[]>();
@@ -953,12 +961,51 @@ export async function buscarLote(id: number): Promise<LoteImportacao | null> {
   return linhas[0] ? paraLote(linhas[0]) : null;
 }
 
-/** matrícula → colaborador_id, para o importador resolver a coluna do arquivo. */
-export async function mapaMatriculas(): Promise<Map<string, number>> {
-  const linhas = await consultar<{ matricula: string; id: string }>(
-    `SELECT matricula, id FROM rh.colaborador`
+export interface VinculoDeMatricula {
+  id: number;
+  matricula: string;
+  pessoa_id: number;
+  data_admissao: string;
+  data_desligamento: string | null;
+}
+
+/**
+ * Todos os vínculos com matrícula, para o importador resolver a coluna do
+ * arquivo POR DATA.
+ *
+ * Antes isto era `SELECT matricula, id` puro e virava um mapa matrícula →
+ * colaborador_id sem recorte nenhum. O arquivo do relógio continua gravado com a
+ * matrícula ANTIGA por dias depois de uma transferência entre empresas do grupo
+ * (quem cadastra o crachá no relógio é outra pessoa e outro sistema), então a
+ * batida entrava num VÍNCULO ENCERRADO: a apuração não enxerga quem está
+ * desligado, o espelho da pessoa resolve pelo vínculo atual, e a marcação — que
+ * é append-only — ficava órfã para sempre.
+ *
+ * `pessoa_id` vem junto porque é ele que permite dizer QUAL matrícula valia
+ * naquele dia: os vínculos da mesma pessoa são irmãos por rh.pessoa (onda I).
+ * A matrícula é UNIQUE em rh.colaborador, então (matrícula → vínculo) continua
+ * sendo um para um; o que passou a existir é a janela de vigência.
+ */
+export async function vinculosComMatricula(): Promise<VinculoDeMatricula[]> {
+  const linhas = await consultar<{
+    id: string;
+    matricula: string;
+    pessoa_id: string;
+    data_admissao: string;
+    data_desligamento: string | null;
+  }>(
+    `SELECT id, matricula, pessoa_id,
+            data_admissao::text     AS data_admissao,
+            data_desligamento::text AS data_desligamento
+       FROM rh.colaborador`
   );
-  return new Map(linhas.map((linha) => [linha.matricula, paraNumero(linha.id)]));
+  return linhas.map((linha) => ({
+    id: paraNumero(linha.id),
+    matricula: linha.matricula,
+    pessoa_id: paraNumero(linha.pessoa_id),
+    data_admissao: linha.data_admissao,
+    data_desligamento: linha.data_desligamento,
+  }));
 }
 
 // ================================================================ regra de banco de horas
@@ -2198,6 +2245,28 @@ export async function colaboradoresInexistentes(
   return linhas.map((linha) => paraNumero(linha.id));
 }
 
+/**
+ * TODOS os vínculos de quem está logado, do mais novo ao mais antigo.
+ *
+ * `rh.vinculo_atual` responde "em qual contrato eu AJO hoje" — é o certo para
+ * bater ponto, pedir férias, aderir a benefício. Para LER a própria história a
+ * pergunta é outra e o alcance é a PESSOA: o espelho e o banco de horas do
+ * contrato anterior no mesmo grupo continuam sendo do mesmo trabalhador, e
+ * negá-los a ele era negar o direito da Portaria 671 art. 79 justo a quem o
+ * artigo protege — ainda por cima logo depois de o sistema anotar, no evento da
+ * transferência, que o saldo "foi preservado para o acerto".
+ */
+export async function vinculosDoUsuario(usuarioId: number): Promise<number[]> {
+  const linhas = await consultar<{ id: string }>(
+    `SELECT c.id
+       FROM rh.colaborador c
+      WHERE c.pessoa_id = rh.pessoa_do_usuario($1)
+      ORDER BY c.data_admissao DESC, c.id DESC`,
+    [usuarioId]
+  );
+  return linhas.map((linha) => paraNumero(linha.id));
+}
+
 export async function colaboradorDoUsuario(
   usuarioId: number
 ): Promise<ColaboradorPonto | null> {
@@ -2206,7 +2275,8 @@ export async function colaboradorDoUsuario(
     nome_completo: string;
     matricula: string;
   }>(
-    `SELECT id, nome_completo, matricula FROM rh.colaborador WHERE usuario_id = $1`,
+    `SELECT id, nome_completo, matricula FROM rh.colaborador
+      WHERE id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   return linhas[0]
@@ -2463,7 +2533,12 @@ export async function listarCargosParaRegra(): Promise<
   }));
 }
 
-/** Unidades — escopo nível 1 da regra de banco de horas e do feriado local. */
+/**
+ * Unidades — escopo nível 1 da regra de banco de horas e do feriado local.
+ * Só as ATIVAS: o local inativado sai da oferta de regra nova, do mesmo jeito
+ * que sai dos demais seletores. Regra já gravada num local inativado continua
+ * valendo e continua aparecendo — o que some é a oferta, não o passado.
+ */
 export async function listarEstabelecimentosParaRegra(): Promise<
   { id: number; nome: string }[]
 > {
@@ -2472,6 +2547,7 @@ export async function listarEstabelecimentosParaRegra(): Promise<
        FROM rh.estabelecimento e
        JOIN rh.estabelecimento_versao v
          ON v.estabelecimento_id = e.id AND v.status = 'ativa'
+      WHERE e.inativado_em IS NULL
       ORDER BY v.unidade`
   );
   return linhas.map((linha) => ({

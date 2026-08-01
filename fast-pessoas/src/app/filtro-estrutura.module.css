@@ -1,0 +1,66 @@
+.filtro {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.campoGrupo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 190px;
+  flex: 1 1 190px;
+}
+
+.rotulo {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b6763;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.campo {
+  padding: 9px 10px;
+  border: 1px solid #d6d2cd;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 14px;
+  color: #1c1b1a;
+  font-family: inherit;
+}
+
+.campo:focus {
+  outline: 2px solid #d21217;
+  outline-offset: 1px;
+}
+
+.limpar {
+  background: none;
+  border: 1px solid #d6d2cd;
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: #6b6763;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.limpar:hover:not(:disabled) {
+  border-color: #d21217;
+  color: #d21217;
+}
+
+.limpar:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.nota {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: #6b6763;
+}

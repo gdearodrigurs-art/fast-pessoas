@@ -1,4 +1,5 @@
 import { consultar } from "../../lib/banco";
+import { ENTRADA_NO_GRUPO, SAIDA_DO_GRUPO } from "../../lib/sql-vinculo";
 
 // ==================================================================
 // Repositório do portal do gestor — SOMENTE LEITURA
@@ -30,6 +31,8 @@ export interface GestorPortal {
   usuario_id: number;
   nome_completo: string;
   liderados_vigentes: number;
+  /** Empresa do grupo em que o CONTRATO do gestor está registrado. */
+  empresa_id: number | null;
 }
 
 export async function buscarGestor(
@@ -40,9 +43,15 @@ export async function buscarGestor(
     usuario_id: string;
     nome_completo: string;
     liderados_vigentes: string;
+    empresa_id: string | null;
   }>(
     `SELECT c.id AS colaborador_id, c.usuario_id, c.nome_completo,
-            (SELECT count(*) FROM (${EQUIPE_VIGENTE}) eq) AS liderados_vigentes
+            (SELECT count(*) FROM (${EQUIPE_VIGENTE}) eq) AS liderados_vigentes,
+            (SELECT ld.empresa_id
+               FROM rh.lotacao_detalhada ld
+              WHERE ld.colaborador_id = c.id AND ld.fim_vigencia IS NULL
+              ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+              LIMIT 1) AS empresa_id
        FROM rh.colaborador c
       WHERE c.id = $1`,
     [colaboradorId]
@@ -54,6 +63,7 @@ export async function buscarGestor(
     usuario_id: Number(linha.usuario_id),
     nome_completo: linha.nome_completo,
     liderados_vigentes: Number(linha.liderados_vigentes),
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
   };
 }
 
@@ -95,7 +105,16 @@ export interface LinhaEquipe {
   nome_completo: string;
   matricula: string;
   cargo_nome: string | null;
+  /** Lotação: o LOCAL FÍSICO onde a pessoa trabalha. */
   unidade: string | null;
+  /**
+   * Registro: a EMPRESA DO GRUPO em que o contrato está. Coisa diferente da
+   * unidade (0047), e a liderança atravessa a transferência entre CNPJs de
+   * propósito (0048 item e) — então esta é justamente a tela onde o gestor
+   * mais encontra gente de outro CNPJ, e ela precisa dizer isso.
+   */
+  empresa_id: number | null;
+  empresa_nome: string | null;
   data_admissao: string;
   dias_desde_admissao: number;
   /** FATO isolado: existe afastamento em curso hoje. Sem tipo, sem motivo. */
@@ -124,6 +143,8 @@ export async function listarEquipe(
     matricula: string;
     cargo_nome: string | null;
     unidade: string | null;
+    empresa_id: string | null;
+    empresa_nome: string | null;
     data_admissao: string;
     dias_desde_admissao: number;
     afastado_hoje: boolean;
@@ -134,6 +155,7 @@ export async function listarEquipe(
   }>(
     `SELECT c.id AS colaborador_id, c.nome_completo, c.matricula,
             pos.cargo_nome, lot.unidade,
+            lot.empresa_id, lot.empresa_nome,
             c.data_admissao::text AS data_admissao,
             (${HOJE_SP} - c.data_admissao)::int AS dias_desde_admissao,
             EXISTS (
@@ -154,12 +176,11 @@ export async function listarEquipe(
           WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
        ) pos ON TRUE
        LEFT JOIN LATERAL (
-         SELECT ev.unidade
-           FROM rh.lotacao l
-           LEFT JOIN rh.estabelecimento_versao ev
-             ON ev.estabelecimento_id = l.estabelecimento_id
-            AND ev.status = 'ativa'
-          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+         SELECT ld.lotacao_nome AS unidade, ld.empresa_id, ld.empresa_nome
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id AND ld.fim_vigencia IS NULL
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
        ) lot ON TRUE
        LEFT JOIN LATERAL (
          SELECT (pf.inicio + pf.dias - 1) AS fim
@@ -186,6 +207,7 @@ export async function listarEquipe(
   return linhas.map((linha) => ({
     ...linha,
     colaborador_id: Number(linha.colaborador_id),
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
   }));
 }
 
@@ -353,7 +375,11 @@ export async function apurarTurnover(
                 AND (v.fim_vigencia IS NULL OR v.fim_vigencia >= j.inicio)
                 AND c.data_desligamento IS NOT NULL
                 AND c.data_desligamento >= j.inicio
-                AND c.data_desligamento <= j.fim) AS desligados,
+                AND c.data_desligamento <= j.fim
+                -- Transferência entre empresas do grupo NÃO é desligamento:
+                -- a pessoa continua na casa (e continua nesta equipe, o que
+                -- fazia o mesmo nome entrar como "saiu" e como "está aqui").
+                AND ${SAIDA_DO_GRUPO("c")}) AS desligados,
             (SELECT count(DISTINCT v.colaborador_id)
                FROM vinculo v
                JOIN rh.colaborador c ON c.id = v.colaborador_id
@@ -457,6 +483,14 @@ export async function listarMarcosExperiencia(
           -- Processo que diz "sem contrato de experiência" encerra o assunto.
           -- Sem processo, cai na derivação por data de admissão (base legada).
           AND COALESCE(pa.contrato_experiencia, TRUE)
+          -- ...mas a derivação por data só vale para quem ENTROU no grupo.
+          -- A transferência entre empresas (0048) abre o vínculo novo com
+          -- data_admissao = data da transferência e não cria processo de
+          -- admissão nenhum: sem esta linha, quem está na casa há oito anos
+          -- ressuscita um contrato de experiência e o gestor recebe alerta
+          -- de "decidir efetivação em 45 dias". Quem TEM processo continua
+          -- valendo pelo processo, transferido ou não.
+          AND (pa.id IS NOT NULL OR ${ENTRADA_NO_GRUPO("c")})
      ),
      marcos AS (
        SELECT b.id, b.nome_completo, 45 AS marco,
@@ -507,17 +541,28 @@ export async function listarMarcosExperiencia(
 export interface VencimentoAso {
   colaborador_id: number;
   nome_completo: string;
-  validade: string;
-  dias_ate_validade: number;
+  /** null quando a pessoa não tem NENHUM ASO com validade registrada. */
+  validade: string | null;
+  /** null junto com `validade` — não há vencimento a contar. */
+  dias_ate_validade: number | null;
+  /** Régua do caso sem ASO: há quanto tempo o exame está pendente. */
+  data_admissao: string;
+  dias_desde_admissao: number;
 }
 
 /**
- * ASO vencido ou a vencer — SÓ O FATO DO VENCIMENTO.
+ * ASO vencido, a vencer OU NUNCA FEITO — SÓ O FATO DO VENCIMENTO.
  *
  * `resultado` (apto / apto com restrições / inapto), `tipo` do exame e
  * `restricoes_cifradas` ficam FORA desta consulta: são dado de saúde e
  * pertencem a quem tem sst.saude.ver (migration 0014). O gestor precisa saber
  * que precisa mandar a pessoa ao exame — nada mais.
+ *
+ * O LEFT JOIN LATERAL é deliberado. Com JOIN comum, quem tem ZERO linha em
+ * rh.aso não produzia linha nenhuma e sumia do alerta — justamente a admissão
+ * nova e o vínculo aberto por transferência entre CNPJs, que são quem MAIS
+ * precisa ir ao exame. Sem ASO é o caso mais grave da lista, não a ausência
+ * de caso; ordena pela admissão (quanto mais antiga, mais tempo pendente).
  */
 export async function listarVencimentosAso(
   gestorColaboradorId: number,
@@ -526,15 +571,19 @@ export async function listarVencimentosAso(
   const linhas = await consultar<{
     colaborador_id: string;
     nome_completo: string;
-    validade: string;
-    dias_ate_validade: number;
+    validade: string | null;
+    dias_ate_validade: number | null;
+    data_admissao: string;
+    dias_desde_admissao: number;
   }>(
     `SELECT c.id AS colaborador_id, c.nome_completo,
             ult.validade::text AS validade,
-            (ult.validade - ${HOJE_SP})::int AS dias_ate_validade
+            (ult.validade - ${HOJE_SP})::int AS dias_ate_validade,
+            c.data_admissao::text AS data_admissao,
+            (${HOJE_SP} - c.data_admissao)::int AS dias_desde_admissao
        FROM (${EQUIPE_VIGENTE}) eq
        JOIN rh.colaborador c ON c.id = eq.id
-       JOIN LATERAL (
+       LEFT JOIN LATERAL (
          SELECT a.validade
            FROM rh.aso a
           WHERE a.colaborador_id = c.id
@@ -543,8 +592,11 @@ export async function listarVencimentosAso(
           LIMIT 1
        ) ult ON TRUE
       WHERE c.status <> 'desligado'
-        AND (ult.validade - ${HOJE_SP}) <= $2::int
-      ORDER BY ult.validade, c.nome_completo`,
+        AND (ult.validade IS NULL
+             OR (ult.validade - ${HOJE_SP}) <= $2::int)
+      ORDER BY (ult.validade IS NOT NULL),
+               COALESCE(ult.validade, c.data_admissao),
+               c.nome_completo`,
     [gestorColaboradorId, antecedenciaDias]
   );
   return linhas.map((linha) => ({

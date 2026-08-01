@@ -321,7 +321,9 @@ export function PainelSst({
   const [asoTipo, setAsoTipo] = useState<TipoAso>("periodico");
   const [asoDataExame, setAsoDataExame] = useState("");
   const [asoValidade, setAsoValidade] = useState("");
-  const [asoResultado, setAsoResultado] = useState<ResultadoAso>("apto");
+  // Conclusão de médico do trabalho: nasce VAZIA. "Apto" é decisão clínica,
+  // não estado neutro que o formulário possa presumir por ordem do enum.
+  const [asoResultado, setAsoResultado] = useState<ResultadoAso | "">("");
   const [asoRestricoes, setAsoRestricoes] = useState("");
   const [asoDocumentoId, setAsoDocumentoId] = useState("");
   const [asoEnviando, setAsoEnviando] = useState(false);
@@ -334,7 +336,7 @@ export function PainelSst({
   const [asoComNr1, setAsoComNr1] = useState(false);
   const [asoNr1Data, setAsoNr1Data] = useState("");
   const [asoNr1Validade, setAsoNr1Validade] = useState("");
-  const [asoNr1Risco, setAsoNr1Risco] = useState<ClassificacaoRisco>("baixo");
+  const [asoNr1Risco, setAsoNr1Risco] = useState<ClassificacaoRisco | "">("");
   const [asoNr1Observacoes, setAsoNr1Observacoes] = useState("");
   const [asoNr1Empresa, setAsoNr1Empresa] = useState("");
   const [asoNr1DocumentoId, setAsoNr1DocumentoId] = useState("");
@@ -343,7 +345,7 @@ export function PainelSst({
     setAsoComNr1(false);
     setAsoNr1Data("");
     setAsoNr1Validade("");
-    setAsoNr1Risco("baixo");
+    setAsoNr1Risco("");
     setAsoNr1Observacoes("");
     setAsoNr1Empresa("");
     setAsoNr1DocumentoId("");
@@ -388,7 +390,7 @@ export function PainelSst({
         setAsoTipo("periodico");
         setAsoDataExame("");
         setAsoValidade("");
-        setAsoResultado("apto");
+        setAsoResultado("");
         setAsoRestricoes("");
         setAsoDocumentoId("");
         setAsoAviso(
@@ -413,7 +415,7 @@ export function PainelSst({
   const [nr1ColaboradorId, setNr1ColaboradorId] = useState("");
   const [nr1Data, setNr1Data] = useState("");
   const [nr1Validade, setNr1Validade] = useState("");
-  const [nr1Risco, setNr1Risco] = useState<ClassificacaoRisco>("baixo");
+  const [nr1Risco, setNr1Risco] = useState<ClassificacaoRisco | "">("");
   const [nr1Observacoes, setNr1Observacoes] = useState("");
   const [nr1Empresa, setNr1Empresa] = useState("");
   const [nr1DocumentoId, setNr1DocumentoId] = useState("");
@@ -447,7 +449,7 @@ export function PainelSst({
         setNr1ColaboradorId("");
         setNr1Data("");
         setNr1Validade("");
-        setNr1Risco("baixo");
+        setNr1Risco("");
         setNr1Observacoes("");
         setNr1Empresa("");
         setNr1DocumentoId("");
@@ -1026,11 +1028,13 @@ export function PainelSst({
                         <select
                           className={estilos.campo}
                           id="aso-resultado"
+                          required
                           value={asoResultado}
                           onChange={(e) =>
-                            setAsoResultado(e.target.value as ResultadoAso)
+                            setAsoResultado(e.target.value as ResultadoAso | "")
                           }
                         >
+                          <option value="">Escolha o resultado…</option>
                           {RESULTADOS_ASO.map((opcao) => (
                             <option key={opcao} value={opcao}>
                               {ROTULOS_RESULTADO_ASO[opcao]}
@@ -1146,13 +1150,15 @@ export function PainelSst({
                             <select
                               className={estilos.campo}
                               id="aso-nr1-risco"
+                              required
                               value={asoNr1Risco}
                               onChange={(e) =>
                                 setAsoNr1Risco(
-                                  e.target.value as ClassificacaoRisco
+                                  e.target.value as ClassificacaoRisco | ""
                                 )
                               }
                             >
+                              <option value="">Escolha a classificação…</option>
                               {CLASSIFICACOES_RISCO.map((opcao) => (
                                 <option key={opcao} value={opcao}>
                                   {ROTULOS_CLASSIFICACAO_RISCO[opcao]}
@@ -1506,11 +1512,13 @@ export function PainelSst({
                         <select
                           className={estilos.campo}
                           id="nr1-risco"
+                          required
                           value={nr1Risco}
                           onChange={(e) =>
-                            setNr1Risco(e.target.value as ClassificacaoRisco)
+                            setNr1Risco(e.target.value as ClassificacaoRisco | "")
                           }
                         >
+                          <option value="">Escolha a classificação…</option>
                           {CLASSIFICACOES_RISCO.map((opcao) => (
                             <option key={opcao} value={opcao}>
                               {ROTULOS_CLASSIFICACAO_RISCO[opcao]}

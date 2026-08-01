@@ -299,8 +299,11 @@ export function dataCurta(iso: string): string {
 //    todas as bases móveis.
 //  • QUADRO APROVADO × REALIZADO: falta o conceito de headcount orçado, que
 //    ainda não existe no modelo (mesma lacuna já registrada em /relatorios).
-//  • CALENDÁRIO DE FERIADOS: o absenteísmo usa dias úteis de seg a sex. Feriado
-//    nacional/municipal não está modelado em lugar nenhum do sistema; quando
-//    entrar, o denominador melhora sem mudar a fórmula.
+//  • ESCALA NO DENOMINADOR DO ABSENTEÍSMO: o card já desconta os feriados de
+//    rh.feriado (0027), mas o "dia esperado de trabalho" continua sendo seg–sex
+//    para todo mundo. Quem está em 6x1 ou 12x36 tem sábado, domingo e turno de
+//    12h tratados como se não existissem. Derivar o dia esperado da escala
+//    (rh.escala_colaborador) é conta do motor do ponto; consumi-la aqui melhora
+//    o denominador sem mudar a fórmula.
 //  • ROI DE TREINAMENTO: depende do módulo de T&D (hoje no Sults). O card diz
 //    isso na tela em vez de inventar número — ver `roi_treinamento`.

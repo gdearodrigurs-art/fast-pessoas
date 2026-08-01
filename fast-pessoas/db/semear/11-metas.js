@@ -225,11 +225,17 @@ async function resolverAutores(cliente) {
   return porEmail;
 }
 
+// Nome da unidade -> id do estabelecimento. O ROTEIRO escreve o nome porque é
+// legível, mas o que vai para o banco é o ID (migration 0049): meta por unidade
+// é presa pela unidade, não pelo nome dela.
 async function resolverUnidades(cliente) {
   const { rows } = await cliente.query(
-    "SELECT DISTINCT unidade FROM rh.estabelecimento_versao WHERE status = 'ativa'"
+    `SELECT ev.estabelecimento_id, ev.unidade
+       FROM rh.estabelecimento_versao ev
+       JOIN rh.estabelecimento e ON e.id = ev.estabelecimento_id
+      WHERE ev.status = 'ativa' AND e.inativado_em IS NULL`
   );
-  return new Set(rows.map((linha) => linha.unidade));
+  return new Map(rows.map((linha) => [linha.unidade, Number(linha.estabelecimento_id)]));
 }
 
 // ------------------------------------------------------------------ semeadura
@@ -261,16 +267,20 @@ async function semear(cliente) {
       if (meta.escopo !== ESCOPO_GLOBAL && !unidades.has(meta.escopo)) {
         throw new Error(
           `Escopo "${meta.escopo}" (indicador ${item.chave}) não é uma unidade ativa. ` +
-            `Unidades: ${[...unidades].sort().join(', ')}.`
+            `Unidades: ${[...unidades.keys()].sort().join(', ')}.`
         );
       }
+      const estabelecimentoId =
+        meta.escopo === ESCOPO_GLOBAL ? null : unidades.get(meta.escopo);
       const autor = autores.get(meta.autor);
       const encerrada = meta.encerrada_meses !== undefined;
 
       if (!encerrada) {
         // Espelha o índice único meta_indicador_ativa_unica antes de bater no
         // banco: erro aqui aponta a linha errada do ROTEIRO, não um 23505 cru.
-        const chaveAtiva = `${indicador.id}|${meta.escopo}`;
+        // A chave é o ID da unidade, igual ao índice — dois nomes diferentes da
+        // mesma unidade não podem passar como se fossem dois escopos.
+        const chaveAtiva = `${indicador.id}|${estabelecimentoId ?? ESCOPO_GLOBAL}`;
         if (ativasPorChave.has(chaveAtiva)) {
           throw new Error(
             `Duas metas ATIVAS para ${item.chave} no escopo "${meta.escopo}" — ` +
@@ -290,6 +300,7 @@ async function semear(cliente) {
       const inicio = mesesAtras(meta.vigencia_meses);
       linhas.push([
         indicador.id,
+        estabelecimentoId,
         meta.escopo,
         meta.valor,
         iso(inicio),
@@ -306,6 +317,7 @@ async function semear(cliente) {
     'rh.meta_indicador_versao',
     [
       'indicador_id',
+      'estabelecimento_id',
       'escopo',
       'valor',
       'inicio_vigencia',
@@ -322,18 +334,18 @@ async function semear(cliente) {
     `SELECT count(*)::int AS total,
             count(*) FILTER (WHERE status = 'ativa')::int AS ativas,
             count(*) FILTER (WHERE status = 'encerrada')::int AS encerradas,
-            count(*) FILTER (WHERE status = 'ativa' AND escopo <> $1)::int AS por_unidade,
+            count(*) FILTER (WHERE status = 'ativa'
+                             AND estabelecimento_id IS NOT NULL)::int AS por_unidade,
             count(DISTINCT indicador_id)::int AS indicadores
-       FROM rh.meta_indicador_versao`,
-    [ESCOPO_GLOBAL]
+       FROM rh.meta_indicador_versao`
   );
   const totais = resumo[0];
 
   const { rows: comHistorico } = await cliente.query(
     `SELECT count(*)::int AS total FROM (
-       SELECT indicador_id, escopo
+       SELECT indicador_id, estabelecimento_id
          FROM rh.meta_indicador_versao
-        GROUP BY indicador_id, escopo
+        GROUP BY indicador_id, estabelecimento_id
        HAVING count(*) > 1) AS h`
   );
   if (comHistorico[0].total < 1) {
@@ -343,8 +355,7 @@ async function semear(cliente) {
   const { rows: unidadesComMeta } = await cliente.query(
     `SELECT count(DISTINCT indicador_id)::int AS total
        FROM rh.meta_indicador_versao
-      WHERE status = 'ativa' AND escopo <> $1`,
-    [ESCOPO_GLOBAL]
+      WHERE status = 'ativa' AND estabelecimento_id IS NOT NULL`
   );
   if (unidadesComMeta[0].total < 2) {
     throw new Error('Menos de 2 indicadores com meta por unidade — o escopo por unidade não aparece.');
@@ -470,7 +481,7 @@ SELECT i.chave, i.unidade, m.valor AS meta, a.valor,
   FROM apurado a
   JOIN rh.indicador i ON i.chave = a.chave
   JOIN rh.meta_indicador_versao m
-    ON m.indicador_id = i.id AND m.escopo = 'global' AND m.status = 'ativa'
+    ON m.indicador_id = i.id AND m.estabelecimento_id IS NULL AND m.status = 'ativa'
  ORDER BY situacao, i.chave`;
 
 module.exports = { semear, ROTEIRO };

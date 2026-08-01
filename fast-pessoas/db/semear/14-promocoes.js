@@ -215,7 +215,8 @@ async function resolverAlvo(cliente, alvo) {
             p.id AS posicao_id, p.inicio_vigencia::text AS posicao_inicio,
             p.salario, cv.nome AS cargo_atual, cv.cargo_id AS cargo_atual_id,
             l.id AS lotacao_id, l.inicio_vigencia::text AS lotacao_inicio,
-            l.centro_custo, l.estabelecimento_id, ev.unidade
+            l.centro_custo, l.centro_custo_id, l.empresa_id,
+            l.estabelecimento_id, ev.unidade
        FROM rh.colaborador c
        JOIN sistema.usuario u ON u.id = c.usuario_id
        JOIN rh.posicao_colaborador p
@@ -246,6 +247,8 @@ async function resolverAlvo(cliente, alvo) {
     lotacaoId: Number(linha.lotacao_id),
     lotacaoInicio: linha.lotacao_inicio,
     centroCusto: linha.centro_custo,
+    centroCustoId: Number(linha.centro_custo_id),
+    empresaId: Number(linha.empresa_id),
     estabelecimentoId: Number(linha.estabelecimento_id),
     unidade: linha.unidade,
   };
@@ -296,13 +299,14 @@ async function resolverUnidadeDestino(cliente, nome) {
   const linha = await umaLinha(
     cliente,
     `SELECT ev.estabelecimento_id, ev.unidade,
-            (SELECT l.centro_custo
+            -- Centro de custo "da casa": o mais usado por quem está lotado ali.
+            (SELECT l.centro_custo_id
                FROM rh.lotacao l
               WHERE l.estabelecimento_id = ev.estabelecimento_id
                 AND l.fim_vigencia IS NULL
-              GROUP BY l.centro_custo
-              ORDER BY count(*) DESC, l.centro_custo
-              LIMIT 1) AS centro_custo
+              GROUP BY l.centro_custo_id
+              ORDER BY count(*) DESC, l.centro_custo_id
+              LIMIT 1) AS centro_custo_id
        FROM rh.estabelecimento_versao ev
       WHERE ev.status = 'ativa' AND ev.unidade = $1`,
     [nome],
@@ -311,7 +315,8 @@ async function resolverUnidadeDestino(cliente, nome) {
   return {
     id: Number(linha.estabelecimento_id),
     unidade: linha.unidade,
-    centroCusto: linha.centro_custo,
+    centroCustoId:
+      linha.centro_custo_id === null ? null : Number(linha.centro_custo_id),
   };
 }
 
@@ -334,6 +339,23 @@ async function semear(cliente) {
     'rh.evento_colaborador',
     'sistema.notificacao',
   ];
+  // GUARDA: a transferência ENTRE EMPRESAS (16-transferencia-empresa.js) também
+  // mora em rh.demanda_movimentacao, mas o efeito dela cria um VÍNCULO. A
+  // limpeza abaixo desfaz posição e lotação e apaga a movimentação — o vínculo
+  // novo ficaria órfão, sem ninguém apontando para ele. Numa execução completa
+  // isso nunca acontece (00-limpar zera tudo e o 16 roda depois); só dá para
+  // cair aqui rodando o 14 sozinho depois do 16.
+  const { rows: transferenciasEmpresa } = await cliente.query(
+    `SELECT count(*)::int AS total FROM rh.demanda_movimentacao
+      WHERE tipo = 'transferencia_empresa'`
+  );
+  if (transferenciasEmpresa[0].total > 0) {
+    throw new Error(
+      'Existe transferência entre empresas do grupo aplicada no banco. Desfazê-la é do ' +
+        '16-transferencia-empresa.js, não daqui — rode `npm run db:demo` (ou o 16 sozinho, ' +
+        'que desfaz a anterior) em vez de rodar só o 14.'
+    );
+  }
   const removidos = await comTriggersDesligados(cliente, TABELAS_TRIGGER, async () => {
     const { rows: anteriores } = await cliente.query(
       `SELECT m.id, m.demanda_id, m.posicao_id, m.lotacao_id, m.colaborador_id
@@ -561,7 +583,7 @@ async function semear(cliente) {
       'rh.demanda_movimentacao',
       [
         'demanda_id', 'tipo', 'colaborador_id', 'cargo_destino_id',
-        'estabelecimento_destino_id', 'centro_custo_destino', 'salario_proposto',
+        'estabelecimento_destino_id', 'centro_custo_destino_id', 'salario_proposto',
         'faixa_min', 'faixa_max', 'dentro_faixa', 'justificativa_excecao',
         'data_pretendida', 'justificativa', 'criado_em',
       ],
@@ -572,7 +594,7 @@ async function semear(cliente) {
           alvo.id,
           ehPromocao ? destinoCargo.cargoId : null,
           ehPromocao ? null : destinoUnidade.id,
-          ehPromocao ? null : destinoUnidade.centroCusto,
+          ehPromocao ? null : destinoUnidade.centroCustoId,
           cenario.salarioProposto === null ? null : cenario.salarioProposto.toFixed(2),
           ehPromocao && destinoCargo.faixaMin !== null
             ? destinoCargo.faixaMin.toFixed(2)
@@ -699,14 +721,17 @@ async function semear(cliente) {
         'UPDATE rh.lotacao SET fim_vigencia = $2::date - 1 WHERE id = $1',
         [alvo.lotacaoId, dataPretendida]
       );
-      const centroCusto = destinoUnidade.centroCusto ?? alvo.centroCusto;
+      // Transferência de unidade não muda a EMPRESA: trocar de CNPJ é
+      // desligamento + nova admissão (outro vínculo).
+      const centroCustoId = destinoUnidade.centroCustoId ?? alvo.centroCustoId;
       const [nova] = await inserirLote(
         cliente,
         'rh.lotacao',
-        ['colaborador_id', 'estabelecimento_id', 'centro_custo', 'inicio_vigencia', 'criado_em'],
-        [[alvo.id, destinoUnidade.id, centroCusto, dataPretendida, isoInstante(decisao)]],
-        'id'
+        ['colaborador_id', 'empresa_id', 'estabelecimento_id', 'centro_custo_id', 'inicio_vigencia', 'criado_em'],
+        [[alvo.id, alvo.empresaId, destinoUnidade.id, centroCustoId, dataPretendida, isoInstante(decisao)]],
+        'id, centro_custo'
       );
+      const centroCusto = nova.centro_custo;
       lotacaoNovaId = Number(nova.id);
       resumoEvento =
         `${rotuloTipo}: ${alvo.unidade} → ${destinoUnidade.unidade} ` +

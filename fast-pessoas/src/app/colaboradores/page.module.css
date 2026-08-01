@@ -293,3 +293,41 @@
   font-size: 14px;
   padding: 8px 4px;
 }
+
+/* Reconhecimento de CPF já cadastrado: NÃO é erro (borda vermelha), é uma
+   pergunta — quem está admitindo precisa ler quem o sistema encontrou antes de
+   decidir. Por isso o tom de atenção, e não o de recusa. */
+.reconhecida {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #c98a12;
+  border-radius: 8px;
+  background: #fdf8ec;
+  font-size: 0.9rem;
+}
+
+.reconhecida h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.reconhecida p {
+  margin: 0 0 8px;
+}
+
+.vinculosAnteriores {
+  margin: 8px 0;
+  padding-left: 18px;
+  color: #6b6763;
+}
+
+.vinculosAnteriores li {
+  margin-bottom: 4px;
+}
+
+.acoesReconhecida {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

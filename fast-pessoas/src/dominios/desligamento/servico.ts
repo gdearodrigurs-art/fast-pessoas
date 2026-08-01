@@ -54,6 +54,7 @@ import {
   ColaboradorElegivel,
   colaboradoresElegiveis,
   ehGestorDoColaborador,
+  encerrarLiderancaNoDesligamento,
   encerrarProcesso,
   EntrevistaResumo,
   existeProcessoAberto,
@@ -72,6 +73,7 @@ import {
   registrarEntrevistaNaoRealizada,
   registrarEntrevistaRealizada,
   registrarLeituraSensivel,
+  relacoesLiderancaAbertas,
   temAfastamentoAcidentario12m,
   temPermissao,
   TipoDesligamentoAtivo,
@@ -641,9 +643,80 @@ export async function encerrarProcessoDesligamento(
       },
     });
 
+    // LIDERANÇA — encerrada no MESMO ato, nos DOIS papéis.
+    // Enquanto a linha de rh.relacao_gestor fica sem fim de vigência, o
+    // desligado segue "liderado vigente" (entra no portal do gestor, no
+    // organograma e nas consultas de equipe) e segue GESTOR VIGENTE de quem
+    // ficou — uma equipe pendurada em quem não trabalha mais aqui, com a
+    // aprovação de demanda endereçada a uma conta já desativada.
+    //
+    // DECISÃO SOBRE OS ÓRFÃOS (explícita, não implícita): encerra e EXIGE novo
+    // gestor. Subir a equipe automaticamente para o gestor do gestor daria a um
+    // terceiro, por efeito colateral, acesso à ficha, ao ponto e à aprovação de
+    // gente que ninguém o designou para liderar — autorização nunca nasce de
+    // efeito colateral aqui. Quem ficou sem gestor vira raiz no organograma, o
+    // ato de designar continua sendo do DP (tela de colaboradores) e o fato não
+    // fica mudo: entra na trilha e na linha do tempo de cada um.
+    const liderancas = await relacoesLiderancaAbertas(
+      cliente,
+      processo.colaborador_id
+    );
+    const orfaos = liderancas.filter((relacao) => relacao.papel === "gestor");
+    const gestorDele = liderancas.find(
+      (relacao) => relacao.papel === "liderado"
+    );
+    for (const relacao of liderancas) {
+      await encerrarLiderancaNoDesligamento(
+        cliente,
+        relacao.id,
+        dados.data_termino_efetiva
+      );
+    }
+    if (liderancas.length > 0) {
+      const diffLideranca: Diff = {};
+      if (gestorDele) {
+        diffLideranca["Liderado por"] = {
+          de: gestorDele.contraparte_nome,
+          para: `Encerrado em ${formatarData(dados.data_termino_efetiva)}`,
+        };
+      }
+      if (orfaos.length > 0) {
+        diffLideranca["Equipe que liderava (ficou sem gestor)"] = {
+          de: orfaos.map((relacao) => relacao.contraparte_nome).join("; "),
+          para: `${orfaos.length} pessoa(s) aguardando novo gestor — designar em Colaboradores`,
+        };
+      }
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "desligamento.lideranca",
+        tabela: "rh.relacao_gestor",
+        registroId: `colaborador:${processo.colaborador_id}`,
+        diff: diffLideranca,
+      });
+    }
+    // Na ficha de cada órfão, para o DP achar sem varrer auditoria.
+    for (const relacao of orfaos) {
+      await inserirEvento(cliente, {
+        colaborador_id: relacao.contraparte_id,
+        tipo: "lideranca_encerrada",
+        ocorrido_em: `${dados.data_termino_efetiva}T00:00:00Z`,
+        origem_tabela: TABELA_PROCESSO,
+        origem_id: id,
+        resumo: `Ficou sem gestor: ${processo.colaborador_nome} foi desligado em ${formatarData(dados.data_termino_efetiva)} — aguardando o DP designar o novo gestor`,
+        payload: { gestor_anterior_colaborador_id: processo.colaborador_id },
+        registrado_por: sessao.usuario_id,
+      });
+    }
+
     // Revogação de acesso na MESMA transação — garantia estrutural.
-    if (colaborador.usuario_ativo) {
-      await desativarUsuario(cliente, colaborador.usuario_id);
+    // A conta é da PESSOA (0046): `desativarUsuario` só revoga quando não
+    // sobra nenhum vínculo em pé, para não trancar quem foi desligado de uma
+    // empresa do grupo e segue trabalhando em outra.
+    if (
+      colaborador.usuario_ativo &&
+      (await desativarUsuario(cliente, colaborador.usuario_id))
+    ) {
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,

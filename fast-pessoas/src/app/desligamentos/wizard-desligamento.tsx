@@ -50,8 +50,11 @@ export function WizardDesligamento({
   const [passo, setPasso] = useState(0);
   const [colaboradorId, setColaboradorId] = useState<number | "">("");
   const [tipoVersaoId, setTipoVersaoId] = useState<number | "">("");
-  const [iniciativa, setIniciativa] = useState<Iniciativa>("empregador");
-  const [modalidade, setModalidade] = useState<ModalidadeAviso>("trabalhado");
+  // Qualificação jurídica da rescisão: nasce VAZIA. Pedido de demissão e
+  // dispensa sem justa causa são coisas diferentes e o campo fica no registro
+  // permanente da pessoa — o wizard não escolhe por quem assina.
+  const [iniciativa, setIniciativa] = useState<Iniciativa | "">("");
+  const [modalidade, setModalidade] = useState<ModalidadeAviso | "">("");
   const [dataComunicacao, setDataComunicacao] = useState("");
   const [dataTermino, setDataTermino] = useState("");
   const [motivo, setMotivo] = useState("");
@@ -107,6 +110,8 @@ export function WizardDesligamento({
     if (passo === 1) {
       return (
         tipoVersaoId !== "" &&
+        iniciativa !== "" &&
+        modalidade !== "" &&
         dataComunicacao !== "" &&
         dataTermino !== "" &&
         dataTermino >= dataComunicacao
@@ -272,9 +277,11 @@ export function WizardDesligamento({
             <select
               className={comum.campo}
               id="wizard-iniciativa"
+              required
               value={iniciativa}
-              onChange={(e) => setIniciativa(e.target.value as Iniciativa)}
+              onChange={(e) => setIniciativa(e.target.value as Iniciativa | "")}
             >
+              <option value="">Escolha a iniciativa…</option>
               {INICIATIVAS.map((valor) => (
                 <option key={valor} value={valor}>
                   {ROTULOS_INICIATIVA[valor]}
@@ -288,9 +295,13 @@ export function WizardDesligamento({
             <select
               className={comum.campo}
               id="wizard-modalidade"
+              required
               value={modalidade}
-              onChange={(e) => setModalidade(e.target.value as ModalidadeAviso)}
+              onChange={(e) =>
+                setModalidade(e.target.value as ModalidadeAviso | "")
+              }
             >
+              <option value="">Escolha a modalidade…</option>
               {MODALIDADES_AVISO.map((valor) => (
                 <option key={valor} value={valor}>
                   {ROTULOS_MODALIDADE_AVISO[valor]}
@@ -448,9 +459,11 @@ export function WizardDesligamento({
               <br />
               <b>Tipo:</b> {tipoSelecionado?.nome ?? "—"}
               <br />
-              <b>Iniciativa:</b> {ROTULOS_INICIATIVA[iniciativa]}
+              <b>Iniciativa:</b>{" "}
+              {iniciativa ? ROTULOS_INICIATIVA[iniciativa] : "—"}
               <br />
-              <b>Aviso:</b> {ROTULOS_MODALIDADE_AVISO[modalidade]}
+              <b>Aviso:</b>{" "}
+              {modalidade ? ROTULOS_MODALIDADE_AVISO[modalidade] : "—"}
               <br />
               <b>Comunicação:</b>{" "}
               {dataComunicacao ? formatarData(dataComunicacao) : "—"} ·{" "}

@@ -332,7 +332,7 @@ export async function buscarColaboradorPorUsuario(
        LEFT JOIN rh.estabelecimento_versao ev
               ON ev.estabelecimento_id = l.estabelecimento_id
              AND ev.status = 'ativa'
-      WHERE c.usuario_id = $1`,
+      WHERE c.id = rh.vinculo_atual($1)`,
     [usuarioId]
   );
   if (linhas.length === 0) return null;
@@ -345,21 +345,39 @@ export async function buscarColaboradorPorUsuario(
   };
 }
 
+/**
+ * "Já respondi?" é pergunta da PESSOA, não do contrato.
+ *
+ * Perguntar por `colaborador_id` estava certo enquanto vínculo e pessoa eram a
+ * mesma coisa. Depois da 0046/0048, quem é transferido entre empresas do grupo
+ * no meio da janela passa a ser lido por `rh.vinculo_atual` como um vínculo
+ * NOVO — e a pesquisa que ele já respondeu reaparecia como não respondida. A
+ * trava de banco (0052, UNIQUE por pessoa) impede a resposta dupla; esta
+ * consulta é a metade que impede a TELA de convidar para ela.
+ */
 export async function jaParticipou(
   pesquisaId: number,
   colaboradorId: number
 ): Promise<boolean> {
   const linhas = await consultar<{ existe: boolean }>(
     `SELECT EXISTS (
-       SELECT 1 FROM rh_clima.participacao_pesquisa
-        WHERE pesquisa_id = $1 AND colaborador_id = $2
+       SELECT 1 FROM rh_clima.participacao_pesquisa pa
+        WHERE pa.pesquisa_id = $1
+          AND pa.pessoa_id = (SELECT c.pessoa_id
+                                FROM rh.colaborador c
+                               WHERE c.id = $2)
      ) AS existe`,
     [pesquisaId, colaboradorId]
   );
   return Boolean(linhas[0]?.existe);
 }
 
-/** Pesquisas abertas e dentro do período, com a marca de já respondida. */
+/**
+ * Pesquisas abertas e dentro do período, com a marca de já respondida.
+ *
+ * `respondida` sai pela PESSOA (ver `jaParticipou`): o vínculo aberto por
+ * transferência entre CNPJs não devolve o direito de responder de novo.
+ */
 export async function listarAbertasParaColaborador(
   colaboradorId: number | null
 ): Promise<
@@ -392,7 +410,10 @@ export async function listarAbertasParaColaborador(
               WHEN $1::bigint IS NULL THEN FALSE
               ELSE EXISTS (
                 SELECT 1 FROM rh_clima.participacao_pesquisa pa
-                 WHERE pa.pesquisa_id = p.id AND pa.colaborador_id = $1::bigint
+                 WHERE pa.pesquisa_id = p.id
+                   AND pa.pessoa_id = (SELECT c.pessoa_id
+                                         FROM rh.colaborador c
+                                        WHERE c.id = $1::bigint)
               )
             END AS respondida
        FROM rh_clima.pesquisa p

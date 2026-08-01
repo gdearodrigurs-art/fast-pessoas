@@ -1,5 +1,9 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
+import {
+  FiltroEstrutura,
+  OpcoesFiltroEstrutura,
+} from "../estrutura/esquemas";
 import { TIPOS_INTERCORRENCIA_QUE_MUDAM_A_APURACAO } from "../ponto/esquemas";
 import {
   FaixaInssMotor,
@@ -38,6 +42,25 @@ const TABELAS_LEGAIS: Record<TipoTabelaLegal, string> = {
   irrf: "rh_folha.tabela_irrf_versao",
   gerais: "rh_folha.parametro_folha_versao",
 };
+
+/**
+ * HOJE no fuso de negócio (`rh.hoje()`, migração 0049) — a data de referência
+ * das duas telas que NÃO falam de competência nenhuma: o catálogo de parâmetros
+ * ("o que vale agora") e a suite de regressão, que roda contra as tabelas em
+ * vigor hoje justamente para tocar o alarme quando uma tabela nova entra.
+ *
+ * NÃO use isto para calcular competência. Competência tem data própria e é o
+ * último dia dela — `dataReferenciaCompetencia` em esquemas.ts. Foi exatamente
+ * a confusão entre as duas datas que fazia a folha de julho pagar o salário de
+ * agosto.
+ */
+export async function hojeParaFolha(cliente?: PoolClient): Promise<string> {
+  const sql = `SELECT rh.hoje()::text AS hoje`;
+  const linhas = cliente
+    ? (await cliente.query<{ hoje: string }>(sql)).rows
+    : await consultar<{ hoje: string }>(sql);
+  return linhas[0].hoje;
+}
 
 // ------------------------------------------------------------------ competência
 
@@ -183,6 +206,51 @@ export async function fecharCompetencia(
 }
 
 // ------------------------------------------------------------------ colaboradores para o cálculo
+//
+// TUDO AQUI SE RESOLVE NA DATA DE REFERÊNCIA DA COMPETÊNCIA — nunca em "hoje".
+// Quem calcula precisa saber quanto a pessoa ganhava NAQUELE mês, com a jornada
+// daquele mês e os dependentes que já existiam. Ler o cadastro de agora fazia
+// duas coisas erradas ao mesmo tempo: um aumento com vigência de agosto já era
+// pago na folha de julho, e RECALCULAR uma competência devolvia um resultado
+// diferente do primeiro cálculo só porque o cadastro andou no meio.
+//
+// É a mesma régua que rh_folha.apropriacao_competencia (0047) usa para dizer
+// ONDE o custo cai; faltava usá-la para dizer QUANTO é o custo.
+
+/** `vigente na data` — o recorte que substituiu `fim_vigencia IS NULL`. */
+function vigenteEm(alias: string, parametro: string): string {
+  return `${alias}.inicio_vigencia <= ${parametro}
+       AND (${alias}.fim_vigencia IS NULL OR ${alias}.fim_vigencia >= ${parametro})`;
+}
+
+/**
+ * Vínculo VIVO NO FIM DA COMPETÊNCIA — a mesma régua (o último dia) que a
+ * apropriação usa para dizer onde o custo cai. Admitido até o último dia entra;
+ * desligado dentro da competência (inclusive no último dia) não entra, porque a
+ * rescisão não sai desta folha — `listarAvisosProporcional` é quem cobra o
+ * tratamento manual dos dois casos.
+ *
+ * O que muda: `status` era BANDEIRA DE HOJE e decidia o passado. Demitir alguém
+ * em agosto apagava a linha dessa pessoa de um recálculo de julho, e quem seria
+ * admitido em setembro já entrava na folha de julho.
+ *
+ * RESÍDUO CONHECIDO, deixado de propósito: `status <> 'afastado'` continua sendo
+ * bandeira de hoje. Ela não foi trocada por data porque a troca não é mecânica —
+ * é decisão de negócio, e cara:
+ *   - hoje NENHUM vínculo carrega o status 'afastado' (o módulo guarda o período
+ *     em rh.afastamento, com `inicio`/`fim`), então esta condição não exclui
+ *     ninguém na prática — ela é rede morta;
+ *   - resolver por data usando rh.afastamento excluiria da folha do mês inteiro
+ *     quem teve QUALQUER afastamento no período (na base de hoje, 3 pessoas em
+ *     07/2026), inclusive um afastamento de dois dias. Isso é proporcional, e o
+ *     F1 declaradamente não faz proporcional (calculo.ts).
+ * Enquanto o dono não decidir a regra (mês inteiro? proporcional? só acima de N
+ * dias?), quem se afasta no meio do mês aparece em `listarAvisosProporcional`
+ * para tratamento manual — que é o mesmo caminho da admissão e do desligamento.
+ */
+const VINCULO_NA_DATA = `c.data_admissao <= $1
+     AND (c.data_desligamento IS NULL OR c.data_desligamento > $1)
+     AND c.status <> 'afastado'`;
 
 export interface ImpedidoCalculo {
   colaborador_id: number;
@@ -191,26 +259,148 @@ export interface ImpedidoCalculo {
   motivo: string;
 }
 
-const SEM_POSICAO = `
-  SELECT c.id, c.nome_completo, c.matricula
-    FROM rh.colaborador c
-   WHERE c.status = 'ativo'
-     AND NOT EXISTS (
-       SELECT 1 FROM rh.posicao_colaborador p
-        WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL)
-   ORDER BY c.nome_completo, c.id`;
-
 export async function listarImpedidos(
+  dataRef: string,
   cliente?: PoolClient
 ): Promise<ImpedidoCalculo[]> {
+  const sql = `
+    SELECT c.id, c.nome_completo, c.matricula
+      FROM rh.colaborador c
+     WHERE ${VINCULO_NA_DATA}
+       AND NOT EXISTS (
+         SELECT 1 FROM rh.posicao_colaborador p
+          WHERE p.colaborador_id = c.id AND ${vigenteEm("p", "$1")})
+     ORDER BY c.nome_completo, c.id`;
   const linhas = cliente
-    ? (await cliente.query<{ id: string; nome_completo: string; matricula: string }>(SEM_POSICAO)).rows
-    : await consultar<{ id: string; nome_completo: string; matricula: string }>(SEM_POSICAO);
+    ? (await cliente.query<{ id: string; nome_completo: string; matricula: string }>(sql, [dataRef])).rows
+    : await consultar<{ id: string; nome_completo: string; matricula: string }>(sql, [dataRef]);
   return linhas.map((linha) => ({
     colaborador_id: Number(linha.id),
     nome_completo: linha.nome_completo,
     matricula: linha.matricula,
-    motivo: "sem posição/salário vigente",
+    motivo: "sem posição/salário vigente na competência",
+  }));
+}
+
+// ------------------------------------------------------------------ avisos de proporcional
+
+export interface AvisoProporcional {
+  colaborador_id: number;
+  nome_completo: string;
+  matricula: string;
+  motivo: string;
+  entra_no_calculo: boolean;
+}
+
+/**
+ * Quem MUDOU DE ESTADO dentro do mês da competência — admissão, desligamento,
+ * transferência entre CNPJs ou AFASTAMENTO que toca o período.
+ *
+ * O motor é declaradamente "folha mensal ordinária" e não faz proporcional de
+ * admissão nem de desligamento (calculo.ts). Isso é decisão registrada — mas
+ * até aqui a única lista de aviso da tela era `impedidos`, cujo único motivo
+ * possível é "sem posição/salário vigente". Quem foi desligado no dia 10 e quem
+ * foi admitido no dia 28 não apareciam em lugar nenhum: a folha errava sozinha
+ * e em silêncio.
+ *
+ * O caso mais caro é a transferência entre empresas do grupo (0048): o vínculo
+ * velho fica 'desligado' e sai do cálculo, o vínculo novo nasce 'ativo' e entra
+ * com salário CHEIO por poucos dias — e, como a folha aponta para o centro de
+ * custo, o custo inteiro cai no CNPJ errado. Por isso o aviso da transferência
+ * nomeia as DUAS empresas: o dinheiro está atravessando CNPJ.
+ *
+ * Não calcula nada: informa, para o DP tratar por lançamento manual.
+ */
+export async function listarAvisosProporcional(
+  ano: number,
+  mes: number,
+  cliente?: PoolClient
+): Promise<AvisoProporcional[]> {
+  const sql = `
+    WITH janela AS (
+      SELECT make_date($1::int, $2::int, 1) AS inicio,
+             (make_date($1::int, $2::int, 1) + INTERVAL '1 month - 1 day')::date AS fim
+    ),
+    empresa_do_vinculo AS (
+      SELECT ld.colaborador_id,
+             ld.empresa_nome,
+             row_number() OVER (PARTITION BY ld.colaborador_id
+                                ORDER BY ld.inicio_vigencia DESC, ld.id DESC) AS ordem
+        FROM rh.lotacao_detalhada ld
+    )
+    SELECT c.id, c.nome_completo, c.matricula,
+           (c.status = 'ativo') AS entra_no_calculo,
+           CASE
+             WHEN c.data_admissao NOT BETWEEN j.inicio AND j.fim
+              AND (c.data_desligamento IS NULL
+                   OR c.data_desligamento NOT BETWEEN j.inicio AND j.fim) THEN
+               'afastado de ' || to_char(af.inicio, 'DD/MM')
+               || coalesce(' a ' || to_char(af.fim, 'DD/MM'), ' (em aberto)')
+               || ' — o F1 não apura afastamento: entra com salário do mês inteiro'
+             WHEN c.sucede_vinculo_id IS NOT NULL THEN
+               'admitido em ' || to_char(c.data_admissao, 'DD/MM')
+               || ' por transferência de ' || coalesce(orig.empresa_nome, 'outra empresa do grupo')
+               || ' para ' || coalesce(dest.empresa_nome, 'esta empresa')
+               || ' — entra com salário do mês inteiro'
+             WHEN c.data_desligamento IS NOT NULL AND NOT rh.saiu_do_grupo(c.id) THEN
+               'encerrado em ' || to_char(c.data_desligamento, 'DD/MM')
+               || ' por transferência de ' || coalesce(dest.empresa_nome, 'esta empresa')
+               || ' para ' || coalesce(suc_emp.empresa_nome, 'outra empresa do grupo')
+               || ' — os dias trabalhados aqui não entram em nenhuma folha'
+             WHEN c.data_desligamento IS NOT NULL THEN
+               'desligado em ' || to_char(c.data_desligamento, 'DD/MM')
+               || ' — a rescisão não é calculada por esta competência'
+             ELSE
+               'admitido em ' || to_char(c.data_admissao, 'DD/MM')
+               || ' — entra com salário do mês inteiro'
+           END AS motivo
+      FROM rh.colaborador c
+      CROSS JOIN janela j
+      LEFT JOIN empresa_do_vinculo dest
+             ON dest.colaborador_id = c.id AND dest.ordem = 1
+      LEFT JOIN empresa_do_vinculo orig
+             ON orig.colaborador_id = c.sucede_vinculo_id AND orig.ordem = 1
+      LEFT JOIN rh.colaborador suc ON suc.sucede_vinculo_id = c.id
+      LEFT JOIN empresa_do_vinculo suc_emp
+             ON suc_emp.colaborador_id = suc.id AND suc_emp.ordem = 1
+      -- O afastamento que TOCA a competência (o primeiro, se houver mais de um).
+      -- O período mora em rh.afastamento COM DATA; o status do vínculo não serve
+      -- para isto porque é bandeira de hoje.
+      LEFT JOIN LATERAL (
+             SELECT a.inicio, a.fim
+               FROM rh.afastamento a
+              WHERE a.colaborador_id = c.id
+                AND a.inicio <= j.fim
+                AND (a.fim IS NULL OR a.fim >= j.inicio)
+              ORDER BY a.inicio, a.id
+              LIMIT 1) af ON TRUE
+     WHERE (c.data_admissao BETWEEN j.inicio AND j.fim)
+        OR (c.data_desligamento BETWEEN j.inicio AND j.fim)
+        OR af.inicio IS NOT NULL
+     ORDER BY c.nome_completo, c.id`;
+  const linhas = cliente
+    ? (
+        await cliente.query<{
+          id: string;
+          nome_completo: string;
+          matricula: string;
+          motivo: string;
+          entra_no_calculo: boolean;
+        }>(sql, [ano, mes])
+      ).rows
+    : await consultar<{
+        id: string;
+        nome_completo: string;
+        matricula: string;
+        motivo: string;
+        entra_no_calculo: boolean;
+      }>(sql, [ano, mes]);
+  return linhas.map((linha) => ({
+    colaborador_id: Number(linha.id),
+    nome_completo: linha.nome_completo,
+    matricula: linha.matricula,
+    motivo: linha.motivo,
+    entra_no_calculo: linha.entra_no_calculo,
   }));
 }
 
@@ -220,19 +410,35 @@ export interface ColaboradorCalculo {
   matricula: string;
   salario_centavos: number;
   dependentes_irrf: number;
-  /** Carga semanal da jornada vigente — dá o divisor da hora (0038). */
+  /** Carga semanal da jornada da COMPETÊNCIA — dá o divisor da hora (0038). */
   carga_semanal_minutos: number | null;
 }
 
 /**
- * A escala entra por LEFT JOIN de propósito: quem não tem jornada cadastrada
- * continua entrando no cálculo (cai no divisor de referência dos parâmetros),
- * em vez de sumir da folha por causa de um cadastro de ponto que falta. O JOIN
- * não duplica linha — rh.escala_colaborador tem índice único de uma vigente por
- * pessoa (escala_colaborador_uma_vigente, migração 0027).
+ * Salário, jornada e dependentes COMO ESTAVAM na data de referência da
+ * competência — não como estão hoje.
+ *
+ * Cada um vem por LATERAL com LIMIT 1 em vez de JOIN direto: o banco só garante
+ * "uma vigente" para a linha em aberto (posicao_colaborador_uma_vigente,
+ * escala_colaborador_uma_vigente — ambos parciais em `fim_vigencia IS NULL`), e
+ * nada impede duas vigências históricas se sobreporem num dia. Com JOIN direto
+ * isso duplicaria a linha da pessoa e a folha tentaria gravar duas vezes o
+ * mesmo colaborador na competência; com LATERAL, a mais recente ganha e a folha
+ * sai com uma linha por pessoa, doa o que doer no histórico.
+ *
+ * A escala continua por LEFT JOIN de propósito: quem não tem jornada cadastrada
+ * naquele mês continua entrando no cálculo (cai no divisor de referência dos
+ * parâmetros), em vez de sumir da folha por causa de um cadastro de ponto que
+ * falta.
+ *
+ * Dependente conta por NASCIMENTO, não por data de cadastro: a dedução de IRRF
+ * é devida desde que o dependente existe, e cadastrar em setembro um filho
+ * nascido em maio não pode mudar o que julho já deveria ter deduzido — nem o
+ * filho que nasce em setembro pode aparecer na folha de julho.
  */
 export async function listarColaboradoresParaCalculo(
-  cliente: PoolClient
+  cliente: PoolClient,
+  dataRef: string
 ): Promise<ColaboradorCalculo[]> {
   const { rows } = await cliente.query<{
     id: string;
@@ -244,16 +450,26 @@ export async function listarColaboradoresParaCalculo(
   }>(
     `SELECT c.id, c.nome_completo, c.matricula, p.salario::text AS salario,
             (SELECT COUNT(*) FROM rh.dependente d
-              WHERE d.colaborador_id = c.id) AS dependentes,
+              WHERE d.colaborador_id = c.id
+                AND (d.nascimento IS NULL OR d.nascimento <= $1)) AS dependentes,
             j.carga_semanal_minutos
        FROM rh.colaborador c
-       JOIN rh.posicao_colaborador p
-         ON p.colaborador_id = c.id AND p.fim_vigencia IS NULL
-       LEFT JOIN rh.escala_colaborador e
-         ON e.colaborador_id = c.id AND e.fim_vigencia IS NULL
+       JOIN LATERAL (
+              SELECT p.salario
+                FROM rh.posicao_colaborador p
+               WHERE p.colaborador_id = c.id AND ${vigenteEm("p", "$1")}
+               ORDER BY p.inicio_vigencia DESC, p.id DESC
+               LIMIT 1) p ON TRUE
+       LEFT JOIN LATERAL (
+              SELECT e.jornada_versao_id
+                FROM rh.escala_colaborador e
+               WHERE e.colaborador_id = c.id AND ${vigenteEm("e", "$1")}
+               ORDER BY e.inicio_vigencia DESC, e.id DESC
+               LIMIT 1) e ON TRUE
        LEFT JOIN rh.jornada_versao j ON j.id = e.jornada_versao_id
-      WHERE c.status = 'ativo'
-      ORDER BY c.nome_completo, c.id`
+      WHERE ${VINCULO_NA_DATA}
+      ORDER BY c.nome_completo, c.id`,
+    [dataRef]
   );
   return rows.map((linha) => ({
     colaborador_id: Number(linha.id),
@@ -570,7 +786,23 @@ interface LinhaRubricaVigente extends Record<string, unknown> {
   parametro: string | null;
 }
 
+/**
+ * A versão da rubrica que valia NA DATA — não a que está ativa agora.
+ *
+ * `status = 'ativa'` é o trinco de "uma versão corrente por rubrica", não
+ * vigência (ver lib/vigencia.ts). Lendo por ele, publicar em agosto uma versão
+ * nova da rubrica de hora extra mudava o fator das horas extras de JULHO no
+ * primeiro recálculo — a versão de julho está lá, encerrada, com fim_vigencia
+ * 31/07, e era simplesmente ignorada. Só 'rascunho' fica de fora: rascunho é
+ * versão que ninguém publicou, não vale para data nenhuma.
+ *
+ * `r.ativo` continua sem data porque é catálogo, não valor: diz se a rubrica
+ * pode ser LANÇADA hoje. Encerrar rubrica com lançamento vivo em competência
+ * recalculável já é recusado (contarLancamentosRecalculaveis) e os códigos que
+ * o motor procura pelo nome não podem ser encerrados (CODIGOS_DO_MOTOR).
+ */
 export async function listarRubricasVigentes(
+  dataRef: string,
   cliente?: PoolClient
 ): Promise<RubricaVigente[]> {
   // Ordem: rubricas próprias primeiro, as genéricas (excecao) por ÚLTIMO —
@@ -580,13 +812,19 @@ export async function listarRubricasVigentes(
            r.natureza, r.excecao, rv.incide_inss, rv.incide_irrf, rv.incide_fgts,
            rv.tipo_calculo, rv.parametro::text AS parametro
       FROM rh_folha.rubrica r
-      JOIN rh_folha.rubrica_versao rv
-        ON rv.rubrica_id = r.id AND rv.status = 'ativa'
+      JOIN LATERAL (
+             SELECT rv.*
+               FROM rh_folha.rubrica_versao rv
+              WHERE rv.rubrica_id = r.id
+                AND rv.status <> 'rascunho'
+                AND ${vigenteEm("rv", "$1")}
+              ORDER BY rv.inicio_vigencia DESC, rv.id DESC
+              LIMIT 1) rv ON TRUE
      WHERE r.ativo
      ORDER BY r.excecao, r.codigo`;
   const linhas = cliente
-    ? (await cliente.query<LinhaRubricaVigente>(sql)).rows
-    : await consultar<LinhaRubricaVigente>(sql);
+    ? (await cliente.query<LinhaRubricaVigente>(sql, [dataRef])).rows
+    : await consultar<LinhaRubricaVigente>(sql, [dataRef]);
   return linhas.map((linha) => ({
     rubrica_id: Number(linha.rubrica_id),
     rubrica_versao_id: Number(linha.rubrica_versao_id),
@@ -971,19 +1209,43 @@ export interface TabelasVigentesMotor {
   parametros: ParametrosFolhaMotor;
 }
 
-/** Versões ATIVAS das três tabelas legais, já em centavos — null se faltar alguma. */
+/**
+ * As três tabelas legais que valiam NA DATA, já em centavos — null se faltar
+ * alguma.
+ *
+ * As três tabelas têm inicio_vigencia e fim_vigencia desde que nasceram, e o
+ * cadastro de versão nova já encerra a anterior na véspera (encerrarVersaoLegal).
+ * Lê-las por `status = 'ativa'` desperdiçava exatamente essa informação: no dia
+ * em que a tabela de 2027 fosse cadastrada, a competência de dezembro/2026 que
+ * ainda estivesse aberta passaria a ser calculada com o INSS de 2027 — e sem
+ * nenhum aviso, porque o número sai igual em todo lugar menos no holerite.
+ */
 export async function tabelasVigentes(
+  dataRef: string,
   cliente?: PoolClient
 ): Promise<{ tabelas: TabelasVigentesMotor | null; faltantes: TipoTabelaLegal[] }> {
   const executar = async <T extends Record<string, unknown>>(
     sql: string
   ): Promise<T[]> =>
-    cliente ? (await cliente.query<T>(sql)).rows : await consultar<T>(sql);
+    cliente
+      ? (await cliente.query<T>(sql, [dataRef])).rows
+      : await consultar<T>(sql, [dataRef]);
+
+  // Uma versão por data: `LIMIT 1` pela mais recente é rede de segurança, já que
+  // o encerramento na véspera é regra do serviço e não trinco do banco.
+  const naData = (tabela: string, colunas: string) =>
+    `SELECT ${colunas}
+       FROM ${tabela} v
+      WHERE v.status <> 'rascunho' AND ${vigenteEm("v", "$1")}
+      ORDER BY v.inicio_vigencia DESC, v.id DESC
+      LIMIT 1`;
 
   const [inss, irrf, parametros] = await Promise.all([
     executar<{ id: string; faixas: FaixaInssJson[]; teto_contribuicao: string }>(
-      `SELECT id, faixas, teto_contribuicao::text AS teto_contribuicao
-         FROM rh_folha.tabela_inss_versao WHERE status = 'ativa'`
+      naData(
+        "rh_folha.tabela_inss_versao",
+        "v.id, v.faixas, v.teto_contribuicao::text AS teto_contribuicao"
+      )
     ),
     executar<{
       id: string;
@@ -991,9 +1253,12 @@ export async function tabelasVigentes(
       deducao_por_dependente: string;
       desconto_simplificado: string;
     }>(
-      `SELECT id, faixas, deducao_por_dependente::text AS deducao_por_dependente,
-              desconto_simplificado::text AS desconto_simplificado
-         FROM rh_folha.tabela_irrf_versao WHERE status = 'ativa'`
+      naData(
+        "rh_folha.tabela_irrf_versao",
+        `v.id, v.faixas,
+         v.deducao_por_dependente::text AS deducao_por_dependente,
+         v.desconto_simplificado::text AS desconto_simplificado`
+      )
     ),
     executar<{
       id: string;
@@ -1002,11 +1267,13 @@ export async function tabelasVigentes(
       carga_semanal_referencia_minutos: number;
       divisor_mensal_dias: string;
     }>(
-      `SELECT id, aliquota_fgts::text AS aliquota_fgts,
-              divisor_mensal_horas::text AS divisor_mensal_horas,
-              carga_semanal_referencia_minutos,
-              divisor_mensal_dias::text AS divisor_mensal_dias
-         FROM rh_folha.parametro_folha_versao WHERE status = 'ativa'`
+      naData(
+        "rh_folha.parametro_folha_versao",
+        `v.id, v.aliquota_fgts::text AS aliquota_fgts,
+         v.divisor_mensal_horas::text AS divisor_mensal_horas,
+         v.carga_semanal_referencia_minutos,
+         v.divisor_mensal_dias::text AS divisor_mensal_dias`
+      )
     ),
   ]);
 
@@ -1058,16 +1325,26 @@ export interface SituacaoConferencia {
   conferido_dp: boolean;
 }
 
-/** Situação de conferência do DP das versões ATIVAS — gate da aprovação. */
+/**
+ * Situação de conferência do DP das versões que valem NA DATA — gate da
+ * aprovação. Tem que ser a MESMA data que `tabelasVigentes` usou para calcular:
+ * conferir a tabela de 2027 não diz nada sobre a folha de 2026 que foi
+ * calculada com a tabela de 2026.
+ */
 export async function situacaoConferenciaTabelas(
+  dataRef: string,
   cliente?: PoolClient
 ): Promise<SituacaoConferencia[]> {
   const resultado: SituacaoConferencia[] = [];
   for (const tipo of Object.keys(TABELAS_LEGAIS) as TipoTabelaLegal[]) {
-    const sql = `SELECT id, conferido_dp FROM ${TABELAS_LEGAIS[tipo]} WHERE status = 'ativa'`;
+    const sql = `SELECT v.id, v.conferido_dp
+                   FROM ${TABELAS_LEGAIS[tipo]} v
+                  WHERE v.status <> 'rascunho' AND ${vigenteEm("v", "$1")}
+                  ORDER BY v.inicio_vigencia DESC, v.id DESC
+                  LIMIT 1`;
     const linhas = cliente
-      ? (await cliente.query<{ id: string; conferido_dp: boolean }>(sql)).rows
-      : await consultar<{ id: string; conferido_dp: boolean }>(sql);
+      ? (await cliente.query<{ id: string; conferido_dp: boolean }>(sql, [dataRef])).rows
+      : await consultar<{ id: string; conferido_dp: boolean }>(sql, [dataRef]);
     resultado.push({
       tipo,
       versao_id: linhas.length > 0 ? Number(linhas[0].id) : null,
@@ -1279,6 +1556,69 @@ export async function inserirItemCalculo(
   );
 }
 
+// ------------------------------------------------------------------ recorte pelos três (folha)
+//
+// O filtro de registro/lotação/centro de custo da folha acontece NO SQL, e a
+// coluna comparada é a da APROPRIAÇÃO DA COMPETÊNCIA
+// (rh_folha.apropriacao_competencia), não a alocação de hoje: quem estava no
+// CSC em junho continua no CSC de junho depois de ser transferido em julho.
+// Comparar com a lotação vigente reescreveria o passado a cada mudança de
+// cadastro — e um filtro que reescreve o passado é pior que nenhum filtro.
+//
+// Filtrar no cliente também não serve: numa folha de 700 pessoas o servidor
+// mandaria as 700 linhas (com salário, item a item) para o navegador esconder
+// 690. O recorte tem que sair pequeno do banco.
+//
+// Combinável: o que vier preenchido entra junto, em E. Linha sem apropriação
+// resolvida (ap.* nulo) fica DE FORA de qualquer recorte — comparar NULL não
+// dá verdadeiro, e é o certo: não se pode afirmar que ela cai no centro pedido.
+
+function comparacoesApropriacao(
+  filtro: FiltroEstrutura,
+  parametros: unknown[],
+  alias: string
+): string[] {
+  const comparacoes: string[] = [];
+  if (filtro.empresa_id !== undefined) {
+    parametros.push(filtro.empresa_id);
+    comparacoes.push(`${alias}.empresa_id = $${parametros.length}`);
+  }
+  if (filtro.estabelecimento_id !== undefined) {
+    parametros.push(filtro.estabelecimento_id);
+    comparacoes.push(`${alias}.estabelecimento_id = $${parametros.length}`);
+  }
+  if (filtro.centro_custo_id !== undefined) {
+    parametros.push(filtro.centro_custo_id);
+    comparacoes.push(`${alias}.centro_custo_id = $${parametros.length}`);
+  }
+  return comparacoes;
+}
+
+/** Pedaço de WHERE (já começando por AND) para quem já tem a view no FROM. */
+function condicaoApropriacao(
+  filtro: FiltroEstrutura,
+  parametros: unknown[],
+  alias: string
+): string {
+  const comparacoes = comparacoesApropriacao(filtro, parametros, alias);
+  return comparacoes.length === 0 ? "" : ` AND ${comparacoes.join(" AND ")}`;
+}
+
+/** O mesmo recorte para quem só tem a folha do colaborador no FROM. */
+function existeApropriacao(
+  filtro: FiltroEstrutura,
+  parametros: unknown[],
+  aliasFolha: string
+): string {
+  const comparacoes = comparacoesApropriacao(filtro, parametros, "apr");
+  if (comparacoes.length === 0) return "";
+  return ` AND EXISTS (
+        SELECT 1 FROM rh_folha.apropriacao_competencia apr
+         WHERE apr.folha_colaborador_id = ${aliasFolha}.id
+           AND ${comparacoes.join(" AND ")}
+      )`;
+}
+
 export interface FolhaResumo {
   id: number;
   colaborador_id: number;
@@ -1290,11 +1630,25 @@ export interface FolhaResumo {
   total_descontos_centavos: number;
   liquido_centavos: number;
   calculada_em: string;
+  // Apropriação da linha pelos TRÊS campos, resolvida NA DATA DA COMPETÊNCIA
+  // (rh_folha.apropriacao_competencia, migration 0047) e não na alocação de
+  // hoje: trocar o centro de custo de alguém agora não pode reescrever para
+  // onde o custo de fevereiro caiu.
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  estabelecimento_id: number | null;
+  lotacao_nome: string | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
 }
 
 export async function listarFolhasDaCompetencia(
-  competenciaId: number
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
 ): Promise<FolhaResumo[]> {
+  const parametros: unknown[] = [competenciaId];
+  const recorte = condicaoApropriacao(filtro, parametros, "ap");
   const linhas = await consultar<{
     id: string;
     colaborador_id: string;
@@ -1306,18 +1660,32 @@ export async function listarFolhasDaCompetencia(
     total_descontos: string;
     liquido: string;
     calculada_em: string;
+    empresa_id: string | null;
+    empresa_nome: string | null;
+    estabelecimento_id: string | null;
+    lotacao_nome: string | null;
+    centro_custo_id: string | null;
+    centro_custo_codigo: string | null;
+    centro_custo_nome: string | null;
   }>(
     `SELECT f.id, f.colaborador_id, c.nome_completo AS colaborador_nome,
             c.matricula, f.salario_base_congelado::text AS salario_base_congelado,
             f.dependentes_irrf, f.total_proventos::text AS total_proventos,
             f.total_descontos::text AS total_descontos, f.liquido::text AS liquido,
-            f.calculada_em::text AS calculada_em
+            f.calculada_em::text AS calculada_em,
+            ap.empresa_id, ap.empresa_nome,
+            ap.estabelecimento_id, ap.lotacao_nome,
+            ap.centro_custo_id, ap.centro_custo_codigo, ap.centro_custo_nome
        FROM rh_folha.folha_colaborador f
        JOIN rh.colaborador c ON c.id = f.colaborador_id
-      WHERE f.competencia_id = $1
+       LEFT JOIN rh_folha.apropriacao_competencia ap
+              ON ap.folha_colaborador_id = f.id
+      WHERE f.competencia_id = $1${recorte}
       ORDER BY c.nome_completo, f.id`,
-    [competenciaId]
+    parametros
   );
+  const numeroOuNulo = (valor: string | null) =>
+    valor === null ? null : Number(valor);
   return linhas.map((linha) => ({
     id: Number(linha.id),
     colaborador_id: Number(linha.colaborador_id),
@@ -1329,7 +1697,91 @@ export async function listarFolhasDaCompetencia(
     total_descontos_centavos: paraCentavos(linha.total_descontos),
     liquido_centavos: paraCentavos(linha.liquido),
     calculada_em: linha.calculada_em,
+    empresa_id: numeroOuNulo(linha.empresa_id),
+    empresa_nome: linha.empresa_nome,
+    estabelecimento_id: numeroOuNulo(linha.estabelecimento_id),
+    lotacao_nome: linha.lotacao_nome,
+    centro_custo_id: numeroOuNulo(linha.centro_custo_id),
+    centro_custo_codigo: linha.centro_custo_codigo,
+    centro_custo_nome: linha.centro_custo_nome,
   }));
+}
+
+/**
+ * O que oferecer nos três seletores e quantas linhas a competência tem no
+ * total. Sai SEMPRE da competência inteira, sem recorte: se as opções viessem
+ * do resultado já filtrado, escolher um centro de custo apagaria os outros dos
+ * seletores e não haveria como voltar. E sai das próprias folhas do mês, não do
+ * catálogo inteiro — oferecer uma empresa que não tem nenhuma linha em junho só
+ * produziria tela vazia.
+ */
+export async function resumoEstruturaDaCompetencia(
+  competenciaId: number
+): Promise<{ opcoes: OpcoesFiltroEstrutura; total_folhas: number }> {
+  const linhas = await consultar<{
+    empresa_id: string | null;
+    empresa_nome: string | null;
+    estabelecimento_id: string | null;
+    lotacao_nome: string | null;
+    centro_custo_id: string | null;
+    centro_custo_codigo: string | null;
+    centro_custo_nome: string | null;
+    total_folhas: string;
+  }>(
+    `SELECT DISTINCT ap.empresa_id, ap.empresa_nome,
+            ap.estabelecimento_id, ap.lotacao_nome,
+            ap.centro_custo_id, ap.centro_custo_codigo, ap.centro_custo_nome,
+            (SELECT count(*) FROM rh_folha.folha_colaborador ff
+              WHERE ff.competencia_id = $1)::text AS total_folhas
+       FROM rh_folha.folha_colaborador f
+       LEFT JOIN rh_folha.apropriacao_competencia ap
+              ON ap.folha_colaborador_id = f.id
+      WHERE f.competencia_id = $1`,
+    [competenciaId]
+  );
+
+  const empresas = new Map<number, string>();
+  const lotacoes = new Map<number, string>();
+  const centros = new Map<number, string>();
+  for (const linha of linhas) {
+    if (linha.empresa_id !== null) {
+      const id = Number(linha.empresa_id);
+      if (!empresas.has(id)) {
+        empresas.set(id, linha.empresa_nome ?? `Empresa ${id}`);
+      }
+    }
+    if (linha.estabelecimento_id !== null) {
+      const id = Number(linha.estabelecimento_id);
+      if (!lotacoes.has(id)) {
+        lotacoes.set(id, linha.lotacao_nome ?? `Local ${id}`);
+      }
+    }
+    if (linha.centro_custo_id !== null) {
+      const id = Number(linha.centro_custo_id);
+      if (!centros.has(id)) {
+        const codigo = linha.centro_custo_codigo ?? `CC ${id}`;
+        centros.set(
+          id,
+          linha.centro_custo_nome && linha.centro_custo_nome !== codigo
+            ? `${codigo} — ${linha.centro_custo_nome}`
+            : codigo
+        );
+      }
+    }
+  }
+  const ordenar = (mapa: Map<number, string>) =>
+    [...mapa.entries()]
+      .map(([id, nome]) => ({ id, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+
+  return {
+    opcoes: {
+      empresas: ordenar(empresas),
+      lotacoes: ordenar(lotacoes),
+      centros_custo: ordenar(centros),
+    },
+    total_folhas: Number(linhas[0]?.total_folhas ?? 0),
+  };
 }
 
 export interface ItemFolha {
@@ -1345,8 +1797,13 @@ export interface ItemFolha {
 }
 
 export async function listarItensDaCompetencia(
-  competenciaId: number
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
 ): Promise<ItemFolha[]> {
+  // O mesmo recorte da lista: sem isto o payload continuaria carregando os
+  // itens (com valor e memória de cálculo) das linhas que o recorte excluiu.
+  const parametros: unknown[] = [competenciaId];
+  const recorte = existeApropriacao(filtro, parametros, "f");
   const linhas = await consultar<{
     id: string;
     folha_colaborador_id: string;
@@ -1365,9 +1822,9 @@ export async function listarItensDaCompetencia(
        JOIN rh_folha.folha_colaborador f ON f.id = i.folha_colaborador_id
        JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
        JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id
-      WHERE f.competencia_id = $1
+      WHERE f.competencia_id = $1${recorte}
       ORDER BY i.folha_colaborador_id, r.codigo, i.id`,
-    [competenciaId]
+    parametros
   );
   return linhas.map((linha) => ({
     id: Number(linha.id),

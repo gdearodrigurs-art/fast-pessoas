@@ -53,7 +53,10 @@ import {
   STATUS_ATIVOS,
 } from "../demandas/esquemas";
 import { listarDoSolicitante } from "../demandas/repositorio";
-import { listar as listarDocumentosNoBanco } from "../documentos/repositorio";
+import {
+  listar as listarDocumentosNoBanco,
+  vinculosDoUsuario,
+} from "../documentos/repositorio";
 import {
   nivelAlerta,
   ROTULOS_STATUS_PERIODO,
@@ -305,19 +308,23 @@ async function montarBlocoBeneficios(
 }
 
 async function montarBlocoDocumentos(
-  usuarioId: number,
-  colaboradorId: number
+  usuarioId: number
 ): Promise<BlocoDocumentos> {
-  // Consulta o repositório do GED com escopo FIXO no próprio colaborador
+  // Consulta o repositório do GED com escopo FIXO na própria pessoa
   // (`verTodos: false`) em vez de `listarDocumentos` do serviço: para quem tem
   // `documento.ver.todos` (RH/DP/diretoria) aquele serviço devolve o GED
   // inteiro, e "Meus documentos" é a pasta da pessoa, não o arquivo da empresa.
   // `incluirSensiveis: false` mantém documento sensível fora do portal — quem
   // precisa dele usa /documentos com a chave própria e gera trilha lá.
+  //
+  // "Pasta da PESSOA" é literal: `vinculosDoUsuario` traz todos os contratos
+  // dela no grupo, e não só o corrente. Recortar pelo vínculo corrente sumia com
+  // o documento do contrato anterior no dia da transferência entre empresas —
+  // justamente quando o trabalhador mais precisa dele.
   const documentos = await listarDocumentosNoBanco({
     usuarioId,
     verTodos: false,
-    colaboradorIdDoUsuario: colaboradorId,
+    vinculosDoUsuario: await vinculosDoUsuario(usuarioId),
     incluirSensiveis: false,
   });
   const projetadas = documentos.map((documento) => ({
@@ -433,6 +440,21 @@ export async function montarPortal(
     colaborador_id: colaborador.id,
     nome_completo: colaborador.nome_completo,
     matricula: colaborador.matricula,
+    // O portal parava de existir na borda do contrato corrente. `vinculos` já
+    // vem recortado pelo escopo de quem lê — e para a PRÓPRIA pessoa o escopo
+    // é a pessoa —, então aqui basta tirar o contrato que já está na tela.
+    // Sem isto o portal calava sobre o contrato anterior no mesmo grupo, e o
+    // trabalhador não tinha por onde saber que o ponto, o banco de horas e os
+    // documentos dele continuavam guardados.
+    contratos_anteriores: colaborador.vinculos
+      .filter((vinculo) => vinculo.id !== colaborador.id)
+      .map((vinculo) => ({
+        colaborador_id: vinculo.id,
+        matricula: vinculo.matricula,
+        empresa_nome: vinculo.empresa_nome,
+        data_admissao: vinculo.data_admissao,
+        data_desligamento: vinculo.data_desligamento,
+      })),
     cargo_nome: colaborador.cargo_nome,
     cargo_id: colaborador.rcf?.cargo_id ?? null,
     // O RCF imprimível (/cargos/[id]/rcf) exige chave de cargo/ficha; quem não
@@ -463,7 +485,7 @@ export async function montarPortal(
         ? montarBlocoBeneficios(sessao.usuario_id, colaboradorId)
         : Promise.resolve(null),
       pode.documentos
-        ? montarBlocoDocumentos(sessao.usuario_id, colaboradorId)
+        ? montarBlocoDocumentos(sessao.usuario_id)
         : Promise.resolve(null),
       pode.checkin ? montarBlocoCheckin(sessao) : Promise.resolve(null),
       montarBlocoAvaliacoes(colaboradorId),

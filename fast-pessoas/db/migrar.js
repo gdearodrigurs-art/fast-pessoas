@@ -33,7 +33,11 @@ async function main() {
   let novas = 0;
 
   for (const arquivo of arquivos) {
-    const sql = fs.readFileSync(path.join(DIR, arquivo), 'utf8');
+    // Fim de linha é normalizado ANTES do hash: checkout no Windows (autocrlf)
+    // troca LF por CRLF e mudava o hash de 18 migrations já aplicadas sem trocar
+    // um caractere de SQL — o guarda de imutabilidade disparava por espaço em
+    // branco e travava o runner inteiro. O que é imutável é o CONTEÚDO.
+    const sql = fs.readFileSync(path.join(DIR, arquivo), 'utf8').replace(/\r\n/g, '\n');
     const hash = crypto.createHash('sha256').update(sql).digest('hex');
 
     if (aplicadas.has(arquivo)) {

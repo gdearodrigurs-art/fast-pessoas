@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaFiltroEstrutura } from "../estrutura/esquemas";
 
 export const TIPOS_VINCULO = [
   "clt",
@@ -69,6 +70,47 @@ const esquemaData = z
     message: "Data inválida",
   });
 
+// ------------------------------------------------------------------ vigência que não pode nascer no futuro
+//
+// O FREIO DA ONDA A4 VALE PARA TODAS AS PORTAS, não só para a cadeia de
+// aprovação. Ver o comentário longo em demandas/esquemas.ts ("efeito
+// programado"): como o projeto inteiro lê "vigente" por `fim_vigencia IS NULL`
+// (convenção uniforme), uma linha de vigência gravada HOJE com início AMANHÃ
+// passa a ser a vigente HOJE — em ~20 consultas de uma vez. A alocação de
+// setembro entra na lista de colaboradores, no headcount, no filtro dos três
+// campos e no perfil de benefícios de agosto; o salário de setembro entra na
+// base de cálculo da folha de agosto; e o gestor que só assume em setembro já
+// aprova e reprova hoje, porque a cadeia de aprovação também pergunta
+// `rg.fim_vigencia IS NULL`.
+//
+// A cadeia de demandas resolveu isso AGENDANDO o efeito: aprova-se antes, grava-se
+// na data. As três rotas diretas da ficha (lotação, posição e gestor) não têm
+// agendador, e enquanto não tiverem a única resposta honesta é recusar a data
+// futura e mandar quem quer decidir antes pelo caminho que sabe esperar. As três
+// já barravam o PASSADO (`inicio_vigencia <= vigente.inicio_vigencia`, no
+// serviço); o futuro passava sem limite nenhum, e a tela nem `max` tinha.
+const FUSO_OPERACAO = "America/Sao_Paulo";
+
+/** Hoje em America/Sao_Paulo, AAAA-MM-DD — o fuso da empresa, não o do servidor. */
+export function hojeNaOperacao(agora: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: FUSO_OPERACAO,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(agora);
+}
+
+const esquemaVigenciaNaoFutura = esquemaData.refine(
+  (valor) => valor <= hojeNaOperacao(),
+  {
+    message:
+      "A vigência não pode começar no futuro. Para decidir antes e o efeito " +
+      "valer na data certa, use a movimentação (promoção ou transferência), " +
+      "que agenda o efeito para a data pretendida.",
+  }
+);
+
 const esquemaCpf = z
   .string()
   .transform((valor) => valor.replace(/\D/g, ""))
@@ -77,17 +119,39 @@ const esquemaCpf = z
   })
   .refine(cpfValido, { message: "CPF inválido" });
 
-export const esquemaCriacaoColaborador = z
+// ------------------------------------------------------------------ admissão
+// Admitir tem DOIS caminhos desde a 0046, porque desde a 0046 existem duas
+// entidades. O que entra pelo formulário é o mesmo contrato — matrícula, tipo
+// de vínculo e data de admissão —, mas quem é o dono dele muda:
+//
+//   PESSOA NOVA    ninguém no grupo tem este CPF. Nascem a pessoa, a conta de
+//                  acesso e o vínculo. É o formulário completo de sempre.
+//   NOVO VÍNCULO   o CPF já é de gente do grupo, e ela não tem mais vínculo em
+//                  pé. Nasce SÓ o vínculo: CPF, nome, nascimento, gênero e
+//                  conta de acesso já existem e são da pessoa — reenviá-los
+//                  aqui seria oferecer um jeito de sobrescrever, em silêncio, o
+//                  cadastro de alguém que já está na casa.
+//
+// O que separa os dois é `confirmar_pessoa_id`, e ele não é um "flag": é o id
+// da pessoa que a TELA MOSTROU. Sem esse número o servidor recusa, com o nome
+// de quem tem o CPF; com um número que não bate com o dono do CPF, também
+// recusa. É assim que "juntar duas pessoas" deixa de ser possível em silêncio.
+
+const camposDoVinculo = {
+  matricula: z
+    .string()
+    .trim()
+    .regex(/^\d{1,10}$/, "Matrícula deve conter apenas números"),
+  cpf: esquemaCpf,
+  tipo_vinculo: z.enum(TIPOS_VINCULO),
+  data_admissao: esquemaData,
+};
+
+export const esquemaAdmissaoPessoaNova = z
   .object({
+    ...camposDoVinculo,
     email: z.email("E-mail inválido").max(254),
-    matricula: z
-      .string()
-      .trim()
-      .regex(/^\d{1,10}$/, "Matrícula deve conter apenas números"),
-    cpf: esquemaCpf,
     nome_completo: z.string().trim().min(3, "Informe o nome completo").max(200),
-    tipo_vinculo: z.enum(TIPOS_VINCULO),
-    data_admissao: esquemaData,
     // Obrigatória para NOVOS (a coluna é nullable por causa do legado do
     // Nasajon — ver a decisão documentada na migration 0020).
     data_nascimento: esquemaData,
@@ -105,7 +169,40 @@ export const esquemaCriacaoColaborador = z
     }
   });
 
-export type CriacaoColaborador = z.infer<typeof esquemaCriacaoColaborador>;
+export type AdmissaoPessoaNova = z.infer<typeof esquemaAdmissaoPessoaNova>;
+
+export const esquemaAdmissaoNovoVinculo = z.object({
+  ...camposDoVinculo,
+  /** A pessoa que a tela reconheceu pelo CPF e o operador confirmou ser a mesma. */
+  confirmar_pessoa_id: z.number().int().positive(),
+});
+
+export type AdmissaoNovoVinculo = z.infer<typeof esquemaAdmissaoNovoVinculo>;
+
+export type CriacaoColaborador = AdmissaoPessoaNova | AdmissaoNovoVinculo;
+
+/** True quando o corpo pede o segundo vínculo de alguém que já está no grupo. */
+export function ehAdmissaoDeNovoVinculo(
+  dados: CriacaoColaborador
+): dados is AdmissaoNovoVinculo {
+  return "confirmar_pessoa_id" in dados;
+}
+
+/**
+ * Escolhe o esquema pela PRESENÇA de `confirmar_pessoa_id`, em vez de tentar os
+ * dois e devolver o erro do que falhou "menos". Assim um pedido de novo vínculo
+ * a que falta a matrícula reclama da matrícula — e não de um e-mail que aquele
+ * caminho nem usa.
+ */
+export function analisarCriacaoColaborador(corpo: unknown) {
+  const pedeNovoVinculo =
+    typeof corpo === "object" &&
+    corpo !== null &&
+    "confirmar_pessoa_id" in corpo;
+  return pedeNovoVinculo
+    ? esquemaAdmissaoNovoVinculo.safeParse(corpo)
+    : esquemaAdmissaoPessoaNova.safeParse(corpo);
+}
 
 export const esquemaAtualizacaoColaborador = z
   .object({
@@ -150,10 +247,18 @@ export type AtualizacaoColaborador = z.infer<
   typeof esquemaAtualizacaoColaborador
 >;
 
-export const esquemaFiltroColaboradores = z.object({
-  busca: z.string().trim().min(1).max(100).optional(),
-  status: z.enum(STATUS_COLABORADOR).optional(),
-});
+/**
+ * Busca, status e os TRÊS campos da estrutura (registro, lotação, centro de
+ * custo) — todos opcionais e todos combináveis entre si. O recorte por
+ * estrutura vem de `esquemaFiltroEstrutura` para a lista, os relatórios, o
+ * organograma e a folha perguntarem a mesma coisa do mesmo jeito.
+ */
+export const esquemaFiltroColaboradores = z
+  .object({
+    busca: z.string().trim().min(1).max(100).optional(),
+    status: z.enum(STATUS_COLABORADOR).optional(),
+  })
+  .extend(esquemaFiltroEstrutura.shape);
 
 export type FiltroColaboradores = z.infer<typeof esquemaFiltroColaboradores>;
 
@@ -260,7 +365,9 @@ const esquemaSalario = z
 export const esquemaCriacaoPosicao = z.object({
   cargo_id: z.number().int().positive(),
   salario: esquemaSalario,
-  inicio_vigencia: esquemaData,
+  // Não futura: o salário do mês que vem entraria na base de cálculo da folha
+  // do mês que ainda não acabou. Ver esquemaVigenciaNaoFutura.
+  inicio_vigencia: esquemaVigenciaNaoFutura,
   motivo: z.enum(MOTIVOS_POSICAO),
 });
 
@@ -270,17 +377,28 @@ export type CriacaoPosicao = z.infer<typeof esquemaCriacaoPosicao>;
 
 export const esquemaDefinicaoGestor = z.object({
   gestor_colaborador_id: z.number().int().positive().nullable(),
-  inicio_vigencia: esquemaData,
+  // Não futura: gestor com vigência à frente já aprovaria e reprovaria hoje —
+  // a cadeia de aprovação lê a relação por `rg.fim_vigencia IS NULL`.
+  inicio_vigencia: esquemaVigenciaNaoFutura,
 });
 
 export type DefinicaoGestor = z.infer<typeof esquemaDefinicaoGestor>;
 
-// ------------------------------------------------------------------ lotação
+// ------------------------------------------------------------------ alocação: os três campos
+// REGISTRO (empresa_id), LOTAÇÃO (estabelecimento_id) e CENTRO DE CUSTO
+// (centro_custo_id) são independentes e escolhidos SEPARADAMENTE — não há
+// derivação de um pelo outro. Os três entram numa única linha de vigência
+// (migration 0047): mudar um encerra a linha e abre outra.
+// O centro de custo deixou de ser texto livre: é id de catálogo. Digitar
+// "CC-100" com um zero a menos criava um centro de custo novo em silêncio.
 
 export const esquemaDefinicaoLotacao = z.object({
+  empresa_id: z.number().int().positive(),
   estabelecimento_id: z.number().int().positive(),
-  centro_custo: z.string().trim().min(1, "Informe o centro de custo").max(30),
-  inicio_vigencia: esquemaData,
+  centro_custo_id: z.number().int().positive(),
+  // Não futura: a alocação de setembro viraria a vigente de agosto na lista, no
+  // headcount, no filtro dos três campos e no perfil de benefícios.
+  inicio_vigencia: esquemaVigenciaNaoFutura,
 });
 
 export type DefinicaoLotacao = z.infer<typeof esquemaDefinicaoLotacao>;
@@ -366,26 +484,50 @@ export const esquemaNovaFaixaSalarial = z
 
 export type NovaFaixaSalarial = z.infer<typeof esquemaNovaFaixaSalarial>;
 
-// ------------------------------------------------------------------ estabelecimento
+// ------------------------------------------------------------------ estabelecimento = LOTAÇÃO (local físico)
+// Desde a migration 0047 o local físico não tem CNPJ nem razão social próprios —
+// quem tem é a empresa do grupo (esquemas do domínio "estrutura"). Os dois
+// campos continuam aceitos, opcionais, para não perder o que já estava
+// preenchido e para o caso de o DP querer anotar o estabelecimento do eSocial.
 
-const esquemaCnpj = z
+export const esquemaCnpj = z
   .string()
   .transform((valor) => valor.replace(/\D/g, ""))
   .refine((valor) => /^\d{14}$/.test(valor), {
     message: "CNPJ deve ter 14 dígitos",
   });
 
+/** Campo de CNPJ que aceita vazio como "ainda não informado". */
+export const esquemaCnpjOpcional = z
+  .string()
+  .trim()
+  .transform((valor) => valor.replace(/\D/g, ""))
+  .refine((valor) => valor === "" || /^\d{14}$/.test(valor), {
+    message: "CNPJ deve ter 14 dígitos",
+  })
+  .transform((valor) => (valor === "" ? null : valor))
+  .nullable()
+  .optional();
+
 const camposVersaoEstabelecimento = {
-  razao_social: z.string().trim().min(2, "Informe a razão social").max(200),
+  razao_social: z.string().trim().max(200).optional(),
   unidade: z.string().trim().min(2, "Informe o nome da unidade").max(120),
   endereco_resumido: z.string().trim().max(300).optional(),
   inicio_vigencia: esquemaData,
 };
 
 export const esquemaCriacaoEstabelecimento = z.object({
-  cnpj: esquemaCnpj,
+  cnpj: esquemaCnpjOpcional,
   ...camposVersaoEstabelecimento,
 });
+
+export const esquemaInativacaoEstabelecimento = z.object({
+  inativo: z.boolean(),
+});
+
+export type InativacaoEstabelecimento = z.infer<
+  typeof esquemaInativacaoEstabelecimento
+>;
 
 export type CriacaoEstabelecimento = z.infer<
   typeof esquemaCriacaoEstabelecimento
@@ -455,10 +597,11 @@ export type FaixaIdade = (typeof FAIXAS_IDADE)[number]["chave"];
  */
 export const IDADE_LIMITE_CRIANCA = 12;
 
-export const esquemaFiltroAniversariantes = z.object({
-  mes: z.coerce.number().int().min(1).max(12).optional(),
-  estabelecimento_id: z.coerce.number().int().positive().optional(),
-});
+export const esquemaFiltroAniversariantes = z
+  .object({
+    mes: z.coerce.number().int().min(1).max(12).optional(),
+  })
+  .extend(esquemaFiltroEstrutura.shape);
 
 export type FiltroAniversariantes = z.infer<
   typeof esquemaFiltroAniversariantes

@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
 import { esquemaFiltroAniversariantes } from "@/dominios/colaboradores/esquemas";
 import { relatorioAniversariantes } from "@/dominios/colaboradores/servico";
+import { lerFiltroEstrutura } from "@/dominios/estrutura/esquemas";
 import { responderErro } from "@/lib/http";
 import { exigirPermissao } from "@/lib/sessao";
 
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest) {
     const parametros = request.nextUrl.searchParams;
     const analise = esquemaFiltroAniversariantes.safeParse({
       mes: parametros.get("mes") || undefined,
-      estabelecimento_id: parametros.get("estabelecimento_id") || undefined,
+      ...lerFiltroEstrutura(parametros),
     });
     if (!analise.success) {
       return Response.json(
