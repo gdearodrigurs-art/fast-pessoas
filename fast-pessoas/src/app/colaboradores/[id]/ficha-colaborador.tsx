@@ -249,6 +249,41 @@ interface Lotacao {
   fim_vigencia: string | null;
 }
 
+const ALOCACAO_VAZIA = {
+  empresa_id: "",
+  estabelecimento_id: "",
+  centro_custo_id: "",
+  inicio_vigencia: "",
+};
+
+/**
+ * SEMEADURA da nova alocação — o padrão de SecaoJornadas (ponto) e
+ * SecaoParametrosGerais (folha): o formulário NÃO inventa valor de negócio; ele
+ * repete o que está VIGENTE agora, para quem só quer trocar um dos três não ter
+ * que redigitar os outros dois. Sem alocação vigente, os três nascem vazios.
+ *
+ * `inicio_vigencia` NUNCA é semeado — hoje não é "a data certa" de nada, e
+ * chutá-la abriria uma vigência com data que ninguém escolheu.
+ */
+function semearAlocacao(historico: Lotacao[]): typeof ALOCACAO_VAZIA {
+  const vigente =
+    historico.find((linha) => linha.fim_vigencia === null) ??
+    [...historico].sort((a, b) =>
+      a.inicio_vigencia === b.inicio_vigencia
+        ? b.id - a.id
+        : a.inicio_vigencia < b.inicio_vigencia
+          ? 1
+          : -1
+    )[0];
+  if (!vigente) return ALOCACAO_VAZIA;
+  return {
+    empresa_id: String(vigente.empresa_id),
+    estabelecimento_id: String(vigente.estabelecimento_id),
+    centro_custo_id: String(vigente.centro_custo_id),
+    inicio_vigencia: "",
+  };
+}
+
 interface EmpresaOpcao {
   id: number;
   nome: string;
@@ -432,12 +467,7 @@ export function FichaColaborador({
     motivo: "promocao" as MotivoPosicao,
   });
   const [novoGestor, setNovoGestor] = useState({ gestor_colaborador_id: "", inicio_vigencia: "" });
-  const [novaLotacao, setNovaLotacao] = useState({
-    empresa_id: "",
-    estabelecimento_id: "",
-    centro_custo_id: "",
-    inicio_vigencia: "",
-  });
+  const [novaLotacao, setNovaLotacao] = useState(ALOCACAO_VAZIA);
 
   const carregarFicha = useCallback(async () => {
     try {
@@ -519,7 +549,9 @@ export function FichaColaborador({
       fetch(`/api/colaboradores/${colaboradorId}/lotacao`).then(async (resposta) => {
         if (resposta.ok) {
           const dados = await resposta.json();
-          setLotacoes(dados.historico ?? []);
+          const historico: Lotacao[] = dados.historico ?? [];
+          setLotacoes(historico);
+          setNovaLotacao(semearAlocacao(historico));
         }
       });
       fetch("/api/estabelecimentos").then(async (resposta) => {
@@ -811,13 +843,11 @@ export function FichaColaborador({
         setErroAba(dados.erro ?? "Não foi possível atualizar a alocação.");
         return;
       }
-      setLotacoes(dados.historico ?? []);
-      setNovaLotacao({
-        empresa_id: "",
-        estabelecimento_id: "",
-        centro_custo_id: "",
-        inicio_vigencia: "",
-      });
+      const historico: Lotacao[] = dados.historico ?? [];
+      setLotacoes(historico);
+      // Semeia de novo a partir do que ACABOU de virar vigente — o formulário
+      // continua espelhando o estado atual, nunca o que foi digitado antes.
+      setNovaLotacao(semearAlocacao(historico));
       await carregarFicha();
     } catch {
       setErroAba("Falha de conexão. Tente novamente.");
@@ -871,6 +901,10 @@ export function FichaColaborador({
   // contrato. Só nesse caso a linha do tempo precisa dizer em qual cada fato
   // caiu — para quem tem um vínculo só, a tela fica exatamente como era.
   const temMaisDeUmVinculo = (ficha.vinculos?.length ?? 1) > 1;
+  // Vínculo encerrado: os três campos da 0047 e o cargo mostram o que valia no
+  // fim do contrato, não o que vale hoje — o contrato acabou.
+  const vinculoEncerrado = ficha.status === "desligado";
+  const sufixoEncerrado = vinculoEncerrado ? " no encerramento" : "";
 
   return (
     <div className={estilos.pagina}>
@@ -1023,24 +1057,39 @@ export function FichaColaborador({
                     : ""}
                 </div>
               </div>
+              {/* Contrato encerrado não tem nada "vigente" — tem o que valia no
+                  último dia. O rótulo diz qual dos dois está na tela para o DP
+                  não ler o passado como se fosse hoje. */}
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>Registro (empresa do grupo)</div>
+                <div className={estilos.rot}>
+                  Registro (empresa do grupo){sufixoEncerrado}
+                </div>
                 <div className={estilos.val}>{ficha.empresa_nome ?? "—"}</div>
               </div>
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>Lotação (local de trabalho)</div>
+                <div className={estilos.rot}>
+                  Lotação (local de trabalho){sufixoEncerrado}
+                </div>
                 <div className={estilos.val}>{ficha.unidade ?? "—"}</div>
               </div>
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>Centro de custo</div>
+                <div className={estilos.rot}>Centro de custo{sufixoEncerrado}</div>
                 <div className={estilos.val}>
                   {ficha.centro_custo
                     ? `${ficha.centro_custo}${ficha.centro_custo_nome && ficha.centro_custo_nome !== ficha.centro_custo ? ` — ${ficha.centro_custo_nome}` : ""}`
                     : "—"}
                 </div>
+                {permissoes.podeAdminLotacao && (
+                  <div className={estilos.notaRestrito}>
+                    o histórico dos três, com a vigência de cada troca, está na
+                    aba Administração → Alocação
+                  </div>
+                )}
               </div>
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>Cargo (posição vigente)</div>
+                <div className={estilos.rot}>
+                  {vinculoEncerrado ? "Cargo (última posição)" : "Cargo (posição vigente)"}
+                </div>
                 <div className={estilos.val}>{ficha.cargo_nome ?? "—"}</div>
               </div>
               <div className={estilos.campoDado}>

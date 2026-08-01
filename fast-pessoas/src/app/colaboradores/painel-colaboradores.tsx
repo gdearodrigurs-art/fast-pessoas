@@ -4,6 +4,14 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
+  FILTRO_ESTRUTURA_VAZIO,
+  FiltroEstrutura,
+  filtroEstruturaAtivo,
+  parametrosFiltroEstrutura,
+  type OpcoesFiltroEstrutura,
+  type ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
+import {
   GENEROS,
   Genero,
   ROTULOS_GENERO,
@@ -24,7 +32,11 @@ interface ColaboradorListado {
   status: StatusColaborador;
   data_admissao: string;
   cargo_nome: string | null;
+  /** Os TRÊS da 0047, cada um com rótulo próprio no cartão. */
+  empresa_nome: string | null;
   unidade: string | null;
+  centro_custo: string | null;
+  centro_custo_nome: string | null;
   feedback_vencido: boolean;
 }
 
@@ -55,6 +67,13 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
   const [erro, setErro] = useState<string | null>(null);
   const [busca, setBusca] = useState("");
   const [status, setStatus] = useState("");
+  // Os três campos nascem VAZIOS: em branco = todos. Nenhum valor padrão de
+  // negócio é inventado aqui — quem escolhe o recorte é quem está lendo.
+  const [estrutura, setEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
+  const [opcoesEstrutura, setOpcoesEstrutura] =
+    useState<OpcoesFiltroEstrutura | null>(null);
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [criando, setCriando] = useState(false);
@@ -79,13 +98,18 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
   });
 
   const carregar = useCallback(
-    async (buscaAtual: string, statusAtual: string) => {
+    async (
+      buscaAtual: string,
+      statusAtual: string,
+      estruturaAtual: ValorFiltroEstrutura
+    ) => {
       setCarregando(true);
       setErro(null);
       try {
         const parametros = new URLSearchParams();
         if (buscaAtual.trim()) parametros.set("busca", buscaAtual.trim());
         if (statusAtual) parametros.set("status", statusAtual);
+        parametrosFiltroEstrutura(estruturaAtual, parametros);
         const consulta = parametros.toString();
         const resposta = await fetch(
           `/api/colaboradores${consulta ? `?${consulta}` : ""}`
@@ -94,6 +118,7 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
         if (resposta.ok) {
           setColaboradores(dados.colaboradores ?? []);
           setAlcance(dados.alcance ?? "todos");
+          setOpcoesEstrutura(dados.estrutura_opcoes ?? null);
         } else {
           setErro(dados.erro ?? "Não foi possível carregar os colaboradores.");
         }
@@ -108,13 +133,19 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
 
   useEffect(() => {
     void (async () => {
-      await carregar("", "");
+      await carregar("", "", FILTRO_ESTRUTURA_VAZIO);
     })();
   }, [carregar]);
 
   function buscar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
-    carregar(busca, status);
+    carregar(busca, status, estrutura);
+  }
+
+  /** Mexer num dos três recarrega na hora — não faz sentido "aplicar" depois. */
+  function mudarEstrutura(valor: ValorFiltroEstrutura) {
+    setEstrutura(valor);
+    void carregar(busca, status, valor);
   }
 
   async function criar(evento: FormEvent<HTMLFormElement>) {
@@ -159,7 +190,7 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           retrato: "",
           contexto: "",
         });
-        carregar(busca, status);
+        carregar(busca, status, estrutura);
       } else {
         setErroCriacao(dados.erro ?? "Não foi possível criar o colaborador.");
       }
@@ -463,11 +494,31 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           </button>
         </form>
 
+        {/* Os três campos do dono, combináveis entre si e com a busca acima.
+            O que a API devolve é o mesmo que os cartões mostram: o registro,
+            a lotação e o centro de custo da alocação vigente do vínculo (ou da
+            última, quando o contrato acabou). */}
+        <section className={estilos.cartao}>
+          <h2>Recorte por registro, lotação e centro de custo</h2>
+          <FiltroEstrutura
+            prefixoId="colab"
+            opcoes={opcoesEstrutura}
+            valor={estrutura}
+            aoMudar={mudarEstrutura}
+            desabilitado={carregando}
+          />
+        </section>
+
         {erro && <p className={estilos.erro}>{erro}</p>}
         {carregando ? (
           <p className={estilos.subtitulo}>Carregando…</p>
         ) : colaboradores.length === 0 ? (
-          <p className={estilos.vazio}>Nenhum colaborador encontrado.</p>
+          <p className={estilos.vazio}>
+            Nenhum colaborador encontrado
+            {filtroEstruturaAtivo(estrutura)
+              ? " com este recorte de registro, lotação e centro de custo."
+              : "."}
+          </p>
         ) : (
           <div className={estilos.grade}>
             {colaboradores.map((colaborador) => (
@@ -486,8 +537,27 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
                     {colaborador.matricula}
                   </div>
                   <div className={estilos.chips}>
+                    {/* Cada um dos três com rótulo próprio: sem rótulo, três
+                        nomes soltos no cartão viram adivinhação. */}
+                    {colaborador.empresa_nome && (
+                      <span className={estilos.chip}>
+                        registro: {colaborador.empresa_nome}
+                      </span>
+                    )}
                     {colaborador.unidade && (
-                      <span className={estilos.chip}>{colaborador.unidade}</span>
+                      <span className={estilos.chip}>
+                        lotação: {colaborador.unidade}
+                      </span>
+                    )}
+                    {colaborador.centro_custo && (
+                      <span className={estilos.chip}>
+                        centro de custo: {colaborador.centro_custo}
+                        {colaborador.centro_custo_nome &&
+                        colaborador.centro_custo_nome !==
+                          colaborador.centro_custo
+                          ? ` — ${colaborador.centro_custo_nome}`
+                          : ""}
+                      </span>
                     )}
                     <span
                       className={`${estilos.pill} ${ESTILO_PILL[colaborador.status]}`}

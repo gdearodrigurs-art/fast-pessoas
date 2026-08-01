@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  esquemaFiltroEstrutura,
+  type OpcoesFiltroEstrutura,
+} from "../estrutura/esquemas";
 
 // ------------------------------------------------------------------ organograma
 // VISÃO sobre dado que já existe — este domínio não tem tabela própria.
@@ -23,14 +27,21 @@ export const PROFUNDIDADE_MAXIMA = 20;
 /** Status de vaga que conta como "posição em aberto" (nem fechada, nem cancelada). */
 export const STATUS_VAGA_EM_ABERTO = ["aberta", "congelada"] as const;
 
-export const esquemaConsultaOrganograma = z.object({
-  /** Recorte por unidade (rh.estabelecimento.id) — mantém os ancestrais. */
-  estabelecimento_id: z.coerce.number().int().positive().optional(),
-  /** Recorte por cargo funcional (rh.cargo.id) — mantém os ancestrais. */
-  cargo_id: z.coerce.number().int().positive().optional(),
-  /** Busca por nome: destaca o nó e abre o caminho até ele. */
-  busca: z.string().trim().min(2).max(100).optional(),
-});
+/**
+ * Recorte do organograma. Os TRÊS campos da estrutura (registro, lotação e
+ * centro de custo) vêm de `esquemaFiltroEstrutura` — o `estabelecimento_id`
+ * que a tela já tinha É a lotação, e agora ganha os dois irmãos. Todos são
+ * combináveis entre si e com cargo e busca, e todos mantêm os ancestrais: o
+ * filtro recorta quem é DESTACADO, nunca quebra a linha de subordinação.
+ */
+export const esquemaConsultaOrganograma = z
+  .object({
+    /** Recorte por cargo funcional (rh.cargo.id) — mantém os ancestrais. */
+    cargo_id: z.coerce.number().int().positive().optional(),
+    /** Busca por nome: destaca o nó e abre o caminho até ele. */
+    busca: z.string().trim().min(2).max(100).optional(),
+  })
+  .extend(esquemaFiltroEstrutura.shape);
 
 export type ConsultaOrganograma = z.infer<typeof esquemaConsultaOrganograma>;
 
@@ -43,8 +54,13 @@ interface NoBase {
   chave: string;
   /** Profundidade a partir da raiz visível (0 = raiz). */
   nivel: number;
+  /** Os três campos da 0047. Vaga em aberto só tem lotação — os outros vêm nulos. */
+  empresa_id: number | null;
+  empresa_nome: string | null;
   estabelecimento_id: number | null;
   unidade: string | null;
+  centro_custo_id: number | null;
+  centro_custo: string | null;
   cargo_id: number | null;
   cargo_nome: string | null;
   /** Casou com o filtro/busca em vigor — a tela abre o caminho e destaca. */
@@ -108,7 +124,8 @@ export interface Organograma {
   /** Vaga em aberto cujo solicitante não é colaborador no quadro. */
   vagas_sem_no: NoVaga[];
   headcount: HeadcountOrganograma | null;
-  unidades: OpcaoOrganograma[];
+  /** Opções dos três seletores — mesma fonte da lista e dos relatórios. */
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   cargos: OpcaoOrganograma[];
   /** Quantos nós casaram com o filtro/busca (0 = nada encontrado). */
   destacados: number;

@@ -2,6 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
+import {
+  FILTRO_ESTRUTURA_VAZIO,
+  FiltroEstrutura,
+  filtroEstruturaAtivo,
+  parametrosFiltroEstrutura,
+  type OpcoesFiltroEstrutura,
+  type ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
 import estilos from "./page.module.css";
 
 interface Aniversariante {
@@ -14,9 +22,8 @@ interface Aniversariante {
 
 interface RelatorioAniversariantes {
   mes: number;
-  estabelecimento_id: number | null;
   aniversariantes: Aniversariante[];
-  unidades: { estabelecimento_id: number; unidade: string }[];
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   fichas_sem_data_nascimento: number;
 }
 
@@ -28,6 +35,7 @@ interface RecorteAgregado {
 }
 
 interface RelatorioDiversidade {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   com_data_nascimento: number;
   sem_data_nascimento: number;
@@ -37,6 +45,7 @@ interface RelatorioDiversidade {
 }
 
 interface RelatorioComposicaoFamiliar {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   minimo_por_recorte: number;
   idade_limite_crianca: number;
@@ -62,10 +71,14 @@ interface LinhaContagem {
 }
 
 interface RelatorioHeadcount {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   ativos: number;
   afastados: number;
-  por_unidade: LinhaContagem[];
+  /** Os TRÊS campos, cada um com sua contagem — são perguntas diferentes. */
+  por_registro: LinhaContagem[];
+  por_lotacao: LinhaContagem[];
+  por_centro_custo: LinhaContagem[];
   por_cargo: LinhaContagem[];
   por_vinculo: LinhaContagem[];
 }
@@ -328,7 +341,12 @@ export function PainelRelatorios({
   const [carregando, setCarregando] = useState(false);
 
   const [mes, setMes] = useState<string>(() => String(mesCorrenteSp()));
-  const [unidadeFiltro, setUnidadeFiltro] = useState<string>("");
+  // UM recorte para as QUATRO abas. Os três campos nascem vazios e não somem ao
+  // trocar de aba: quem recortou o headcount na Supply e foi ver diversidade
+  // está perguntando sobre a MESMA Supply.
+  const [estrutura, setEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
 
   const [aniversariantes, setAniversariantes] =
     useState<RelatorioAniversariantes | null>(null);
@@ -346,7 +364,7 @@ export function PainelRelatorios({
     try {
       const parametros = new URLSearchParams();
       if (mes !== "") parametros.set("mes", mes);
-      if (unidadeFiltro !== "") parametros.set("estabelecimento_id", unidadeFiltro);
+      parametrosFiltroEstrutura(estrutura, parametros);
       const resposta = await fetch(`/api/relatorios/aniversariantes?${parametros}`);
       if (!resposta.ok) {
         setErro(await lerErro(resposta));
@@ -358,7 +376,7 @@ export function PainelRelatorios({
     } finally {
       setCarregando(false);
     }
-  }, [mes, unidadeFiltro]);
+  }, [mes, estrutura]);
 
   const carregarSimples = useCallback(
     async (
@@ -368,7 +386,10 @@ export function PainelRelatorios({
       setCarregando(true);
       setErro(null);
       try {
-        const resposta = await fetch(caminho);
+        const consulta = parametrosFiltroEstrutura(estrutura).toString();
+        const resposta = await fetch(
+          `${caminho}${consulta ? `?${consulta}` : ""}`
+        );
         if (!resposta.ok) {
           setErro(await lerErro(resposta));
           return;
@@ -380,8 +401,19 @@ export function PainelRelatorios({
         setCarregando(false);
       }
     },
-    []
+    [estrutura]
   );
+
+  // Mexer no recorte invalida o que já está na tela: um número da empresa toda
+  // embaixo de um filtro de uma empresa só é o pior resultado possível. Zerar
+  // aqui (e não num efeito) é o que faz o efeito de carga logo abaixo buscar de
+  // novo, com o recorte novo.
+  function mudarEstrutura(valor: ValorFiltroEstrutura) {
+    setEstrutura(valor);
+    setDiversidade(null);
+    setFamilia(null);
+    setHeadcount(null);
+  }
 
   // As buscas ficam dentro de um async IIFE: assim nenhum setState acontece
   // sincronamente no corpo do efeito (mesmo padrão das outras telas).
@@ -441,6 +473,28 @@ export function PainelRelatorios({
           ))}
         </div>
 
+        {/* Os TRÊS campos do dono valem para as quatro abas ao mesmo tempo. */}
+        <section className={estilos.cartao}>
+          <h2>Recorte por registro, lotação e centro de custo</h2>
+          <p className={estilos.nota}>
+            Vale para as quatro abas ao mesmo tempo, e os três combinam entre
+            si. Em branco = todo o quadro.
+          </p>
+          <FiltroEstrutura
+            prefixoId="rel"
+            opcoes={
+              aniversariantes?.estrutura_opcoes ??
+              headcount?.estrutura_opcoes ??
+              diversidade?.estrutura_opcoes ??
+              familia?.estrutura_opcoes ??
+              null
+            }
+            valor={estrutura}
+            aoMudar={mudarEstrutura}
+            desabilitado={carregando}
+          />
+        </section>
+
         {erro && <p className={estilos.erro}>{erro}</p>}
 
         {aba === "aniversariantes" && (
@@ -464,27 +518,6 @@ export function PainelRelatorios({
                   {MESES.map((nome, indice) => (
                     <option key={nome} value={String(indice + 1)}>
                       {nome}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className={estilos.campoGrupo}>
-                <label className={estilos.rotulo} htmlFor="rlUnidade">
-                  Unidade
-                </label>
-                <select
-                  className={estilos.campo}
-                  id="rlUnidade"
-                  value={unidadeFiltro}
-                  onChange={(e) => setUnidadeFiltro(e.target.value)}
-                >
-                  <option value="">Todas as unidades</option>
-                  {(aniversariantes?.unidades ?? []).map((unidade) => (
-                    <option
-                      key={unidade.estabelecimento_id}
-                      value={String(unidade.estabelecimento_id)}
-                    >
-                      {unidade.unidade}
                     </option>
                   ))}
                 </select>
@@ -523,7 +556,10 @@ export function PainelRelatorios({
                 )}
                 {aniversariantes.aniversariantes.length === 0 ? (
                   <p className={estilos.vazio}>
-                    Ninguém faz aniversário neste mês com o filtro atual.
+                    Ninguém faz aniversário neste mês
+                    {filtroEstruturaAtivo(estrutura)
+                      ? " dentro deste recorte."
+                      : "."}
                   </p>
                 ) : (
                   <div className={estilos.tabelaEnvolucro}>
@@ -533,7 +569,7 @@ export function PainelRelatorios({
                           <th>Dia</th>
                           <th>Nome</th>
                           <th>Cargo</th>
-                          <th>Unidade</th>
+                          <th>Lotação</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -678,8 +714,12 @@ export function PainelRelatorios({
           <section className={estilos.cartao}>
             <h2>Headcount</h2>
             <p className={estilos.nota}>
-              Quadro atual por lotação, posição e vínculo vigentes. Desligados
-              não entram.
+              Quadro atual pelos TRÊS campos — registro (em qual empresa do
+              grupo a pessoa está registrada), lotação (onde ela trabalha) e
+              centro de custo (onde o custo cai) — mais posição e vínculo
+              vigentes. As três primeiras contagens somam o mesmo total por
+              caminhos diferentes: são perguntas diferentes, não a mesma
+              repetida. Desligados não entram.
             </p>
             {!headcount ? (
               <p className={estilos.vazio}>Carregando…</p>
@@ -704,8 +744,18 @@ export function PainelRelatorios({
                   </div>
                 </div>
                 <TabelaContagem
-                  titulo="Por unidade"
-                  linhas={headcount.por_unidade}
+                  titulo="Por registro (empresa do grupo)"
+                  linhas={headcount.por_registro}
+                  total={headcount.total_quadro}
+                />
+                <TabelaContagem
+                  titulo="Por lotação (local de trabalho)"
+                  linhas={headcount.por_lotacao}
+                  total={headcount.total_quadro}
+                />
+                <TabelaContagem
+                  titulo="Por centro de custo"
+                  linhas={headcount.por_centro_custo}
                   total={headcount.total_quadro}
                 />
                 <TabelaContagem

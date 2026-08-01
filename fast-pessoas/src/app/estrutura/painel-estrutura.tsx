@@ -58,11 +58,15 @@ function formatarCnpj(cnpj: string | null): string {
   return `${cnpj.slice(0, 2)}.${cnpj.slice(2, 5)}.${cnpj.slice(5, 8)}/${cnpj.slice(8, 12)}-${cnpj.slice(12)}`;
 }
 
+// Campo NASCE VAZIO. `tipo` era "matriz" chumbado: quem criasse a segunda,
+// terceira e quarta empresa do grupo sem reparar no seletor gravaria quatro
+// matrizes — um rótulo de negócio que ninguém escolheu. Vazio obriga a escolha,
+// e a semeadura de "nova versão" continua vindo da versão VIGENTE.
 const EMPRESA_VAZIA = {
   cnpj: "",
   razao_social: "",
   nome_fantasia: "",
-  tipo: "matriz" as TipoEmpresa,
+  tipo: "" as TipoEmpresa | "",
   inicio_vigencia: "",
 };
 
@@ -394,7 +398,7 @@ export function PainelEstrutura({
                                 cnpj: empresa.cnpj ?? "",
                                 razao_social: empresa.razao_social ?? "",
                                 nome_fantasia: empresa.nome_fantasia ?? "",
-                                tipo: empresa.tipo ?? "matriz",
+                                tipo: empresa.tipo ?? "",
                                 inicio_vigencia: "",
                               });
                             }}
@@ -480,6 +484,7 @@ export function PainelEstrutura({
                     <select
                       className={estilos.campo}
                       id="evTipo"
+                      required
                       value={versaoEmpresa.tipo}
                       onChange={(e) =>
                         setVersaoEmpresa((a) => ({
@@ -488,6 +493,7 @@ export function PainelEstrutura({
                         }))
                       }
                     >
+                      <option value="">Selecione…</option>
                       {TIPOS_EMPRESA.map((tipo) => (
                         <option key={tipo} value={tipo}>
                           {ROTULOS_TIPO_EMPRESA[tipo]}
@@ -588,6 +594,7 @@ export function PainelEstrutura({
                 <select
                   className={estilos.campo}
                   id="empTipo"
+                  required
                   value={novaEmpresa.tipo}
                   onChange={(e) =>
                     setNovaEmpresa((a) => ({
@@ -596,6 +603,7 @@ export function PainelEstrutura({
                     }))
                   }
                 >
+                  <option value="">Selecione…</option>
                   {TIPOS_EMPRESA.map((tipo) => (
                     <option key={tipo} value={tipo}>
                       {ROTULOS_TIPO_EMPRESA[tipo]}

@@ -146,10 +146,39 @@ function montarCredenciais(ctx) {
   }
 
   const porPapel = (papel) => personas.find((p) => p.papel === papel)?.email ?? '—';
+  const transferencia = ctx.transferencia;
   linhas.push(
     '',
     '## Roteiro sugerido',
-    '',
+    ''
+  );
+  if (transferencia) {
+    linhas.push(
+      '**Comece por aqui — é o caso que motivou a onda I.** "Ele demite e recontrata na outra',
+      'empresa, mas não queria perder os dados e histórico":',
+      '',
+      `- Entre como \`${porPapel('dp')}\` e abra **Colaboradores** buscando por`,
+      `  **${transferencia.nome}**. Ela aparece DUAS vezes: matrícula`,
+      `  ${transferencia.vinculoAnteriorMatricula} (desligada) e ${transferencia.vinculoNovoMatricula}`,
+      '  (ativa) — dois contratos, uma pessoa só.',
+      `- Abra a ficha da matrícula ${transferencia.vinculoNovoMatricula}: a tabela **Vínculos da`,
+      '  pessoa** mostra os dois lado a lado, com a empresa de registro de cada um, e a **linha do',
+      '  tempo é contínua** — os anos de história ficaram no contrato antigo e continuam visíveis.',
+      '  O CPF, o e-mail e o 2FA são os mesmos: uma conta por gente, não por contrato.',
+      `- Em **Demandas → movimentações aplicadas**, o pedido ${'DEM-' + String(transferencia.numero).padStart(4, '0')}`,
+      '  mostra o ato inteiro: aberto pelo DP, aprovado pelo líder e pela diretoria, aplicado na',
+      '  mesma transação, e agora na fila do DP com a lista de trâmites (acerto rescisório, eSocial,',
+      '  ASO admissional, readesão de benefícios).',
+      '- Em **Estrutura**, veja os três campos separados: 5 empresas de registro (uma ainda **sem',
+      '  CNPJ**, em constituição — cadastro que o DP tem de completar), 5 locais de trabalho e 8',
+      '  centros de custo, entre eles o **CSC**, que recebe o custo de gente registrada em empresas',
+      '  diferentes e sentada em lojas diferentes.',
+      '',
+      '### Depois disso, o roteiro dos demais módulos',
+      ''
+    );
+  }
+  linhas.push(
     `1. Entre como \`${porPapel('diretoria')}\` para a visão de rede (5 unidades, indicadores, clima).`,
     '   Há uma **promoção esperando a decisão da diretoria** em Demandas → Promoções e',
     '   transferências: aprove ao vivo e mostre a posição nova, o evento na linha do tempo e',

@@ -1,5 +1,7 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
+import { FiltroEstrutura } from "../estrutura/esquemas";
+import { condicaoFiltroEstrutura } from "../estrutura/repositorio";
 import {
   Cha,
   FiltroColaboradores,
@@ -105,7 +107,17 @@ export interface ColaboradorResumo {
   status: StatusColaborador;
   data_admissao: string;
   cargo_nome: string | null;
+  // Os TRÊS campos da 0047, cada um com nome próprio. Eles vêm da mesma linha
+  // de alocação que o filtro compara — o que a tela mostra e o que o filtro
+  // recorta têm que ser a mesma coisa.
+  /** REGISTRO: em qual empresa do grupo o vínculo está registrado. */
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  /** LOTAÇÃO: o local físico onde a pessoa trabalha. */
   unidade: string | null;
+  /** CENTRO DE CUSTO: o código (o nome legível vem em centro_custo_nome). */
+  centro_custo: string | null;
+  centro_custo_nome: string | null;
   dias_desde_feedback: number | null;
   dias_desde_admissao: number;
 }
@@ -140,12 +152,6 @@ export interface FichaColaborador extends ColaboradorResumo {
   contexto: string | null;
   email: string;
   usuario_ativo: boolean;
-  /** REGISTRO vigente: em qual empresa do grupo o vínculo está registrado. */
-  empresa_id: number | null;
-  empresa_nome: string | null;
-  /** Código do CENTRO DE CUSTO vigente (o nome legível vem em centro_custo_nome). */
-  centro_custo: string | null;
-  centro_custo_nome: string | null;
   gestor_id: number | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
@@ -212,7 +218,11 @@ interface LinhaResumo extends Record<string, unknown> {
   status: StatusColaborador;
   data_admissao: string;
   cargo_nome: string | null;
+  empresa_id: string | null;
+  empresa_nome: string | null;
   unidade: string | null;
+  centro_custo: string | null;
+  centro_custo_nome: string | null;
   dias_desde_feedback: number | null;
   dias_desde_admissao: number;
 }
@@ -228,10 +238,6 @@ interface LinhaFicha extends LinhaResumo {
   contexto: string | null;
   email: string;
   usuario_ativo: boolean;
-  empresa_id: string | null;
-  empresa_nome: string | null;
-  centro_custo: string | null;
-  centro_custo_nome: string | null;
   gestor_id: string | null;
   gestor_nome: string | null;
   ultimo_feedback_em: string | null;
@@ -292,7 +298,12 @@ const LATERAL_RCF_DA_POSICAO = `
           FROM rh.cargo_versao cl
          WHERE cl.cargo_id = cv.cargo_lider_id AND cl.status = 'ativa'
       ) lider ON TRUE
-     WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
+     -- Última posição, não só a aberta: o contrato encerrado direito (ver
+     -- LATERAIS_VIGENTES) não tem posição vigente, e o RCF do cargo em que a
+     -- pessoa estava continua sendo a resposta certa para "o que ela fazia".
+     WHERE p.colaborador_id = c.id
+     ORDER BY p.inicio_vigencia DESC, p.id DESC
+     LIMIT 1
   ) rcf ON TRUE`;
 
 /** RCF vigente de um cargo — usado pela visualização imprimível. */
@@ -338,21 +349,37 @@ export async function buscarRcfPorCargo(
 }
 
 // Laterais compartilhadas de projeção vigente (cargo, lotação, gestor, feedback).
+//
+// "VIGENTE, ou a ÚLTIMA quando o contrato acabou" — não é o mesmo que
+// `fim_vigencia IS NULL`. Um vínculo ENCERRADO direito não tem nenhuma linha
+// aberta: a transferência entre empresas (0048) fecha posição e alocação na
+// véspera, como manda a vigência. Filtrando só pelo aberto, a ficha do contrato
+// encerrado mostrava "REGISTRO —, LOTAÇÃO —, CENTRO DE CUSTO —" e contradizia,
+// na mesma página, a tabela de vínculos (que já lê a última alocação, via
+// rh.vinculos_da_pessoa). Quem saiu do grupo continua tendo saído DE algum
+// lugar, e é isso que o DP procura na ficha.
+// Mesma ordenação de rh.vinculos_da_pessoa: início mais recente primeiro.
 const LATERAIS_VIGENTES = `
   LEFT JOIN LATERAL (
     SELECT cv.nome AS cargo_nome
       FROM rh.posicao_colaborador p
       JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
-     WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
+     WHERE p.colaborador_id = c.id
+     ORDER BY p.inicio_vigencia DESC, p.id DESC
+     LIMIT 1
   ) pos ON TRUE
-  -- Registro, lotação e centro de custo VIGENTES (migration 0047): três campos
+  -- Registro, lotação e centro de custo (migration 0047): três campos
   -- independentes, lidos da view que já resolve o nome de cada catálogo.
   LEFT JOIN LATERAL (
     SELECT ld.empresa_id, ld.empresa_nome,
+           ld.estabelecimento_id,
            ld.lotacao_nome AS unidade,
+           ld.centro_custo_id,
            ld.centro_custo_codigo AS centro_custo, ld.centro_custo_nome
       FROM rh.lotacao_detalhada ld
-     WHERE ld.colaborador_id = c.id AND ld.fim_vigencia IS NULL
+     WHERE ld.colaborador_id = c.id
+     ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+     LIMIT 1
   ) lot ON TRUE
   LEFT JOIN LATERAL (
     SELECT f.realizado_em::text AS ultimo_feedback_em,
@@ -380,20 +407,34 @@ export async function listar(
     parametros.push(filtro.status);
     condicoes.push(`c.status = $${parametros.length}`);
   }
+  // Recorte pelos TRÊS campos da 0047, combinável entre si e com busca/status.
+  // A condição compara a MESMA linha de alocação que `lot` projeta na tela —
+  // ver condicaoFiltroEstrutura.
+  const filtroEstrutura = condicaoFiltroEstrutura(filtro, parametros, "c");
   const linhas = await consultar<LinhaResumo>(
     `SELECT c.id, c.matricula, c.nome_completo, c.tipo_vinculo, c.status,
             c.data_admissao::text AS data_admissao,
-            pos.cargo_nome, lot.unidade,
+            pos.cargo_nome,
+            lot.empresa_id, lot.empresa_nome, lot.unidade,
+            lot.centro_custo, lot.centro_custo_nome,
             fb.dias_desde_feedback,
             ((now() AT TIME ZONE 'America/Sao_Paulo')::date - c.data_admissao)
               AS dias_desde_admissao
        FROM rh.colaborador c
        ${LATERAIS_VIGENTES}
-      WHERE ${condicoes.join(" AND ")}
+      WHERE ${condicoes.join(" AND ")}${filtroEstrutura}
       ORDER BY c.nome_completo, c.id`,
     parametros
   );
-  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+  return linhas.map(montarResumo);
+}
+
+function montarResumo(linha: LinhaResumo): ColaboradorResumo {
+  return {
+    ...linha,
+    id: Number(linha.id),
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
+  };
 }
 
 export async function buscarFicha(
@@ -590,8 +631,15 @@ export async function criar(
     tipo_vinculo: TipoVinculo;
     data_admissao: string;
   }
-): Promise<ColaboradorResumo> {
-  const { rows } = await cliente.query<LinhaResumo>(
+): Promise<VinculoCriado> {
+  const { rows } = await cliente.query<{
+    id: string;
+    matricula: string;
+    nome_completo: string;
+    tipo_vinculo: TipoVinculo;
+    status: StatusColaborador;
+    data_admissao: string;
+  }>(
     `INSERT INTO rh.colaborador
        (pessoa_id, matricula, matricula_esocial, tipo_vinculo, data_admissao)
      VALUES ($1, $2, $3, $4, $5)
@@ -607,6 +655,21 @@ export async function criar(
   );
   const linha = rows[0];
   return { ...linha, id: Number(linha.id) };
+}
+
+/**
+ * O que existe no instante em que o vínculo nasce. NÃO é `ColaboradorResumo`:
+ * cargo, registro, lotação e centro de custo ainda não foram alocados, e
+ * devolvê-los como null aqui seria dizer "não tem" no lugar de "ainda não foi
+ * definido".
+ */
+export interface VinculoCriado {
+  id: number;
+  matricula: string;
+  nome_completo: string;
+  tipo_vinculo: TipoVinculo;
+  status: StatusColaborador;
+  data_admissao: string;
 }
 
 export async function buscarParaAtualizar(
@@ -1841,6 +1904,20 @@ export async function inserirVersaoEstabelecimento(
 
 const CONDICAO_QUADRO = "c.status <> 'desligado'";
 
+/**
+ * Recorte dos relatórios pelos TRÊS campos (registro, lotação, centro de
+ * custo), combinável entre si e com o que cada relatório já filtrava. Um
+ * relatório que aceita o recorte e outro que o ignora é pior do que nenhum dos
+ * dois: o número de uma aba contradiria o da aba ao lado. Por isso TODA
+ * contagem agregada desta seção recebe o mesmo `filtro` e a mesma condição.
+ */
+function recorteDoQuadro(
+  filtro: FiltroEstrutura,
+  parametros: unknown[]
+): string {
+  return condicaoFiltroEstrutura(filtro, parametros, "c");
+}
+
 export interface Aniversariante {
   id: number;
   nome_completo: string;
@@ -1851,14 +1928,10 @@ export interface Aniversariante {
 
 export async function listarAniversariantes(
   mes: number,
-  estabelecimentoId?: number
+  filtro: FiltroEstrutura
 ): Promise<Aniversariante[]> {
   const parametros: unknown[] = [mes];
-  let filtroUnidade = "";
-  if (estabelecimentoId !== undefined) {
-    parametros.push(estabelecimentoId);
-    filtroUnidade = `AND lot.estabelecimento_id = $${parametros.length}`;
-  }
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{
     id: string;
     nome_completo: string;
@@ -1885,8 +1958,7 @@ export async function listarAniversariantes(
        ) lot ON TRUE
       WHERE ${CONDICAO_QUADRO}
         AND c.data_nascimento IS NOT NULL
-        AND date_part('month', c.data_nascimento) = $1
-        ${filtroUnidade}
+        AND date_part('month', c.data_nascimento) = $1${recorte}
       ORDER BY date_part('day', c.data_nascimento), c.nome_completo`,
     parametros
   );
@@ -1897,41 +1969,21 @@ export async function listarAniversariantes(
   }));
 }
 
-/**
- * Unidades com gente no quadro — alimenta o filtro do relatório sem obrigar o
- * usuário a ter rh.estabelecimento.administrar (que é chave de cadastro, do DP).
- */
-export async function listarUnidadesDoQuadro(): Promise<
-  { estabelecimento_id: number; unidade: string }[]
-> {
-  const linhas = await consultar<{
-    estabelecimento_id: string;
-    unidade: string;
-  }>(
-    `SELECT DISTINCT l.estabelecimento_id, ev.unidade
-       FROM rh.lotacao l
-       JOIN rh.colaborador c ON c.id = l.colaborador_id
-       JOIN rh.estabelecimento_versao ev
-         ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-      WHERE l.fim_vigencia IS NULL AND ${CONDICAO_QUADRO}
-      ORDER BY ev.unidade`
-  );
-  return linhas.map((linha) => ({
-    estabelecimento_id: Number(linha.estabelecimento_id),
-    unidade: linha.unidade,
-  }));
-}
-
 /** Honestidade do relatório: quantas fichas do quadro ainda não têm a data. */
-export async function contarCoberturaNascimento(): Promise<{
+export async function contarCoberturaNascimento(
+  filtro: FiltroEstrutura
+): Promise<{
   com_data: number;
   sem_data: number;
 }> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{ com_data: string; sem_data: string }>(
     `SELECT count(*) FILTER (WHERE c.data_nascimento IS NOT NULL)::text AS com_data,
             count(*) FILTER (WHERE c.data_nascimento IS NULL)::text     AS sem_data
        FROM rh.colaborador c
-      WHERE ${CONDICAO_QUADRO}`
+      WHERE ${CONDICAO_QUADRO}${recorte}`,
+    parametros
   );
   return {
     com_data: Number(linhas[0].com_data),
@@ -1939,14 +1991,17 @@ export async function contarCoberturaNascimento(): Promise<{
   };
 }
 
-export async function contarPorGenero(): Promise<
-  { genero: Genero; quantidade: number }[]
-> {
+export async function contarPorGenero(
+  filtro: FiltroEstrutura
+): Promise<{ genero: Genero; quantidade: number }[]> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{ genero: Genero; quantidade: string }>(
     `SELECT c.genero, count(*)::text AS quantidade
        FROM rh.colaborador c
-      WHERE ${CONDICAO_QUADRO}
-      GROUP BY c.genero`
+      WHERE ${CONDICAO_QUADRO}${recorte}
+      GROUP BY c.genero`,
+    parametros
   );
   const porGenero = new Map(
     linhas.map((linha) => [linha.genero, Number(linha.quantidade)])
@@ -1962,16 +2017,19 @@ export async function contarPorGenero(): Promise<
  * faixas acontece no serviço, com a definição única de FAIXAS_IDADE — a faixa
  * fica sendo regra de produto num lugar só, e não SQL montado por concatenação.
  */
-export async function contarPorIdade(): Promise<
-  { idade: number; quantidade: number }[]
-> {
+export async function contarPorIdade(
+  filtro: FiltroEstrutura
+): Promise<{ idade: number; quantidade: number }[]> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{ idade: string; quantidade: string }>(
     `SELECT date_part('year', age((now() AT TIME ZONE 'America/Sao_Paulo')::date,
                                  c.data_nascimento))::int::text AS idade,
             count(*)::text AS quantidade
        FROM rh.colaborador c
-      WHERE ${CONDICAO_QUADRO} AND c.data_nascimento IS NOT NULL
-      GROUP BY 1`
+      WHERE ${CONDICAO_QUADRO} AND c.data_nascimento IS NOT NULL${recorte}
+      GROUP BY 1`,
+    parametros
   );
   return linhas.map((linha) => ({
     idade: Number(linha.idade),
@@ -1996,13 +2054,16 @@ export interface ComposicaoFamiliarBruta {
  * Dado de terceiro (LGPD): só contagem sai daqui, nunca nome de dependente.
  */
 export async function agregarComposicaoFamiliar(
-  idadeLimiteCrianca: number
+  idadeLimiteCrianca: number,
+  filtro: FiltroEstrutura
 ): Promise<ComposicaoFamiliarBruta> {
+  const parametros: unknown[] = [idadeLimiteCrianca];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<Record<string, string>>(
     `WITH quadro AS (
        SELECT c.id, c.genero
          FROM rh.colaborador c
-        WHERE ${CONDICAO_QUADRO}
+        WHERE ${CONDICAO_QUADRO}${recorte}
      ), filhos AS (
        SELECT d.colaborador_id, d.nascimento
          FROM rh.dependente d
@@ -2029,7 +2090,7 @@ export async function agregarComposicaoFamiliar(
                                      f.nascimento)) <= $1)::text AS total_criancas,
        (SELECT count(*) FROM rh.dependente d
           JOIN quadro q ON q.id = d.colaborador_id)::text AS total_dependentes`,
-    [idadeLimiteCrianca]
+    parametros
   );
   const linha = linhas[0];
   return {
@@ -2050,21 +2111,43 @@ export interface LinhaHeadcount {
   quantidade: number;
 }
 
-export async function contarHeadcountPorUnidade(): Promise<LinhaHeadcount[]> {
+/**
+ * Headcount por UM dos três campos. Antes existia só "por unidade", que somava
+ * o local de trabalho; agora o mesmo relatório responde as três perguntas
+ * diferentes — quanta gente cada CNPJ registra, quanta trabalha em cada local e
+ * quanto do quadro cai em cada centro de custo. São três coisas independentes, e
+ * responder uma no lugar da outra dá o número errado.
+ */
+export async function contarHeadcountPorCampoDaEstrutura(
+  campo: "empresa" | "lotacao" | "centro_custo",
+  filtro: FiltroEstrutura
+): Promise<LinhaHeadcount[]> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
+  const expressao = {
+    empresa: "COALESCE(lot.empresa_nome, 'Sem registro definido')",
+    lotacao: "COALESCE(lot.lotacao_nome, 'Sem lotação definida')",
+    centro_custo: `COALESCE(
+        CASE WHEN lot.centro_custo_nome IS NULL THEN lot.centro_custo_codigo
+             ELSE lot.centro_custo_codigo || ' — ' || lot.centro_custo_nome END,
+        'Sem centro de custo definido')`,
+  }[campo];
   const linhas = await consultar<{ rotulo: string; quantidade: string }>(
-    `SELECT COALESCE(lot.unidade, 'Sem lotação vigente') AS rotulo,
+    `SELECT ${expressao} AS rotulo,
             count(*)::text AS quantidade
        FROM rh.colaborador c
        LEFT JOIN LATERAL (
-         SELECT ev.unidade
-           FROM rh.lotacao l
-           LEFT JOIN rh.estabelecimento_versao ev
-             ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
-          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL
+         SELECT ld.empresa_nome, ld.lotacao_nome,
+                ld.centro_custo_codigo, ld.centro_custo_nome
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
        ) lot ON TRUE
-      WHERE ${CONDICAO_QUADRO}
+      WHERE ${CONDICAO_QUADRO}${recorte}
       GROUP BY 1
-      ORDER BY count(*) DESC, 1`
+      ORDER BY count(*) DESC, 1`,
+    parametros
   );
   return linhas.map((linha) => ({
     rotulo: linha.rotulo,
@@ -2072,7 +2155,11 @@ export async function contarHeadcountPorUnidade(): Promise<LinhaHeadcount[]> {
   }));
 }
 
-export async function contarHeadcountPorCargo(): Promise<LinhaHeadcount[]> {
+export async function contarHeadcountPorCargo(
+  filtro: FiltroEstrutura
+): Promise<LinhaHeadcount[]> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{ rotulo: string; quantidade: string }>(
     `SELECT COALESCE(pos.cargo_nome, 'Sem posição vigente') AS rotulo,
             count(*)::text AS quantidade
@@ -2083,9 +2170,10 @@ export async function contarHeadcountPorCargo(): Promise<LinhaHeadcount[]> {
            JOIN rh.cargo_versao cv ON cv.id = p.cargo_versao_id
           WHERE p.colaborador_id = c.id AND p.fim_vigencia IS NULL
        ) pos ON TRUE
-      WHERE ${CONDICAO_QUADRO}
+      WHERE ${CONDICAO_QUADRO}${recorte}
       GROUP BY 1
-      ORDER BY count(*) DESC, 1`
+      ORDER BY count(*) DESC, 1`,
+    parametros
   );
   return linhas.map((linha) => ({
     rotulo: linha.rotulo,
@@ -2093,18 +2181,21 @@ export async function contarHeadcountPorCargo(): Promise<LinhaHeadcount[]> {
   }));
 }
 
-export async function contarHeadcountPorVinculo(): Promise<
-  { tipo_vinculo: TipoVinculo; quantidade: number }[]
-> {
+export async function contarHeadcountPorVinculo(
+  filtro: FiltroEstrutura
+): Promise<{ tipo_vinculo: TipoVinculo; quantidade: number }[]> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{
     tipo_vinculo: TipoVinculo;
     quantidade: string;
   }>(
     `SELECT c.tipo_vinculo, count(*)::text AS quantidade
        FROM rh.colaborador c
-      WHERE ${CONDICAO_QUADRO}
+      WHERE ${CONDICAO_QUADRO}${recorte}
       GROUP BY 1
-      ORDER BY count(*) DESC`
+      ORDER BY count(*) DESC`,
+    parametros
   );
   return linhas.map((linha) => ({
     tipo_vinculo: linha.tipo_vinculo,
@@ -2112,11 +2203,13 @@ export async function contarHeadcountPorVinculo(): Promise<
   }));
 }
 
-export async function contarQuadro(): Promise<{
+export async function contarQuadro(filtro: FiltroEstrutura): Promise<{
   total: number;
   ativos: number;
   afastados: number;
 }> {
+  const parametros: unknown[] = [];
+  const recorte = recorteDoQuadro(filtro, parametros);
   const linhas = await consultar<{
     total: string;
     ativos: string;
@@ -2126,7 +2219,8 @@ export async function contarQuadro(): Promise<{
             count(*) FILTER (WHERE c.status = 'ativo')::text    AS ativos,
             count(*) FILTER (WHERE c.status = 'afastado')::text AS afastados
        FROM rh.colaborador c
-      WHERE ${CONDICAO_QUADRO}`
+      WHERE ${CONDICAO_QUADRO}${recorte}`,
+    parametros
   );
   return {
     total: Number(linhas[0].total),

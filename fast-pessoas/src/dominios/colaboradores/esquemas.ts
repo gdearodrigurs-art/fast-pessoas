@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaFiltroEstrutura } from "../estrutura/esquemas";
 
 export const TIPOS_VINCULO = [
   "clt",
@@ -150,10 +151,18 @@ export type AtualizacaoColaborador = z.infer<
   typeof esquemaAtualizacaoColaborador
 >;
 
-export const esquemaFiltroColaboradores = z.object({
-  busca: z.string().trim().min(1).max(100).optional(),
-  status: z.enum(STATUS_COLABORADOR).optional(),
-});
+/**
+ * Busca, status e os TRÊS campos da estrutura (registro, lotação, centro de
+ * custo) — todos opcionais e todos combináveis entre si. O recorte por
+ * estrutura vem de `esquemaFiltroEstrutura` para a lista, os relatórios, o
+ * organograma e a folha perguntarem a mesma coisa do mesmo jeito.
+ */
+export const esquemaFiltroColaboradores = z
+  .object({
+    busca: z.string().trim().min(1).max(100).optional(),
+    status: z.enum(STATUS_COLABORADOR).optional(),
+  })
+  .extend(esquemaFiltroEstrutura.shape);
 
 export type FiltroColaboradores = z.infer<typeof esquemaFiltroColaboradores>;
 
@@ -486,10 +495,11 @@ export type FaixaIdade = (typeof FAIXAS_IDADE)[number]["chave"];
  */
 export const IDADE_LIMITE_CRIANCA = 12;
 
-export const esquemaFiltroAniversariantes = z.object({
-  mes: z.coerce.number().int().min(1).max(12).optional(),
-  estabelecimento_id: z.coerce.number().int().positive().optional(),
-});
+export const esquemaFiltroAniversariantes = z
+  .object({
+    mes: z.coerce.number().int().min(1).max(12).optional(),
+  })
+  .extend(esquemaFiltroEstrutura.shape);
 
 export type FiltroAniversariantes = z.infer<
   typeof esquemaFiltroAniversariantes

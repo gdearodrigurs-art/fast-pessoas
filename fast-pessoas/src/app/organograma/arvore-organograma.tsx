@@ -9,6 +9,13 @@ import {
   type CSSProperties,
 } from "react";
 import { Cabecalho, acaoCabecalho } from "@/app/cabecalho";
+import {
+  FILTRO_ESTRUTURA_VAZIO,
+  FiltroEstrutura,
+  filtroEstruturaAtivo,
+  parametrosFiltroEstrutura,
+  type ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
 import Link from "next/link";
 import estilos from "./page.module.css";
 import { ArvoreVertical } from "./arvore-vertical";
@@ -77,7 +84,11 @@ export function ArvoreOrganograma() {
   const [dados, setDados] = useState<Organograma | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
-  const [unidade, setUnidade] = useState("");
+  // Os três campos nascem VAZIOS — em branco é "todos", que é como a tela
+  // sempre abriu.
+  const [estrutura, setEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
   const [cargo, setCargo] = useState("");
   const [buscaCampo, setBuscaCampo] = useState("");
   const [busca, setBusca] = useState("");
@@ -105,7 +116,7 @@ export function ArvoreOrganograma() {
     setCarregando(true);
     setErro(null);
     const parametros = new URLSearchParams();
-    if (unidade) parametros.set("estabelecimento_id", unidade);
+    parametrosFiltroEstrutura(estrutura, parametros);
     if (cargo) parametros.set("cargo_id", cargo);
     if (busca) parametros.set("busca", busca);
     try {
@@ -124,7 +135,7 @@ export function ArvoreOrganograma() {
     } finally {
       setCarregando(false);
     }
-  }, [unidade, cargo, busca]);
+  }, [estrutura, cargo, busca]);
 
   useEffect(() => {
     void (async () => {
@@ -134,7 +145,7 @@ export function ArvoreOrganograma() {
 
   const corPorUnidade = useMemo(() => {
     const mapa = new Map<number, string>();
-    (dados?.unidades ?? []).forEach((opcao, indice) => {
+    (dados?.estrutura_opcoes?.lotacoes ?? []).forEach((opcao, indice) => {
       mapa.set(opcao.id, CORES_UNIDADE[indice % CORES_UNIDADE.length]);
     });
     return mapa;
@@ -207,7 +218,7 @@ export function ArvoreOrganograma() {
     enquadrarRaiz();
   }, [enquadrarRaiz, dados, escala, modoLista, reenquadres]);
 
-  const temFiltro = Boolean(unidade || cargo || busca);
+  const temFiltro = filtroEstruturaAtivo(estrutura) || Boolean(cargo || busca);
 
   return (
     <div className={estilos.pagina}>
@@ -297,24 +308,6 @@ export function ArvoreOrganograma() {
               />
             </div>
             <div className={estilos.campoGrupo}>
-              <label className={estilos.rotulo} htmlFor="unidade">
-                Unidade
-              </label>
-              <select
-                className={estilos.campo}
-                id="unidade"
-                onChange={(evento) => setUnidade(evento.target.value)}
-                value={unidade}
-              >
-                <option value="">Todas</option>
-                {(dados?.unidades ?? []).map((opcao) => (
-                  <option key={opcao.id} value={opcao.id}>
-                    {opcao.nome}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className={estilos.campoGrupo}>
               <label className={estilos.rotulo} htmlFor="cargo">
                 Cargo
               </label>
@@ -351,7 +344,7 @@ export function ArvoreOrganograma() {
                 <button
                   className={estilos.botaoSecundario}
                   onClick={() => {
-                    setUnidade("");
+                    setEstrutura(FILTRO_ESTRUTURA_VAZIO);
                     setCargo("");
                     setBuscaCampo("");
                   }}
@@ -362,6 +355,18 @@ export function ArvoreOrganograma() {
               )}
             </div>
           </div>
+
+          {/* Os TRÊS campos do dono. A "Unidade" que existia aqui era a
+              LOTAÇÃO — continua, agora ao lado do registro e do centro de
+              custo, e os três combinam entre si, com o cargo e com a busca. */}
+          <FiltroEstrutura
+            prefixoId="org"
+            opcoes={dados?.estrutura_opcoes ?? null}
+            valor={estrutura}
+            aoMudar={setEstrutura}
+            desabilitado={carregando}
+            mostrarLimpar={false}
+          />
 
           {/* `!carregando`: durante a busca `dados` ainda é o payload ANTERIOR
               (destacados=0 quando não havia filtro), e a nota piscava um
@@ -533,7 +538,7 @@ export function ArvoreOrganograma() {
                           className={estilos.unidade}
                           style={{ color: cor, borderColor: cor }}
                         >
-                          {no.unidade ?? "sem unidade"}
+                          {no.unidade ?? "sem lotação"}
                         </span>
                         <span className={estilos.contagem}>
                           prazo {dataBr(no.prazo_alvo)}
@@ -555,7 +560,7 @@ export function ArvoreOrganograma() {
                 {dados.vagas_sem_no.map((vaga) => (
                   <li key={vaga.chave}>
                     {vaga.cargo_nome ?? vaga.titulo} —{" "}
-                    {vaga.unidade ?? "sem unidade"} · prazo{" "}
+                    {vaga.unidade ?? "sem lotação"} · prazo{" "}
                     {dataBr(vaga.prazo_alvo)}
                   </li>
                 ))}

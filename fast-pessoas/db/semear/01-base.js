@@ -6,7 +6,13 @@
 //   62 colaboradores ativos + 8 desligados nos últimos 12 meses.
 //
 // O que este módulo cria:
-//   • 5 estabelecimentos com versão vigente (CNPJ fictício com DV válido);
+//   • a ESTRUTURA DO GRUPO nos três campos que a onda I separou (migration
+//     0047): 5 empresas de REGISTRO (4 com CNPJ fictício de DV válido + 1 em
+//     constituição, sem CNPJ), 5 LOTAÇÕES (o prédio, sem CNPJ próprio) e 8
+//     CENTROS DE CUSTO — inclusive o CSC, que não pertence a local nenhum.
+//     Os três NÃO coincidem de propósito: há gente registrada numa empresa,
+//     trabalhando no local de outra e com o custo caindo numa terceira;
+//   • 5 estabelecimentos com versão vigente;
 //   • 15 cargos com versão vigente (descrição + CHA) e faixa salarial vigente
 //     — o RCF completo (missão, atividades, setor, líder) é de 12-rcf.js;
 //   • 70 colaboradores (matrícula 1001+, CPF fictício com DV válido) com
@@ -67,6 +73,14 @@ const EMPRESAS = [
   { nome: 'DCS', tipo: 'filial' },
   { nome: 'Casa do Montador', tipo: 'filial' },
   { nome: 'Quarta empresa do grupo (renomear)', tipo: 'filial' },
+  // CADASTRO PELA METADE, DE PROPÓSITO (pedido do dono: "o dado de demo é limpo
+  // demais e não exercita erro humano"). A diretoria já bateu o martelo sobre a
+  // empresa nova e mandou o RH preparar o centro de custo, mas o contrato
+  // social ainda está no cartório e o DP não tem o CNPJ. É exatamente o caso
+  // que a 0047 previu ao deixar `rh.empresa_grupo.cnpj` NULLABLE — e na tela de
+  // estrutura ela aparece com CNPJ "—", razão social "—" e nenhum vínculo, que
+  // é o que o DP tem para reclamar. NÃO "conserte" inventando um CNPJ.
+  { nome: 'Fast Serviços (em constituição)', tipo: 'filial', semCnpj: true },
 ];
 
 // ------------------------------------------------------------------ unidades (LOTAÇÃO)
@@ -85,6 +99,28 @@ const UNIDADES = [
   { nome: 'Filial Sul', endereco: 'Av. das Indústrias, 3050 — Jardim Sul', empresa: 'Casa do Montador', ccLoja: 'CC-3000' },
   { nome: 'Filial Leste', endereco: 'Av. Leste-Oeste, 780 — Vila Leste', empresa: 'Quarta empresa do grupo (renomear)', ccLoja: 'CC-4000' },
   { nome: 'Filial Oeste', endereco: 'Rua dos Construtores, 215 — Parque Oeste', empresa: 'Supply', ccLoja: 'CC-5000' },
+];
+
+// ------------------------------------------------------------------ centros de custo que não são de um local
+// O CENTRO DE CUSTO é o terceiro campo, e o exemplo que o dono deu na reunião é
+// justamente um que não cabe em nenhuma loja: "registrado na Supply, trabalhando
+// na loja Centro e com o custo caindo no CSC". O CSC é mantido pela Supply (é
+// ela quem paga a estrutura corporativa) e recebe o custo de quem atende o
+// GRUPO INTEIRO — RH, DP, financeiro e compras —, esteja essa gente registrada
+// onde estiver e sentada em que loja for.
+const CENTROS_DO_GRUPO = [
+  {
+    empresa: 'Supply',
+    codigo: 'CC-9000',
+    nome: 'Centro de Serviços Compartilhados (CSC)',
+  },
+  // Já criado para a empresa que ainda não tem CNPJ: o RH prepara o centro de
+  // custo antes de o contrato social sair. Nasce sem ninguém alocado.
+  {
+    empresa: 'Fast Serviços (em constituição)',
+    codigo: 'CC-6000',
+    nome: 'Implantação Fast Serviços',
+  },
 ];
 
 // ------------------------------------------------------------------ cargos (CHA + faixa)
@@ -404,12 +440,17 @@ const QUADRO = [
   // ---------------------------------------------------------- Matriz Centro (20)
   { ref: 'helena', unidade: M, cc: 'adm', cargo: 'Diretor(a) de Operações', papel: 'diretoria', chefe: null, genero: 'f', anos: 9.2, persona: 'helena' },
   { ref: 'marcos', unidade: M, cc: 'loja', cargo: 'Gerente de Loja', papel: 'gestor', chefe: 'helena', genero: 'm', anos: 6.1, persona: 'marcos' },
-  { ref: 'rafael', unidade: M, cc: 'adm', cargo: 'Analista de RH', papel: 'rh', chefe: 'helena', genero: 'm', anos: 3.2, persona: 'rafael' },
-  { ref: 'mc_rh2', unidade: M, cc: 'adm', cargo: 'Analista de RH', papel: 'rh', chefe: 'helena', genero: 'f', tempo: 'padrao' },
-  { ref: 'patricia', unidade: M, cc: 'adm', cargo: 'Assistente de DP', papel: 'dp', chefe: 'helena', genero: 'f', anos: 4.4, persona: 'patricia' },
-  { ref: 'mc_dp2', unidade: M, cc: 'adm', cargo: 'Assistente de DP', papel: 'dp', chefe: 'helena', genero: 'm', tempo: 'medio' },
-  { ref: 'mc_fin', unidade: M, cc: 'adm', cargo: 'Analista Financeiro', papel: 'funcionario', chefe: 'helena', genero: 'f', tempo: 'medio' },
-  { ref: 'mc_compr', unidade: M, cc: 'adm', cargo: 'Comprador(a)', papel: 'funcionario', chefe: 'helena', genero: 'm', tempo: 'padrao', vinculo: 'pj' },
+  // O CORPORATIVO senta na Matriz mas atende as cinco unidades: LOTAÇÃO Matriz
+  // Centro, CUSTO no CSC. É o exemplo que o dono deu, virado dado.
+  { ref: 'rafael', unidade: M, cc: 'CC-9000', cargo: 'Analista de RH', papel: 'rh', chefe: 'helena', genero: 'm', anos: 3.2, persona: 'rafael' },
+  { ref: 'mc_rh2', unidade: M, cc: 'CC-9000', cargo: 'Analista de RH', papel: 'rh', chefe: 'helena', genero: 'f', tempo: 'padrao' },
+  { ref: 'patricia', unidade: M, cc: 'CC-9000', cargo: 'Assistente de DP', papel: 'dp', chefe: 'helena', genero: 'f', anos: 4.4, persona: 'patricia' },
+  { ref: 'mc_dp2', unidade: M, cc: 'CC-9000', cargo: 'Assistente de DP', papel: 'dp', chefe: 'helena', genero: 'm', tempo: 'medio' },
+  { ref: 'mc_fin', unidade: M, cc: 'CC-9000', cargo: 'Analista Financeiro', papel: 'funcionario', chefe: 'helena', genero: 'f', tempo: 'medio' },
+  // OS TRÊS CAMPOS DIFERENTES NA MESMA PESSOA: registrado na DCS, trabalhando
+  // na Matriz Centro (que é da Supply) e com o custo caindo no CSC. É o caso
+  // que o desenho antigo — uma "unidade" só — não conseguia nem escrever.
+  { ref: 'mc_compr', unidade: M, cc: 'CC-9000', registro: 'DCS', cargo: 'Comprador(a)', papel: 'funcionario', chefe: 'helena', genero: 'm', tempo: 'padrao', vinculo: 'pj' },
   { ref: 'mc_sup', unidade: M, cc: 'loja', cargo: 'Supervisor(a) Comercial', papel: 'gestor', chefe: 'marcos', genero: 'f', tempo: 'medio' },
   { ref: 'juliana', unidade: M, cc: 'loja', cargo: 'Vendedor(a)', papel: 'funcionario', chefe: 'marcos', genero: 'f', anos: 2.3, persona: 'juliana' },
   { ref: 'mc_vend2', unidade: M, cc: 'loja', cargo: 'Vendedor(a)', papel: 'funcionario', chefe: 'marcos', genero: 'm', tempo: 'padrao' },
@@ -443,7 +484,10 @@ const QUADRO = [
   { ref: 'sl_auxv', unidade: S, cc: 'loja', cargo: 'Auxiliar de Vendas', papel: 'funcionario', chefe: 'sl_ger', genero: 'm', tempo: 'padrao' },
   { ref: 'sl_estoq', unidade: S, cc: 'loja', cargo: 'Estoquista', papel: 'funcionario', chefe: 'sl_ger', genero: 'm', tempo: 'padrao' },
   { ref: 'sl_conf', unidade: S, cc: 'loja', cargo: 'Conferente', papel: 'funcionario', chefe: 'sl_ger', genero: 'f', tempo: 'veterano' },
-  { ref: 'sl_mot', unidade: S, cc: 'loja', cargo: 'Motorista Entregador', papel: 'funcionario', chefe: 'sl_ger', genero: 'm', tempo: 'medio' },
+  // A frota do grupo é registrada na DCS, mas este motorista roda a partir da
+  // Filial Sul e o custo dele é da operação da Sul (Casa do Montador):
+  // REGISTRO, LOTAÇÃO e CENTRO DE CUSTO em três empresas diferentes.
+  { ref: 'sl_mot', unidade: S, cc: 'loja', registro: 'DCS', cargo: 'Motorista Entregador', papel: 'funcionario', chefe: 'sl_ger', genero: 'm', tempo: 'medio' },
   { ref: 'sl_estag', unidade: S, cc: 'loja', cargo: 'Estagiário(a)', papel: 'funcionario', chefe: 'sl_ger', genero: 'm', tempo: 'novato', vinculo: 'estagiario' },
   { ref: 'sl_apr', unidade: S, cc: 'loja', cargo: 'Jovem Aprendiz', papel: 'funcionario', chefe: 'sl_ger', genero: 'f', tempo: 'padrao', vinculo: 'aprendiz' },
 
@@ -495,8 +539,8 @@ const QUADRO = [
   // Cargo 'Analista de RH' para as duas: o time de gente de uma rede de 5 lojas
   // tem generalista, recrutamento e T&D no mesmo cargo — o que muda é a frente
   // de trabalho, e é isso que o PAPEL representa.
-  { ref: 'solange', unidade: M, cc: 'adm', cargo: 'Analista de RH', papel: 'recrutador', chefe: 'helena', genero: 'f', admissaoDias: 12, persona: 'solange' },
-  { ref: 'rogerio', unidade: M, cc: 'adm', cargo: 'Analista de RH', papel: 'lider_td', chefe: 'helena', genero: 'm', admissaoDias: 9, persona: 'rogerio' },
+  { ref: 'solange', unidade: M, cc: 'CC-9000', cargo: 'Analista de RH', papel: 'recrutador', chefe: 'helena', genero: 'f', admissaoDias: 12, persona: 'solange' },
+  { ref: 'rogerio', unidade: M, cc: 'CC-9000', cargo: 'Analista de RH', papel: 'lider_td', chefe: 'helena', genero: 'm', admissaoDias: 9, persona: 'rogerio' },
 ];
 
 const TEMPO_DE_CASA = {
@@ -603,23 +647,22 @@ async function semear(cliente) {
   // LOTAÇÃO (local físico, sem CNPJ próprio) e CENTRO DE CUSTO.
   const inicioEstrutura = iso(anosAtras(12)); // a Fast já tinha as 5 unidades
 
-  // -- REGISTRO: uma inscrição por empresa do grupo.
-  const cnpjs = EMPRESAS.map((_, indice) => cnpjValido(RAIZ_CNPJ, indice + 1));
+  // -- REGISTRO: uma inscrição por empresa do grupo. A que ainda está em
+  // constituição entra com CNPJ NULL — o mapa é por ÍNDICE de inserção (o
+  // Postgres devolve o RETURNING na ordem do VALUES), não por CNPJ, justamente
+  // porque agora existe empresa sem ele.
+  const cnpjs = EMPRESAS.map((empresa, indice) =>
+    empresa.semCnpj ? null : cnpjValido(RAIZ_CNPJ, indice + 1)
+  );
   const empresasCriadas = await inserirLote(
     cliente,
     'rh.empresa_grupo',
     ['cnpj'],
     cnpjs.map((cnpj) => [cnpj]),
-    'id, cnpj'
-  );
-  const empresaIdPorCnpj = new Map(
-    empresasCriadas.map((linha) => [linha.cnpj, Number(linha.id)])
+    'id'
   );
   const empresaIdPorNome = new Map(
-    EMPRESAS.map((empresa, indice) => [
-      empresa.nome,
-      empresaIdPorCnpj.get(cnpjs[indice]),
-    ])
+    EMPRESAS.map((empresa, indice) => [empresa.nome, Number(empresasCriadas[indice].id)])
   );
   await inserirLote(
     cliente,
@@ -627,11 +670,14 @@ async function semear(cliente) {
     ['empresa_id', 'razao_social', 'nome_fantasia', 'tipo', 'status', 'inicio_vigencia'],
     EMPRESAS.map((empresa) => [
       empresaIdPorNome.get(empresa.nome),
-      `${RAZAO_SOCIAL} — ${empresa.nome}`,
+      // Sem CNPJ não há contrato social registrado: a razão social também
+      // ainda não existe. Deixar em branco é mais honesto do que inventar.
+      empresa.semCnpj ? null : `${RAZAO_SOCIAL} — ${empresa.nome}`,
       empresa.nome,
       empresa.tipo,
       'ativa',
-      inicioEstrutura,
+      // A empresa em constituição nasce HOJE; as outras já existem há 12 anos.
+      empresa.semCnpj ? iso(hoje()) : inicioEstrutura,
     ])
   );
 
@@ -674,6 +720,13 @@ async function semear(cliente) {
       centrosDesejados.push([empresaId, unidade.ccAdm, `Administrativo ${unidade.nome}`]);
     }
   }
+  for (const centro of CENTROS_DO_GRUPO) {
+    centrosDesejados.push([
+      empresaIdPorNome.get(centro.empresa),
+      centro.codigo,
+      centro.nome,
+    ]);
+  }
   const centrosCriados = await inserirLote(
     cliente,
     'rh.centro_custo',
@@ -712,8 +765,9 @@ async function semear(cliente) {
     })
   );
   log(
-    `01-base: ${EMPRESAS.length} empresas do grupo, ${unidades.size} locais de ` +
-      `trabalho e ${centrosDesejados.length} centros de custo.`
+    `01-base: ${EMPRESAS.length} empresas do grupo (${EMPRESAS.filter((e) => e.semCnpj).length} ` +
+      `sem CNPJ ainda), ${unidades.size} locais de trabalho e ${centrosDesejados.length} ` +
+      'centros de custo.'
   );
 
   // ---------------------------------------------------------- cargos + faixas
@@ -991,8 +1045,30 @@ async function semear(cliente) {
   for (const pessoa of pessoas) {
     const cargo = cargos.get(pessoa.cargo);
     const unidade = unidades.get(pessoa.unidade);
-    const centroCusto = pessoa.cc === 'adm' ? unidade.ccAdm : unidade.ccLoja;
+    // OS TRÊS CAMPOS SÃO INDEPENDENTES (0047), e é aqui que isso vira dado:
+    //   REGISTRO        = pessoa.registro, quando ela é contratada por uma
+    //                     empresa do grupo diferente da dona do local;
+    //   LOTAÇÃO         = pessoa.unidade, sempre o prédio onde ela trabalha;
+    //   CENTRO DE CUSTO = pessoa.cc, que aceita o código literal de um centro
+    //                     que não é de local nenhum (o CSC).
+    // Sem override, o padrão continua sendo o óbvio: registrada na empresa dona
+    // do local e custo no centro daquele local.
+    const cc = pessoa.cc ?? 'loja';
+    const centroCusto = cc.startsWith('CC-')
+      ? cc
+      : cc === 'adm'
+        ? unidade.ccAdm
+        : unidade.ccLoja;
     const centroCustoId = centroIdPorCodigo.get(centroCusto);
+    if (!centroCustoId) {
+      throw new Error(`Centro de custo ${centroCusto} não existe (ref ${pessoa.ref}).`);
+    }
+    const empresaId = pessoa.registro
+      ? empresaIdPorNome.get(pessoa.registro)
+      : unidade.empresaId;
+    if (!empresaId) {
+      throw new Error(`Empresa de registro ${pessoa.registro} não existe (ref ${pessoa.ref}).`);
+    }
     const inicio = iso(pessoa.admissao);
 
     // Vigências ficam ABERTAS mesmo para desligados: é o que o app faz ao
@@ -1002,7 +1078,7 @@ async function semear(cliente) {
     // Os três campos, na mesma linha de vigência.
     lotacoes.push([
       pessoa.colaboradorId,
-      unidade.empresaId,
+      empresaId,
       unidade.id,
       centroCustoId,
       inicio,
@@ -1105,6 +1181,46 @@ async function semear(cliente) {
         AND NOT EXISTS (SELECT 1 FROM rh.lotacao l
                          WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL)`,
     0
+  );
+  // A ONDA I INTEIRA FICA INVISÍVEL se os três campos coincidirem sempre: a
+  // tela mostraria "unidade" três vezes com nome diferente e ninguém veria o
+  // que mudou. Estas duas conferências garantem que a demo tem o caso do dono.
+  const { rows: cruzamentos } = await cliente.query(
+    `SELECT
+       count(*) FILTER (WHERE l.empresa_id <> cc.empresa_id)::int AS custo_em_outra_empresa,
+       count(DISTINCT l.empresa_id)::int                          AS empresas_com_gente,
+       (SELECT count(*)::int FROM (
+          SELECT estabelecimento_id FROM rh.lotacao
+           WHERE fim_vigencia IS NULL
+           GROUP BY estabelecimento_id
+          HAVING count(DISTINCT empresa_id) > 1) AS x)             AS locais_com_duas_empresas
+     FROM rh.lotacao l
+     JOIN rh.centro_custo cc ON cc.id = l.centro_custo_id
+    WHERE l.fim_vigencia IS NULL`
+  );
+  if (Number(cruzamentos[0].custo_em_outra_empresa) === 0) {
+    throw new Error(
+      'Nenhum colaborador tem o custo caindo em centro de custo mantido por OUTRA empresa do ' +
+        'grupo — o exemplo do dono ("registrado na Supply, custo no CSC") sumiu do QUADRO.'
+    );
+  }
+  if (Number(cruzamentos[0].locais_com_duas_empresas) === 0) {
+    throw new Error(
+      'Todo local de trabalho tem gente de uma empresa só — some o REGISTRO de alguém para ' +
+        'outra empresa do grupo, senão LOTAÇÃO e REGISTRO parecem a mesma coisa na tela.'
+    );
+  }
+  if (Number(cruzamentos[0].empresas_com_gente) < 3) {
+    throw new Error(
+      `Só ${cruzamentos[0].empresas_com_gente} empresa(s) do grupo têm gente registrada — a ` +
+        'demo precisa mostrar o quadro repartido entre os CNPJs.'
+    );
+  }
+  log(
+    `01-base: os três campos separados — ${cruzamentos[0].empresas_com_gente} empresas com ` +
+      `gente registrada, ${cruzamentos[0].locais_com_duas_empresas} local(is) com gente de mais ` +
+      `de uma empresa e ${cruzamentos[0].custo_em_outra_empresa} vínculo(s) com o custo em ` +
+      'centro mantido por outra empresa.'
   );
   await conferir(
     'ativos sem gestor vigente (fora a diretoria)',

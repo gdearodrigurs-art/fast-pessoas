@@ -339,6 +339,23 @@ async function semear(cliente) {
     'rh.evento_colaborador',
     'sistema.notificacao',
   ];
+  // GUARDA: a transferência ENTRE EMPRESAS (16-transferencia-empresa.js) também
+  // mora em rh.demanda_movimentacao, mas o efeito dela cria um VÍNCULO. A
+  // limpeza abaixo desfaz posição e lotação e apaga a movimentação — o vínculo
+  // novo ficaria órfão, sem ninguém apontando para ele. Numa execução completa
+  // isso nunca acontece (00-limpar zera tudo e o 16 roda depois); só dá para
+  // cair aqui rodando o 14 sozinho depois do 16.
+  const { rows: transferenciasEmpresa } = await cliente.query(
+    `SELECT count(*)::int AS total FROM rh.demanda_movimentacao
+      WHERE tipo = 'transferencia_empresa'`
+  );
+  if (transferenciasEmpresa[0].total > 0) {
+    throw new Error(
+      'Existe transferência entre empresas do grupo aplicada no banco. Desfazê-la é do ' +
+        '16-transferencia-empresa.js, não daqui — rode `npm run db:demo` (ou o 16 sozinho, ' +
+        'que desfaz a anterior) em vez de rodar só o 14.'
+    );
+  }
   const removidos = await comTriggersDesligados(cliente, TABELAS_TRIGGER, async () => {
     const { rows: anteriores } = await cliente.query(
       `SELECT m.id, m.demanda_id, m.posicao_id, m.lotacao_id, m.colaborador_id

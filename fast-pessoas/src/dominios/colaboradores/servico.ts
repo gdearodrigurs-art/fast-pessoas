@@ -7,8 +7,13 @@ import { PayloadSessao } from "../identidade/esquemas";
 // Catálogos de REGISTRO e CENTRO DE CUSTO (migration 0047). A alocação escolhe
 // os três campos, e dois deles moram no domínio "estrutura".
 import {
+  FiltroEstrutura,
+  OpcoesFiltroEstrutura,
+} from "../estrutura/esquemas";
+import {
   buscarCentroCusto as buscarCentroCustoDaEstrutura,
   buscarEmpresa as buscarEmpresaDaEstrutura,
+  listarOpcoesDeFiltroEstrutura,
 } from "../estrutura/repositorio";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
@@ -63,7 +68,7 @@ import {
   buscarRcfPorCargo,
   contarCoberturaNascimento,
   contarHeadcountPorCargo,
-  contarHeadcountPorUnidade,
+  contarHeadcountPorCampoDaEstrutura,
   contarHeadcountPorVinculo,
   contarPorGenero,
   contarPorIdade,
@@ -84,6 +89,7 @@ import {
   colaboradorIdDoUsuario,
   colaboradorNoEscopo,
   ColaboradorResumo,
+  VinculoCriado,
   criar,
   desativarUsuario,
   encerrarFaixaSalarial,
@@ -123,7 +129,6 @@ import {
   listarOcorrencias,
   listarPosicoes,
   listarRelacoesGestor,
-  listarUnidadesDoQuadro,
   Lotacao,
   cadenciaFeedback,
   Ocorrencia,
@@ -232,9 +237,19 @@ function feedbackVencido(
 export async function listarColaboradores(
   sessao: PayloadSessao,
   filtro: FiltroColaboradores
-): Promise<{ colaboradores: ColaboradorListado[]; alcance: Escopo["alcance"] }> {
+): Promise<{
+  colaboradores: ColaboradorListado[];
+  alcance: Escopo["alcance"];
+  estrutura_opcoes: OpcoesFiltroEstrutura;
+}> {
   const escopo = await resolverEscopo(sessao);
-  const colaboradores = await listar(filtro, escopo);
+  // As opções dos três seletores vêm junto com a lista: sem endpoint novo e
+  // sem chave nova. São nomes de catálogo (empresa, local, centro de custo),
+  // não dado de pessoa — o mesmo que o organograma já devolve em `unidades`.
+  const [colaboradores, estrutura_opcoes] = await Promise.all([
+    listar(filtro, escopo),
+    listarOpcoesDeFiltroEstrutura(),
+  ]);
   return {
     colaboradores: colaboradores.map((colaborador) => ({
       ...colaborador,
@@ -244,6 +259,7 @@ export async function listarColaboradores(
       ),
     })),
     alcance: escopo.alcance,
+    estrutura_opcoes,
   };
 }
 
@@ -279,7 +295,7 @@ export async function obterColaborador(
 export async function criarColaborador(
   sessao: PayloadSessao,
   dados: CriacaoColaborador
-): Promise<{ colaborador: ColaboradorResumo; senha_temporaria: string }> {
+): Promise<{ colaborador: VinculoCriado; senha_temporaria: string }> {
   const senhaTemporaria = gerarSenhaTemporaria();
   const senhaHash = await hash(senhaTemporaria, 12);
   try {
@@ -1756,9 +1772,9 @@ function suprimirRecortesPequenos(
 
 export interface RelatorioAniversariantes {
   mes: number;
-  estabelecimento_id: number | null;
   aniversariantes: Aniversariante[];
-  unidades: { estabelecimento_id: number; unidade: string }[];
+  /** Opções dos três seletores — as mesmas da lista e do organograma. */
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   fichas_sem_data_nascimento: number;
 }
 
@@ -1774,21 +1790,23 @@ export async function relatorioAniversariantes(
         month: "numeric",
       }).format(new Date())
     );
-  const [aniversariantes, unidades, cobertura] = await Promise.all([
-    listarAniversariantes(mes, filtro.estabelecimento_id),
-    listarUnidadesDoQuadro(),
-    contarCoberturaNascimento(),
+  const [aniversariantes, estrutura_opcoes, cobertura] = await Promise.all([
+    listarAniversariantes(mes, filtro),
+    listarOpcoesDeFiltroEstrutura(),
+    // A cobertura é do MESMO recorte: dizer "12 fichas sem data de nascimento"
+    // da empresa toda embaixo de um relatório de uma unidade só seria mentira.
+    contarCoberturaNascimento(filtro),
   ]);
   return {
     mes,
-    estabelecimento_id: filtro.estabelecimento_id ?? null,
     aniversariantes,
-    unidades,
+    estrutura_opcoes,
     fichas_sem_data_nascimento: cobertura.sem_data,
   };
 }
 
 export interface RelatorioDiversidade {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   com_data_nascimento: number;
   sem_data_nascimento: number;
@@ -1804,7 +1822,8 @@ export interface RelatorioDiversidade {
  * headcount não geram trilha (não há dado de categoria especial neles).
  */
 export async function relatorioDiversidade(
-  sessao: PayloadSessao
+  sessao: PayloadSessao,
+  filtro: FiltroEstrutura
 ): Promise<RelatorioDiversidade> {
   await registrarLeituraSensivel({
     usuarioId: sessao.usuario_id,
@@ -1812,13 +1831,14 @@ export async function relatorioDiversidade(
     recurso: "relatorio.diversidade",
     registroId: "agregado",
   });
-  const [quadro, genero, idades, cobertura, minimoPorRecorte] =
+  const [quadro, genero, idades, cobertura, minimoPorRecorte, opcoes] =
     await Promise.all([
-      contarQuadro(),
-      contarPorGenero(),
-      contarPorIdade(),
-      contarCoberturaNascimento(),
+      contarQuadro(filtro),
+      contarPorGenero(filtro),
+      contarPorIdade(filtro),
+      contarCoberturaNascimento(filtro),
       lerMinimoPorRecorte(),
+      listarOpcoesDeFiltroEstrutura(),
     ]);
   const porFaixa = FAIXAS_IDADE.map((faixa) => ({
     chave: faixa.chave,
@@ -1828,6 +1848,7 @@ export async function relatorioDiversidade(
       .reduce((soma, linha) => soma + linha.quantidade, 0),
   }));
   return {
+    estrutura_opcoes: opcoes,
     total_quadro: quadro.total,
     com_data_nascimento: cobertura.com_data,
     sem_data_nascimento: cobertura.sem_data,
@@ -1845,6 +1866,7 @@ export async function relatorioDiversidade(
 }
 
 export interface RelatorioComposicaoFamiliar {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   minimo_por_recorte: number;
   idade_limite_crianca: number;
@@ -1858,7 +1880,8 @@ export interface RelatorioComposicaoFamiliar {
 
 /** Dado de terceiro (dependentes): mesmo agregado, a leitura deixa trilha. */
 export async function relatorioComposicaoFamiliar(
-  sessao: PayloadSessao
+  sessao: PayloadSessao,
+  filtro: FiltroEstrutura
 ): Promise<RelatorioComposicaoFamiliar> {
   await registrarLeituraSensivel({
     usuarioId: sessao.usuario_id,
@@ -1866,12 +1889,14 @@ export async function relatorioComposicaoFamiliar(
     recurso: "relatorio.composicao_familiar",
     registroId: "agregado",
   });
-  const [quadro, bruto, minimoPorRecorte] = await Promise.all([
-    contarQuadro(),
-    agregarComposicaoFamiliar(IDADE_LIMITE_CRIANCA),
+  const [quadro, bruto, minimoPorRecorte, opcoes] = await Promise.all([
+    contarQuadro(filtro),
+    agregarComposicaoFamiliar(IDADE_LIMITE_CRIANCA, filtro),
     lerMinimoPorRecorte(),
+    listarOpcoesDeFiltroEstrutura(),
   ]);
   return {
+    estrutura_opcoes: opcoes,
     total_quadro: quadro.total,
     minimo_por_recorte: minimoPorRecorte,
     idade_limite_crianca: IDADE_LIMITE_CRIANCA,
@@ -1903,26 +1928,39 @@ export async function relatorioComposicaoFamiliar(
 }
 
 export interface RelatorioHeadcount {
+  estrutura_opcoes: OpcoesFiltroEstrutura;
   total_quadro: number;
   ativos: number;
   afastados: number;
-  por_unidade: { rotulo: string; quantidade: number }[];
+  /** Os TRÊS campos, cada um com sua contagem — não são a mesma pergunta. */
+  por_registro: { rotulo: string; quantidade: number }[];
+  por_lotacao: { rotulo: string; quantidade: number }[];
+  por_centro_custo: { rotulo: string; quantidade: number }[];
   por_cargo: { rotulo: string; quantidade: number }[];
   por_vinculo: { rotulo: string; quantidade: number }[];
 }
 
-export async function relatorioHeadcount(): Promise<RelatorioHeadcount> {
-  const [quadro, unidades, cargos, vinculos] = await Promise.all([
-    contarQuadro(),
-    contarHeadcountPorUnidade(),
-    contarHeadcountPorCargo(),
-    contarHeadcountPorVinculo(),
-  ]);
+export async function relatorioHeadcount(
+  filtro: FiltroEstrutura
+): Promise<RelatorioHeadcount> {
+  const [quadro, registros, lotacoes, centros, cargos, vinculos, opcoes] =
+    await Promise.all([
+      contarQuadro(filtro),
+      contarHeadcountPorCampoDaEstrutura("empresa", filtro),
+      contarHeadcountPorCampoDaEstrutura("lotacao", filtro),
+      contarHeadcountPorCampoDaEstrutura("centro_custo", filtro),
+      contarHeadcountPorCargo(filtro),
+      contarHeadcountPorVinculo(filtro),
+      listarOpcoesDeFiltroEstrutura(),
+    ]);
   return {
+    estrutura_opcoes: opcoes,
     total_quadro: quadro.total,
     ativos: quadro.ativos,
     afastados: quadro.afastados,
-    por_unidade: unidades,
+    por_registro: registros,
+    por_lotacao: lotacoes,
+    por_centro_custo: centros,
     por_cargo: cargos,
     por_vinculo: vinculos.map((linha) => ({
       rotulo: ROTULOS_VINCULO[linha.tipo_vinculo],

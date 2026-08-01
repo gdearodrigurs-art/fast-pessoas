@@ -24,8 +24,22 @@
 
 const { comTriggersDesligados, log, executarSozinho } = require('./comum');
 
-// Usuário real preservado (g.dearodrigurs@gmail.com).
-const USUARIO_REAL_ID = 2;
+/**
+ * Contas REAIS preservadas — as que não pertencem à demonstração.
+ *
+ * Antes isto era `const USUARIO_REAL_ID = 2`, e o id 2 era o da conta do dono
+ * NESTE banco, por coincidência de ordem de criação. Em qualquer outro banco
+ * — instalação nova, cópia local, produção — o admin recebe outro id, e a
+ * limpeza o apagava como se fosse dado de demonstração. Pior: a conferência
+ * vinha DEPOIS do DELETE, então a mensagem "abortando para não perder o
+ * acesso" era impressa com o acesso já perdido. Reproduzido num banco local
+ * onde o admin nasceu com id 1.
+ *
+ * A regra agora é o que a conta É, não o id que ela calhou de receber: quem
+ * NÃO tem e-mail do domínio da demonstração fica. E a contagem é conferida
+ * ANTES de apagar qualquer coisa.
+ */
+const DOMINIO_DEMO = '@fastdemo.local';
 
 /**
  * Ordem filho → pai, derivada das FKs das migrations 0001–0017.
@@ -204,10 +218,24 @@ async function semear(cliente) {
       if (resultado.rowCount > 0) removidos[tabela] = resultado.rowCount;
     }
 
-    // Usuários: some com todo mundo, MENOS o usuário real (id 2).
+    // CONFERÊNCIA ANTES DE APAGAR. A guarda antiga conferia depois, então
+    // avisava "abortando para não perder o acesso" com o acesso já perdido.
+    const { rows: antes } = await cliente.query(
+      'SELECT count(*)::int AS reais FROM sistema.usuario WHERE email NOT LIKE $1',
+      [`%${DOMINIO_DEMO}`]
+    );
+    if (antes[0].reais === 0) {
+      throw new Error(
+        `Nenhuma conta real encontrada (nenhum e-mail fora de ${DOMINIO_DEMO}). ` +
+          'A limpeza apagaria TODOS os acessos — abortando antes de tocar em nada. ' +
+          'Rode `node --env-file=.env db/seed-admin.js <email> "<Nome>"` primeiro.'
+      );
+    }
+
+    // Usuários: some com a demonstração, ficam as contas reais.
     const usuarios = await cliente.query(
-      'DELETE FROM sistema.usuario WHERE id <> $1',
-      [USUARIO_REAL_ID]
+      'DELETE FROM sistema.usuario WHERE email LIKE $1',
+      [`%${DOMINIO_DEMO}`]
     );
     if (usuarios.rowCount > 0) removidos['sistema.usuario'] = usuarios.rowCount;
 
@@ -232,21 +260,25 @@ async function semear(cliente) {
     }
   }
 
-  // Guarda de segurança: o usuário real tem que continuar lá.
+  // Guarda de saída: as contas reais têm que continuar lá. Redundante com a
+  // conferência de entrada, e é para ser mesmo — esta pega o caso de a
+  // limpeza ter derrubado a conta por um caminho que ninguém previu (CASCADE
+  // de uma FK nova, por exemplo).
   const { rows } = await cliente.query(
-    'SELECT count(*)::int AS total FROM sistema.usuario WHERE id = $1',
-    [USUARIO_REAL_ID]
+    'SELECT count(*)::int AS total FROM sistema.usuario WHERE email NOT LIKE $1',
+    [`%${DOMINIO_DEMO}`]
   );
-  if (rows[0].total !== 1) {
+  if (rows[0].total < 1) {
     throw new Error(
-      `O usuário real (id ${USUARIO_REAL_ID}) sumiu na limpeza — abortando para não perder o acesso.`
+      `As contas reais (e-mail fora de ${DOMINIO_DEMO}) sumiram na limpeza — ` +
+        'algum caminho não previsto as derrubou. Restaure antes de seguir.'
     );
   }
 
   return { removidos };
 }
 
-module.exports = { semear, ORDEM_LIMPEZA, USUARIO_REAL_ID };
+module.exports = { semear, ORDEM_LIMPEZA, DOMINIO_DEMO };
 
 if (require.main === module) {
   executarSozinho('00-limpar', semear);

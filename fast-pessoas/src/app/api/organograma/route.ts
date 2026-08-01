@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { lerFiltroEstrutura } from "@/dominios/estrutura/esquemas";
 import { esquemaConsultaOrganograma } from "@/dominios/organograma/esquemas";
 import {
   exigirSessaoCompleta,
@@ -28,9 +29,11 @@ export async function GET(request: NextRequest) {
     const sessao = exigirSessaoCompleta(await lerSessao());
     const parametros = request.nextUrl.searchParams;
     const analise = esquemaConsultaOrganograma.safeParse({
-      estabelecimento_id: parametros.get("estabelecimento_id") || undefined,
       cargo_id: parametros.get("cargo_id") || undefined,
       busca: parametros.get("busca") || undefined,
+      // Registro, lotação e centro de custo — combináveis entre si, com o
+      // cargo e com a busca.
+      ...lerFiltroEstrutura(parametros),
     });
     if (!analise.success) {
       return Response.json(

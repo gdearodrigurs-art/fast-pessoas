@@ -7,6 +7,7 @@ import {
   criarColaborador,
   listarColaboradores,
 } from "@/dominios/colaboradores/servico";
+import { lerFiltroEstrutura } from "@/dominios/estrutura/esquemas";
 import { responderErro } from "@/lib/http";
 import { exigirPermissao, exigirSessao } from "@/lib/sessao";
 
@@ -21,6 +22,9 @@ export async function GET(request: NextRequest) {
     const analise = esquemaFiltroColaboradores.safeParse({
       busca: parametros.get("busca") || undefined,
       status: parametros.get("status") || undefined,
+      // Registro, lotação e centro de custo: combináveis entre si e com os
+      // dois acima. Ausente = não recorta por aquele campo.
+      ...lerFiltroEstrutura(parametros),
     });
     if (!analise.success) {
       return Response.json(

@@ -18,8 +18,15 @@ export interface LinhaPessoa {
   gestor_id: number | null;
   cargo_id: number | null;
   cargo_nome: string | null;
+  /** REGISTRO — em qual empresa do grupo o vínculo está (migration 0047). */
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  /** LOTAÇÃO — o local físico. */
   estabelecimento_id: number | null;
   unidade: string | null;
+  /** CENTRO DE CUSTO — código legível; o id é o que o filtro compara. */
+  centro_custo_id: number | null;
+  centro_custo: string | null;
 }
 
 export async function listarPessoasDoQuadro(): Promise<LinhaPessoa[]> {
@@ -30,40 +37,61 @@ export async function listarPessoasDoQuadro(): Promise<LinhaPessoa[]> {
     gestor_id: string | null;
     cargo_id: string | null;
     cargo_nome: string | null;
+    empresa_id: string | null;
+    empresa_nome: string | null;
     estabelecimento_id: string | null;
     unidade: string | null;
+    centro_custo_id: string | null;
+    centro_custo: string | null;
   }>(
+    // Os TRÊS campos vêm de rh.lotacao_detalhada, que já resolve o nome de cada
+    // catálogo. A alocação lida é a vigente ou, se o contrato acabou, a última
+    // — a mesma regra da lista de colaboradores e do filtro.
     `SELECT c.id                        AS colaborador_id,
             c.nome_completo             AS nome,
             c.status,
             rg.gestor_colaborador_id    AS gestor_id,
             cv.cargo_id,
             cv.nome                     AS cargo_nome,
-            l.estabelecimento_id,
-            ev.unidade
+            lot.empresa_id,
+            lot.empresa_nome,
+            lot.estabelecimento_id,
+            lot.unidade,
+            lot.centro_custo_id,
+            lot.centro_custo
        FROM rh.colaborador c
        LEFT JOIN rh.relacao_gestor rg
               ON rg.liderado_colaborador_id = c.id AND rg.fim_vigencia IS NULL
        LEFT JOIN rh.posicao_colaborador pc
               ON pc.colaborador_id = c.id AND pc.fim_vigencia IS NULL
        LEFT JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
-       LEFT JOIN rh.lotacao l
-              ON l.colaborador_id = c.id AND l.fim_vigencia IS NULL
-       LEFT JOIN rh.estabelecimento_versao ev
-              ON ev.estabelecimento_id = l.estabelecimento_id AND ev.status = 'ativa'
+       LEFT JOIN LATERAL (
+         SELECT ld.empresa_id, ld.empresa_nome,
+                ld.estabelecimento_id, ld.lotacao_nome AS unidade,
+                ld.centro_custo_id, ld.centro_custo_codigo AS centro_custo
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
+       ) lot ON TRUE
       WHERE c.status <> 'desligado'
       ORDER BY c.nome_completo`
   );
+  const numeroOuNulo = (valor: string | null) =>
+    valor === null ? null : Number(valor);
   return linhas.map((linha) => ({
     colaborador_id: Number(linha.colaborador_id),
     nome: linha.nome,
     status: linha.status,
-    gestor_id: linha.gestor_id === null ? null : Number(linha.gestor_id),
-    cargo_id: linha.cargo_id === null ? null : Number(linha.cargo_id),
+    gestor_id: numeroOuNulo(linha.gestor_id),
+    cargo_id: numeroOuNulo(linha.cargo_id),
     cargo_nome: linha.cargo_nome,
-    estabelecimento_id:
-      linha.estabelecimento_id === null ? null : Number(linha.estabelecimento_id),
+    empresa_id: numeroOuNulo(linha.empresa_id),
+    empresa_nome: linha.empresa_nome,
+    estabelecimento_id: numeroOuNulo(linha.estabelecimento_id),
     unidade: linha.unidade,
+    centro_custo_id: numeroOuNulo(linha.centro_custo_id),
+    centro_custo: linha.centro_custo,
   }));
 }
 
@@ -131,16 +159,6 @@ export async function listarVagasEmAberto(): Promise<LinhaVagaEmAberto[]> {
         ? null
         : Number(linha.solicitante_colaborador_id),
   }));
-}
-
-export async function listarUnidades(): Promise<OpcaoOrganograma[]> {
-  const linhas = await consultar<{ id: string; nome: string }>(
-    `SELECT ev.estabelecimento_id AS id, ev.unidade AS nome
-       FROM rh.estabelecimento_versao ev
-      WHERE ev.status = 'ativa'
-      ORDER BY ev.unidade`
-  );
-  return linhas.map((linha) => ({ id: Number(linha.id), nome: linha.nome }));
 }
 
 export async function listarCargos(): Promise<OpcaoOrganograma[]> {

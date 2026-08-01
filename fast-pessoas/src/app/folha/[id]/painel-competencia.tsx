@@ -1,8 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { acaoCabecalho, Cabecalho } from "@/app/cabecalho";
+import {
+  FILTRO_ESTRUTURA_VAZIO,
+  FiltroEstrutura,
+  filtroEstruturaAtivo,
+  type OpcoesFiltroEstrutura,
+  type ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
 import {
   EstadoCompetencia,
   formatarCompetencia,
@@ -91,6 +104,15 @@ interface Folha {
   total_proventos_centavos: number;
   total_descontos_centavos: number;
   liquido_centavos: number;
+  // Apropriação NA DATA DA COMPETÊNCIA (rh_folha.apropriacao_competencia): é
+  // onde o custo daquele mês caiu, não onde a pessoa está alocada hoje.
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  estabelecimento_id: number | null;
+  lotacao_nome: string | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
   itens: ItemFolha[];
 }
 
@@ -175,6 +197,10 @@ export function PainelCompetencia({ id }: { id: number }) {
   const [avisoAcao, setAvisoAcao] = useState<AvisoAcao | null>(null);
   const [detalheAberto, setDetalheAberto] = useState<number | null>(null);
   const [codigoAprovacao, setCodigoAprovacao] = useState("");
+  // Recorte dos três campos: nasce VAZIO (em branco = a competência inteira).
+  const [estrutura, setEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
 
   const recarregar = useCallback(() => setVersao((atual) => atual + 1), []);
 
@@ -320,6 +346,35 @@ export function PainelCompetencia({ id }: { id: number }) {
     : "";
   const tabelasPendentes = (visao?.tabelas_conferidas ?? []).filter(
     (tabela) => tabela.versao_id === null || !tabela.conferido_dp
+  );
+
+  const folhas = useMemo(() => visao?.folhas ?? [], [visao]);
+  const opcoesEstrutura = useMemo(() => opcoesDaCompetencia(folhas), [folhas]);
+  const recorteAtivo = filtroEstruturaAtivo(estrutura);
+  const folhasFiltradas = useMemo(
+    () => folhas.filter((folha) => folhaCasaFiltro(folha, estrutura)),
+    [folhas, estrutura]
+  );
+  // Os totais são DO RECORTE. Somar a competência inteira embaixo de uma lista
+  // de 7 linhas seria o pior dos dois mundos — o DP leria o total errado como
+  // se fosse o do centro de custo que acabou de escolher.
+  const totaisDoRecorte = useMemo(
+    () =>
+      folhasFiltradas.reduce(
+        (soma, folha) => ({
+          total_proventos_centavos:
+            soma.total_proventos_centavos + folha.total_proventos_centavos,
+          total_descontos_centavos:
+            soma.total_descontos_centavos + folha.total_descontos_centavos,
+          liquido_centavos: soma.liquido_centavos + folha.liquido_centavos,
+        }),
+        {
+          total_proventos_centavos: 0,
+          total_descontos_centavos: 0,
+          liquido_centavos: 0,
+        }
+      ),
+    [folhasFiltradas]
   );
 
   return (
@@ -757,27 +812,50 @@ export function PainelCompetencia({ id }: { id: number }) {
 
             {visao.folhas.length > 0 && (
               <section className={estilos.cartao}>
-                <h2>Folhas calculadas ({visao.folhas.length})</h2>
+                <h2>
+                  Folhas calculadas ({folhasFiltradas.length}
+                  {recorteAtivo ? ` de ${visao.folhas.length}` : ""})
+                </h2>
+                {/* Recorte pelos TRÊS campos. Ele acontece sobre o payload que
+                    JÁ foi carregado e já entrou na trilha de leitura sensível:
+                    refazer a chamada a cada clique de filtro geraria uma linha
+                    de auditoria por clique e diria a mesma coisa. */}
+                <FiltroEstrutura
+                  prefixoId="folha"
+                  opcoes={opcoesEstrutura}
+                  valor={estrutura}
+                  aoMudar={setEstrutura}
+                />
+                <p className={estilos.notaRodape}>
+                  Registro, lotação e centro de custo <strong>da
+                  competência</strong> — a alocação que valia no último dia do
+                  mês. Mudar a alocação de alguém hoje não move uma linha de
+                  folha já calculada.
+                </p>
                 <div className={estilos.cartoesResumo}>
                   <div className={estilos.cartaoResumo}>
                     <strong>
-                      {formatarMoedaCentavos(visao.totais.total_proventos_centavos)}
+                      {formatarMoedaCentavos(totaisDoRecorte.total_proventos_centavos)}
                     </strong>
-                    <span>Total de proventos</span>
+                    <span>
+                      Total de proventos{recorteAtivo ? " (recorte)" : ""}
+                    </span>
                   </div>
                   <div className={estilos.cartaoResumo}>
                     <strong>
-                      {formatarMoedaCentavos(visao.totais.total_descontos_centavos)}
+                      {formatarMoedaCentavos(totaisDoRecorte.total_descontos_centavos)}
                     </strong>
-                    <span>Total de descontos</span>
+                    <span>
+                      Total de descontos{recorteAtivo ? " (recorte)" : ""}
+                    </span>
                   </div>
                   <div
                     className={`${estilos.cartaoResumo} ${estilos.cartaoResumoDestaque}`}
                   >
                     <strong>
-                      {formatarMoedaCentavos(visao.totais.liquido_centavos)}
+                      {formatarMoedaCentavos(totaisDoRecorte.liquido_centavos)}
                     </strong>
-                    <span>Líquido total</span>
+                    <span>Líquido total{recorteAtivo ? " (recorte)" : ""}</span>
                   </div>
                 </div>
                 <div className={estilos.tabelaEnvolucro}>
@@ -785,6 +863,9 @@ export function PainelCompetencia({ id }: { id: number }) {
                     <thead>
                       <tr>
                         <th>Colaborador</th>
+                        <th>Registro</th>
+                        <th>Lotação</th>
+                        <th>Centro de custo</th>
                         <th className={estilos.numero}>Salário congelado</th>
                         <th className={estilos.numero}>Dep. IRRF</th>
                         <th className={estilos.numero}>Proventos</th>
@@ -794,7 +875,7 @@ export function PainelCompetencia({ id }: { id: number }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {visao.folhas.map((folha) => (
+                      {folhasFiltradas.map((folha) => (
                         <FragmentoFolha
                           key={folha.id}
                           folha={folha}
@@ -806,6 +887,14 @@ export function PainelCompetencia({ id }: { id: number }) {
                           }
                         />
                       ))}
+                      {folhasFiltradas.length === 0 && (
+                        <tr>
+                          <td colSpan={10}>
+                            Nenhuma folha desta competência caiu neste recorte
+                            de registro, lotação e centro de custo.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -825,6 +914,70 @@ export function PainelCompetencia({ id }: { id: number }) {
   );
 }
 
+/**
+ * As opções dos três seletores saem das PRÓPRIAS folhas da competência, não do
+ * catálogo inteiro: o recorte aqui é sobre um mês fechado, e oferecer uma
+ * empresa que não tem nenhuma linha naquele mês só produziria tela vazia.
+ */
+function opcoesDaCompetencia(folhas: Folha[]): OpcoesFiltroEstrutura {
+  const empresas = new Map<number, string>();
+  const lotacoes = new Map<number, string>();
+  const centros = new Map<number, string>();
+  for (const folha of folhas) {
+    if (folha.empresa_id !== null && !empresas.has(folha.empresa_id)) {
+      empresas.set(
+        folha.empresa_id,
+        folha.empresa_nome ?? `Empresa ${folha.empresa_id}`
+      );
+    }
+    if (
+      folha.estabelecimento_id !== null &&
+      !lotacoes.has(folha.estabelecimento_id)
+    ) {
+      lotacoes.set(
+        folha.estabelecimento_id,
+        folha.lotacao_nome ?? `Local ${folha.estabelecimento_id}`
+      );
+    }
+    if (folha.centro_custo_id !== null && !centros.has(folha.centro_custo_id)) {
+      const codigo = folha.centro_custo_codigo ?? `CC ${folha.centro_custo_id}`;
+      centros.set(
+        folha.centro_custo_id,
+        folha.centro_custo_nome ? `${codigo} — ${folha.centro_custo_nome}` : codigo
+      );
+    }
+  }
+  const ordenar = (mapa: Map<number, string>) =>
+    [...mapa.entries()]
+      .map(([id, nome]) => ({ id, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  return {
+    empresas: ordenar(empresas),
+    lotacoes: ordenar(lotacoes),
+    centros_custo: ordenar(centros),
+  };
+}
+
+/** Combinável: o que estiver escolhido vale junto, em E. */
+function folhaCasaFiltro(folha: Folha, valor: ValorFiltroEstrutura): boolean {
+  if (valor.empresa_id && String(folha.empresa_id) !== valor.empresa_id) {
+    return false;
+  }
+  if (
+    valor.estabelecimento_id &&
+    String(folha.estabelecimento_id) !== valor.estabelecimento_id
+  ) {
+    return false;
+  }
+  if (
+    valor.centro_custo_id &&
+    String(folha.centro_custo_id) !== valor.centro_custo_id
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function FragmentoFolha({
   folha,
   aberto,
@@ -839,6 +992,18 @@ function FragmentoFolha({
       <tr>
         <td>
           {folha.colaborador_nome} ({folha.matricula})
+        </td>
+        <td>{folha.empresa_nome ?? "—"}</td>
+        <td>{folha.lotacao_nome ?? "—"}</td>
+        <td>
+          {folha.centro_custo_codigo
+            ? `${folha.centro_custo_codigo}${
+                folha.centro_custo_nome &&
+                folha.centro_custo_nome !== folha.centro_custo_codigo
+                  ? ` — ${folha.centro_custo_nome}`
+                  : ""
+              }`
+            : "—"}
         </td>
         <td className={estilos.numero}>
           {formatarMoedaCentavos(folha.salario_base_centavos)}
@@ -865,7 +1030,7 @@ function FragmentoFolha({
       </tr>
       {aberto && (
         <tr className={estilos.linhaDetalhe}>
-          <td colSpan={7}>
+          <td colSpan={10}>
             <table className={estilos.tabela}>
               <thead>
                 <tr>

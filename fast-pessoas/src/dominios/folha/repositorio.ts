@@ -1290,6 +1290,17 @@ export interface FolhaResumo {
   total_descontos_centavos: number;
   liquido_centavos: number;
   calculada_em: string;
+  // Apropriação da linha pelos TRÊS campos, resolvida NA DATA DA COMPETÊNCIA
+  // (rh_folha.apropriacao_competencia, migration 0047) e não na alocação de
+  // hoje: trocar o centro de custo de alguém agora não pode reescrever para
+  // onde o custo de fevereiro caiu.
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  estabelecimento_id: number | null;
+  lotacao_nome: string | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
 }
 
 export async function listarFolhasDaCompetencia(
@@ -1306,18 +1317,32 @@ export async function listarFolhasDaCompetencia(
     total_descontos: string;
     liquido: string;
     calculada_em: string;
+    empresa_id: string | null;
+    empresa_nome: string | null;
+    estabelecimento_id: string | null;
+    lotacao_nome: string | null;
+    centro_custo_id: string | null;
+    centro_custo_codigo: string | null;
+    centro_custo_nome: string | null;
   }>(
     `SELECT f.id, f.colaborador_id, c.nome_completo AS colaborador_nome,
             c.matricula, f.salario_base_congelado::text AS salario_base_congelado,
             f.dependentes_irrf, f.total_proventos::text AS total_proventos,
             f.total_descontos::text AS total_descontos, f.liquido::text AS liquido,
-            f.calculada_em::text AS calculada_em
+            f.calculada_em::text AS calculada_em,
+            ap.empresa_id, ap.empresa_nome,
+            ap.estabelecimento_id, ap.lotacao_nome,
+            ap.centro_custo_id, ap.centro_custo_codigo, ap.centro_custo_nome
        FROM rh_folha.folha_colaborador f
        JOIN rh.colaborador c ON c.id = f.colaborador_id
+       LEFT JOIN rh_folha.apropriacao_competencia ap
+              ON ap.folha_colaborador_id = f.id
       WHERE f.competencia_id = $1
       ORDER BY c.nome_completo, f.id`,
     [competenciaId]
   );
+  const numeroOuNulo = (valor: string | null) =>
+    valor === null ? null : Number(valor);
   return linhas.map((linha) => ({
     id: Number(linha.id),
     colaborador_id: Number(linha.colaborador_id),
@@ -1329,6 +1354,13 @@ export async function listarFolhasDaCompetencia(
     total_descontos_centavos: paraCentavos(linha.total_descontos),
     liquido_centavos: paraCentavos(linha.liquido),
     calculada_em: linha.calculada_em,
+    empresa_id: numeroOuNulo(linha.empresa_id),
+    empresa_nome: linha.empresa_nome,
+    estabelecimento_id: numeroOuNulo(linha.estabelecimento_id),
+    lotacao_nome: linha.lotacao_nome,
+    centro_custo_id: numeroOuNulo(linha.centro_custo_id),
+    centro_custo_codigo: linha.centro_custo_codigo,
+    centro_custo_nome: linha.centro_custo_nome,
   }));
 }
 

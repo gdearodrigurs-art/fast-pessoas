@@ -1,6 +1,11 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
-import { TipoEmpresa } from "./esquemas";
+import {
+  FiltroEstrutura,
+  OpcaoEstrutura,
+  OpcoesFiltroEstrutura,
+  TipoEmpresa,
+} from "./esquemas";
 
 // SQL dos catálogos de REGISTRO (rh.empresa_grupo) e CENTRO DE CUSTO
 // (rh.centro_custo), ambos com nome versionado por vigência — migration 0047.
@@ -404,4 +409,109 @@ export async function existeCentroCustoAtivo(
     [centroCustoId]
   );
   return rows.length > 0;
+}
+
+// ------------------------------------------------------------------ filtro pelos três (leitura)
+//
+// Uma fonte só para "quem está registrado em X, trabalhando em Y, custando em
+// Z", usada pela lista de colaboradores, pelos relatórios, pelo organograma e
+// pela folha. Duas decisões que fazem o filtro não mentir:
+//
+// 1. A linha comparada é a MESMA que a tela mostra: "a vigente, ou a última
+//    quando o contrato acabou" (a ordenação de rh.vinculos_da_pessoa). Filtrar
+//    por `fim_vigencia IS NULL` devolveria vazio para todo vínculo encerrado
+//    direito — inclusive o que a transferência entre empresas (0048) fecha —
+//    e a lista mostraria "Supply" numa linha que o filtro "Supply" some.
+// 2. Os três entram em E. Combinar é o ponto: o exemplo do dono é alguém
+//    registrado na Supply, trabalhando na loja Centro e custando no CSC, e
+//    perguntar pelos três ao mesmo tempo tem que ser possível.
+
+/**
+ * Devolve o pedaço de SQL a colar num WHERE (já começando por AND), empurrando
+ * os valores para `parametros`. Filtro vazio devolve string vazia — nada muda.
+ *
+ * @param aliasColaborador alias da tabela rh.colaborador na consulta chamadora.
+ */
+export function condicaoFiltroEstrutura(
+  filtro: FiltroEstrutura,
+  parametros: unknown[],
+  aliasColaborador = "c"
+): string {
+  const comparacoes: string[] = [];
+  if (filtro.empresa_id !== undefined) {
+    parametros.push(filtro.empresa_id);
+    comparacoes.push(`ultima.empresa_id = $${parametros.length}`);
+  }
+  if (filtro.estabelecimento_id !== undefined) {
+    parametros.push(filtro.estabelecimento_id);
+    comparacoes.push(`ultima.estabelecimento_id = $${parametros.length}`);
+  }
+  if (filtro.centro_custo_id !== undefined) {
+    parametros.push(filtro.centro_custo_id);
+    comparacoes.push(`ultima.centro_custo_id = $${parametros.length}`);
+  }
+  if (comparacoes.length === 0) return "";
+  return ` AND EXISTS (
+      SELECT 1
+        FROM (SELECT le.empresa_id, le.estabelecimento_id, le.centro_custo_id
+                FROM rh.lotacao le
+               WHERE le.colaborador_id = ${aliasColaborador}.id
+               ORDER BY le.inicio_vigencia DESC, le.id DESC
+               LIMIT 1) ultima
+       WHERE ${comparacoes.join(" AND ")}
+    )`;
+}
+
+/**
+ * O que oferecer nos três seletores. Sai do que EXISTE em rh.lotacao, não do
+ * catálogo inteiro: seletor com opção que não devolve ninguém é ruído. Inclui o
+ * catálogo inativado, de propósito — inativar tira do cadastro NOVO, e quem
+ * esteve ali continua tendo passado que o DP precisa achar.
+ */
+export async function listarOpcoesDeFiltroEstrutura(): Promise<OpcoesFiltroEstrutura> {
+  const linhas = await consultar<{
+    empresa_id: string;
+    empresa_nome: string | null;
+    estabelecimento_id: string;
+    lotacao_nome: string | null;
+    centro_custo_id: string;
+    centro_custo_codigo: string;
+    centro_custo_nome: string | null;
+  }>(
+    `SELECT DISTINCT ld.empresa_id, ld.empresa_nome,
+            ld.estabelecimento_id, ld.lotacao_nome,
+            ld.centro_custo_id, ld.centro_custo_codigo, ld.centro_custo_nome
+       FROM rh.lotacao_detalhada ld`
+  );
+  const empresas = new Map<number, string>();
+  const lotacoes = new Map<number, string>();
+  const centros = new Map<number, string>();
+  for (const linha of linhas) {
+    const empresaId = Number(linha.empresa_id);
+    if (!empresas.has(empresaId)) {
+      empresas.set(empresaId, linha.empresa_nome ?? `Empresa ${empresaId}`);
+    }
+    const lotacaoId = Number(linha.estabelecimento_id);
+    if (!lotacoes.has(lotacaoId)) {
+      lotacoes.set(lotacaoId, linha.lotacao_nome ?? `Local ${lotacaoId}`);
+    }
+    const centroId = Number(linha.centro_custo_id);
+    if (!centros.has(centroId)) {
+      centros.set(
+        centroId,
+        linha.centro_custo_nome
+          ? `${linha.centro_custo_codigo} — ${linha.centro_custo_nome}`
+          : linha.centro_custo_codigo
+      );
+    }
+  }
+  const ordenar = (mapa: Map<number, string>): OpcaoEstrutura[] =>
+    [...mapa.entries()]
+      .map(([id, nome]) => ({ id, nome }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  return {
+    empresas: ordenar(empresas),
+    lotacoes: ordenar(lotacoes),
+    centros_custo: ordenar(centros),
+  };
 }
