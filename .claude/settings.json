@@ -1,0 +1,33 @@
+{
+  "$comentario": [
+    "As regras de ouro do arnês (ponto 7 de docs/13-arnes-do-projeto.md).",
+    "Este arquivo é VERSIONADO de propósito: a regra viaja com o código, para o dono e para o Diego.",
+    "Os hooks disparam também DENTRO dos subagentes — a documentação do Claude Code é explícita, e a",
+    "entrada carrega agent_id e agent_type. Uma regra escrita uma vez governa os 195.",
+    "Limite honesto: hook vê CHAMADA DE FERRAMENTA. Ele não enxerga fs.writeFileSync de um",
+    "subprocesso node. Para o que os nossos próprios scripts fazem, a trava mora dentro deles.",
+    "O ato de fechamento se declara com ARNES_FECHAMENTO=1 no comando."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guarda-bash.js\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guarda-arquivo.js\""
+          }
+        ]
+      }
+    ]
+  }
+}
