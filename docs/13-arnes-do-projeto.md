@@ -508,15 +508,68 @@ foi repetido, decisão com padrão óbvio. Esses eu resolvo e conto no relatóri
 
 ---
 
-## 7 · System prompt — contenção
+## 7 · System prompt — contenção — *FECHADO*
 
 **Evidência:** as restrições que escrevi foram violadas. Um agente rodou `git reset` apesar do
-"NÃO use". Três colisões de migration apesar do "confira antes". Lixo em commit quatro vezes apesar
-do "não deixe lixo".
+"NÃO use". Três colisões de migration apesar do "confira antes". Lixo em commit quatro vezes apesar do
+"não deixe lixo". Três instruções claras, em maiúsculas, três violações.
 
-**Vira:** curto. Porque **o que era prosa vira portão** nos itens 1, 2 e 3 — número de migration é
-alocado por ferramenta, lixo é barrado por `.gitignore` com padrão, convenção é barrada por lint.
-Sobra pouca coisa para pedir por escrito, e o que sobra tem chance de ser obedecido.
+### Prosa não contém
+
+**Contenção não se escreve, se constrói.** As camadas que de fato contêm são as outras: ferramenta que
+aloca o número (1), branch e banco separados (2), lint e portão (3). O prompt é a camada mais fraca, e
+eu a estava usando como primeira.
+
+### Dois modos de falha, e só um é do agente
+
+- **Desobediência** — ele sabia e não fez. Cura: portão. Texto mais enfático não cura.
+- **Instrução inexequível** — ele *obedeceu* e não funcionou. A sonda 1 dizia "responda em uma linha";
+  ele respondeu em texto, que não me alcança. "Pulse a cada 15 minutos" para quem não tem relógio é o
+  mesmo caso. **Isso é erro meu, e prompt curto não resolve: prompt EXATO resolve.**
+
+### O que sobra para escrever
+
+Só o que passa nas três condições: não dá para virar portão · é executável de dentro do laço do
+agente · corrige um viés que ele traz de fábrica.
+
+Fica: os dez eixos (uma linha cada) · o protocolo do informe, incluindo **como responder a uma sonda**
+· o que fazer quando travar (sobe, não inventa) · o escopo de escrita.
+
+Sai, porque virou trava: número de migration · lixo · float de dinheiro, papel em decisão de acesso,
+literal em formulário · "rode `tsc` antes de dizer pronto".
+
+**Guarda contra ficar sem as duas proteções:** a linha só sai do prompt **depois** que o portão dela
+existir e tiver sido testado. Nunca junto, nunca antes.
+
+### As REGRAS DE OURO — o mecanismo, achado em 01/08/2026
+
+Exigência do dono: *"precisamos dar um jeito de algumas regras de ouro o agente não poder quebrar."*
+Existe mecanismo nativo — **hooks do Claude Code** ([documentação](https://code.claude.com/docs/en/hooks)).
+Três fatos resolvem a questão:
+
+1. **Hooks valem dentro dos subagentes.** A documentação é explícita: quando um subagente chama uma
+   ferramenta, `PreToolUse` dispara os mesmos hooks configurados, e a entrada carrega `agent_id` e
+   `agent_type`. **Uma regra escrita uma vez governa os 195.**
+2. **O bloqueio é determinístico.** Saída com código 2 impede a chamada e o `stderr` vira a explicação
+   que o agente recebe; ou JSON com `{"permissionDecision": "deny", "permissionDecisionReason": …}`.
+   Não há como esquecer.
+3. **`SubagentStop` com `{"decision": "block", "reason": …}` impede o agente de TERMINAR.** É o portão
+   do ponto 3 com dentes: enquanto o teste estiver vermelho ele não declara pronto — não porque foi
+   instruído, porque não consegue.
+
+Configuração em `.claude/settings.json`, **versionada** — a regra viaja com o código, para mim e para
+o Diego. Ressalva da própria documentação: para proibição dura, o filtro `if` é "melhor esforço" — o
+certo é **regra de permissão mais hook**, não um só.
+
+| Regra de ouro | Mecanismo | Por que ela existe |
+|---|---|---|
+| não reescreve histórico do git | deny + `PreToolUse` em Bash | um agente rodou `git reset` apesar do "NÃO use" |
+| não edita migration já aplicada | `PreToolUse` `if: "Edit(db/migrations/*)"` | hoje o hash só reclama na hora de migrar, tarde demais |
+| não escreve no Supabase | deny nas ferramentas MCP do Supabase | LGPD: só dado fictício, e o banco de trabalho é o local |
+| **não declara pronto com portão vermelho** | **`SubagentStop`** | é o ponto 3 inteiro virando trava |
+| não commita lixo | `PreToolUse` em `Bash(git commit *)` | lixo em quatro commits |
+| **não apaga prova** | `PreToolUse` em `Bash(rm *)` sobre pasta de prova | **eu apaguei a prova da onda I** — a regra de que eu mais precisava era contra mim |
+| **não retrata o mapa** (só o fechamento retrata) | deny em `Bash(node db/mapa.js retrato*)` | agente que retrata apaga o próprio gatilho — ver conflito E |
 
 ---
 

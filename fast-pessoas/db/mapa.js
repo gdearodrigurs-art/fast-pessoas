@@ -14,7 +14,11 @@
 //   node db/mapa.js                      confere tudo; sai 1 se algum eixo ganhou arquivo
 //   node db/mapa.js vigencia dinheiro    confere só esses eixos
 //   node db/mapa.js --sql                inclui as consultas de catálogo (precisa de DATABASE_URL)
-//   node --env-file=.env.local-db db/mapa.js --sql --retrato-sql
+//   node --env-file=.env.local-db db/mapa.js retrato --sql   grava o retrato COM o catálogo
+//
+// A ordem importa: `retrato` é o primeiro argumento e `--sql` vem depois. Este cabeçalho
+// documentava uma bandeira `--retrato-sql` que nunca existiu no código — o comando rodava a
+// comparação e não gravava nada, em silêncio. Achado pela auditoria do próprio mapa.
 //
 // Bandeiras: --json (saída de máquina) · --sem-portao (nunca sai 1) · --quieto
 const fs = require('fs');
