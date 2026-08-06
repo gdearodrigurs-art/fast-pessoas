@@ -174,7 +174,7 @@ function CartaoFerias({ bloco }: { bloco: BlocoFerias }) {
       <div className={estilos.cabecalhoCartao}>
         <h2>Minhas férias</h2>
         <Link className={estilos.ligacao} href="/ferias">
-          Programar férias →
+          Solicitar férias →
         </Link>
       </div>
       {bloco.alerta !== null && (

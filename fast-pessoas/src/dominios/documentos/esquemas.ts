@@ -44,11 +44,46 @@ const esquemaNomeArquivo = z
   .min(1, "Informe o nome do arquivo")
   .max(255);
 
+/**
+ * Lista fechada do que pode ser guardado no GED.
+ *
+ * Esta lista NÃO é administrável pela tela, e é de propósito: o eixo "nada
+ * chumbado" trata de limite, prazo e lista de NEGÓCIO — o que pode virar
+ * arquivo no servidor é fronteira de segurança. Deixar um operador acrescentar
+ * `application/x-msdownload` por uma tela seria entregar a chave.
+ *
+ * PDF é obrigatório aqui: é o formato que a assinatura gov.br exige.
+ */
+export const MIMES_PERMITIDOS = [
+  "application/pdf",
+  "application/msword", // .doc
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+  "text/plain",
+  "image/jpeg",
+  "image/png",
+] as const;
+
+export const ROTULOS_MIME: Record<string, string> = {
+  "application/pdf": "PDF",
+  "application/msword": "Word (.doc)",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    "Word (.docx)",
+  "text/plain": "Texto",
+  "image/jpeg": "Imagem JPEG",
+  "image/png": "Imagem PNG",
+};
+
 const esquemaMime = z
   .string()
   .trim()
   .max(100)
-  .regex(/^[\w.+-]+\/[\w.+-]+$/, "Tipo MIME inválido");
+  .regex(/^[\w.+-]+\/[\w.+-]+$/, "Tipo MIME inválido")
+  .refine(
+    (valor) => (MIMES_PERMITIDOS as readonly string[]).includes(valor),
+    `Tipo de arquivo não aceito. Aceitos: ${MIMES_PERMITIDOS.map(
+      (mime) => ROTULOS_MIME[mime]
+    ).join(", ")}.`
+  );
 
 /** Metadados vindos de multipart/form-data — todo campo chega como texto. */
 export const esquemaEnvioMultipart = z.object({

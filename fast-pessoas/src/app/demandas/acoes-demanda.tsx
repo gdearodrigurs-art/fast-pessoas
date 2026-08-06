@@ -18,12 +18,16 @@ const DIALOGOS: Record<
     rotuloCampo: "Motivo",
     rotuloBotao: "Reprovar",
   },
+  // O ato é o mesmo de sempre (a API continua sendo `concluir`); o rótulo mudou
+  // porque o par estava desequilibrado: "Recusar" é o oposto de "Aprovar", não
+  // de "Concluir". Não colide com o botão Aprovar da cadeia — aquele só existe
+  // em `aguardando_aprovacao` e este só em `em_atendimento`.
   concluir: {
-    titulo: "Concluir",
+    titulo: "Aprovar",
     subtitulo:
       "Descreva a entrega/resposta ao solicitante — ela entra no histórico e nos comentários.",
     rotuloCampo: "Resposta",
-    rotuloBotao: "Concluir",
+    rotuloBotao: "Aprovar",
   },
   recusar: {
     titulo: "Recusar",
@@ -139,7 +143,7 @@ export function AcoesDemanda({
           disabled={enviando}
           onClick={() => setDialogo("concluir")}
         >
-          Concluir…
+          Aprovar…
         </button>
       )}
       {habilitadas.recusar && (

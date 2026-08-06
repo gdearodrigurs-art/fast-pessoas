@@ -13,6 +13,19 @@ export const ROTULOS_PAPEL: Record<Papel, string> = {
 };
 
 /**
+ * O rótulo do papel para a TELA — nunca indexe `ROTULOS_PAPEL` direto.
+ *
+ * O mapa acima cobre os oito papéis que nascem com o sistema, e o dono decidiu
+ * que operadores podem criar perfis novos. Perfil criado pela tela não está
+ * aqui, e indexar direto devolve `undefined` — que já era o que aparecia ao
+ * lado do nome da pessoa no cabeçalho da home. Sem rótulo, mostra a chave crua:
+ * feia, mas verdadeira.
+ */
+export function rotuloPapel(papel: string): string {
+  return (ROTULOS_PAPEL as Record<string, string>)[papel] ?? papel;
+}
+
+/**
  * Uma linha dizendo o que o papel faz — exibida no seletor de /usuarios e no
  * cabeçalho de cada perfil em /perfis. É rótulo de INTERFACE, não regra: a
  * regra é a composição papel → chave em sistema.papel_permissao, editável em

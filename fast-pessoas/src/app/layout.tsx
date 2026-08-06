@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { lerSessao } from "@/lib/sessao";
+import { ProvedorSessao } from "./sessao-contexto";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -17,14 +19,24 @@ export const metadata: Metadata = {
   description: "Sistema de DP/RH da Fast",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Sessão pendente de 2FA ainda não é sessão: quem parou no TOTP não tem nome
+  // no cabeçalho, porque ainda não entrou.
+  const sessao = await lerSessao();
+  const identidade =
+    sessao && !sessao.pendente_2fa
+      ? { nome: sessao.nome, papel: sessao.papel }
+      : null;
+
   return (
     <html lang="pt-BR" className={`${geistSans.variable} ${geistMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <ProvedorSessao identidade={identidade}>{children}</ProvedorSessao>
+      </body>
     </html>
   );
 }

@@ -9,7 +9,9 @@ import {
   CategoriaDocumento,
   formatarTamanho,
   MetadadosEnvio,
+  MIMES_PERMITIDOS,
   ROTULOS_CATEGORIA,
+  ROTULOS_MIME,
   TAMANHO_MAXIMO_BYTES,
 } from "./esquemas";
 import {
@@ -32,7 +34,6 @@ const TABELA_CIENCIA = "rh.ciencia";
 // que deixava recrutador e T&D vendo contrato de qualquer pessoa.
 const CHAVE_VER_TODOS = "documento.ver.todos";
 const CHAVE_SENSIVEL_VER = "documento.sensivel.ver";
-const MIME_PADRAO = "application/octet-stream";
 
 // Ponto único de troca por object storage — o serviço só conhece a interface.
 const armazenamento: ArmazenamentoDocumentos = armazenamentoBytea;
@@ -143,9 +144,20 @@ export async function enviarDocumento(
     );
   }
   const nomeArquivo = arquivo.nome.trim().slice(0, 255) || "documento";
-  const mime = /^[\w.+-]+\/[\w.+-]+$/.test(arquivo.mime)
-    ? arquivo.mime.slice(0, 100)
-    : MIME_PADRAO;
+  // A trava mora AQUI, e não só no esquema de entrada: o caminho multipart não
+  // passa por zod nenhum — a rota lê `arquivo.type` do File e entrega direto.
+  // Os dois caminhos (multipart e base64) convergem neste ponto, então é aqui
+  // que a lista fechada vale para os dois.
+  const mime = arquivo.mime.trim().slice(0, 100);
+  if (!(MIMES_PERMITIDOS as readonly string[]).includes(mime)) {
+    throw new ErroHttpCampo(
+      415,
+      `Tipo de arquivo não aceito${mime ? ` (${mime})` : ""}. Aceitos: ${MIMES_PERMITIDOS.map(
+        (permitido) => ROTULOS_MIME[permitido]
+      ).join(", ")}.`,
+      "arquivo"
+    );
+  }
 
   let colaboradorNome: string | null = null;
   if (metadados.colaborador_id !== null) {

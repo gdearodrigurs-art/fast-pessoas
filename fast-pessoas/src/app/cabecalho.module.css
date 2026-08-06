@@ -24,6 +24,13 @@
   color: #6b6763;
 }
 
+/* Quem está logado. Em tom neutro de propósito: é informação de contexto, e não
+   pode competir com os links de ação, que são os vermelhos. */
+.identidade {
+  color: #6b6763;
+  white-space: nowrap;
+}
+
 .acao {
   color: #d21217;
   font-weight: 600;

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import { rotuloTransicao } from "@/dominios/demandas/esquemas";
-import { ROTULOS_PAPEL } from "@/dominios/usuarios/esquemas";
+import { rotuloPapel } from "@/dominios/usuarios/esquemas";
 import { AcoesDemanda } from "../acoes-demanda";
 import { AcoesEtapa } from "../acoes-etapa";
 import { CartaoDemanda } from "../cartao-demanda";
@@ -13,10 +13,6 @@ import comum from "../comum.module.css";
 import { formatarDataHora } from "../formato";
 import { Comentario, Detalhe } from "../tipos";
 import estilos from "./page.module.css";
-
-function rotuloPapel(papel: string): string {
-  return (ROTULOS_PAPEL as Record<string, string>)[papel] ?? papel;
-}
 
 export function DetalheDemanda({ id }: { id: number }) {
   const [detalhe, setDetalhe] = useState<Detalhe | null>(null);

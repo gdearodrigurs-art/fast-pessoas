@@ -1,13 +1,23 @@
+"use client";
+
 import Link from "next/link";
+import { rotuloPapel } from "@/dominios/usuarios/esquemas";
 import { BotaoSair } from "./botao-sair";
 import { SinoNotificacoes } from "./sino-notificacoes";
+import { useIdentidade } from "./sessao-contexto";
 import estilos from "./cabecalho.module.css";
 
 /**
  * Cabeçalho compartilhado de todas as páginas autenticadas:
- * marca (link para o início) + links do módulo (children) + "Meu portal" +
- * sino + Sair. Sem hooks — funciona em server components e dentro de client
- * components.
+ * marca + **quem está logado** + links do módulo (children) + "Meu portal" +
+ * sino + Sair.
+ *
+ * O nome vive AQUI, e não em cada página: antes só a home o mostrava, passando
+ * como `children`, e nas outras 40 telas o mesmo espaço era ocupado pelos links
+ * do módulo — a pessoa perdia de vista com qual conta estava navegando.
+ *
+ * É client component porque lê o contexto de sessão; continua podendo ser usado
+ * de server component (o `children` entra como slot, que o App Router permite).
  */
 export function Cabecalho({
   children,
@@ -21,12 +31,19 @@ export function Cabecalho({
   /** Dentro do próprio portal o atalho é redundante. */
   ocultarMeuPortal?: boolean;
 }) {
+  const identidade = useIdentidade();
+
   return (
     <header className={estilos.cabecalho}>
       <Link className={estilos.marca} href="/">
         Fast Pessoas
       </Link>
       <nav className={estilos.navegacao}>
+        {identidade && (
+          <span className={estilos.identidade}>
+            {identidade.nome} · {rotuloPapel(identidade.papel)}
+          </span>
+        )}
         {!ocultarInicio && (
           <Link className={estilos.acao} href="/">
             Início

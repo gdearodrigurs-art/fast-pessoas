@@ -304,7 +304,11 @@ export function PainelFerias({
             </section>
 
             <section className={estilos.cartao}>
-              <h2>Programar férias</h2>
+              {/* "Solicitar", não "Programar": o botão não programa nada — abre
+                  uma demanda para o gestor aprovar, como a própria mensagem de
+                  sucesso diz. O título acompanha para a tela não falar duas
+                  línguas. */}
+              <h2>Solicitar férias</h2>
               <form className={estilos.formulario} onSubmit={programar}>
                 <div className={estilos.campoGrupo}>
                   <label className={estilos.rotulo} htmlFor="periodo">
@@ -383,7 +387,7 @@ export function PainelFerias({
                   type="submit"
                   disabled={enviando}
                 >
-                  {enviando ? "Enviando…" : "Programar"}
+                  {enviando ? "Enviando…" : "Solicitar"}
                 </button>
               </form>
               {erroEnvio && <p className={estilos.erro}>{erroEnvio}</p>}

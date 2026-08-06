@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
 import { lerSessao } from "@/lib/sessao";
-import { ROTULOS_PAPEL } from "@/dominios/usuarios/esquemas";
 import { Cabecalho } from "./cabecalho";
 import estilos from "./page.module.css";
 
@@ -370,11 +369,9 @@ export default async function PaginaInicial() {
 
   return (
     <div className={estilos.pagina}>
-      <Cabecalho ocultarInicio>
-        <span className={estilos.usuario}>
-          {sessao.nome} · {ROTULOS_PAPEL[sessao.papel]}
-        </span>
-      </Cabecalho>
+      {/* O nome saiu daqui e foi para dentro do Cabecalho — antes só esta tela
+          o mostrava, e nas outras 40 ele sumia. */}
+      <Cabecalho ocultarInicio />
 
       <main className={estilos.conteudo}>
         <h1>Bem-vindo ao Fast Pessoas</h1>
