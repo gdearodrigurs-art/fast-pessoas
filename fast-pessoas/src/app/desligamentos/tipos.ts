@@ -1,5 +1,5 @@
 import {
-  CategoriaItem,
+  CategoriaDevolucao,
   EstadoProcesso,
   Iniciativa,
   ModalidadeAviso,
@@ -66,11 +66,21 @@ export interface Verificacao {
 
 export interface Item {
   id: number;
-  categoria: CategoriaItem;
+  /** Chave no catálogo rh.categoria_devolucao — não é enum desde a 0054. */
+  categoria: string;
+  /** Rótulo já resolvido pelo servidor: a tela não tem mapa de categoria. */
+  categoria_nome: string;
   descricao: string;
   status: StatusItem;
   criado_em: string;
   atualizado_em: string;
+}
+
+export type { CategoriaDevolucao };
+
+export interface CatalogoCategorias {
+  pode_administrar: boolean;
+  categorias: CategoriaDevolucao[];
 }
 
 export interface Entrevista {
@@ -117,6 +127,8 @@ export interface Detalhe {
   motivo?: string | null;
   verificacoes: Verificacao[];
   itens: Item[];
+  /** Só as ATIVAS, e vazio para quem não gere itens — o seletor sai daqui. */
+  categorias: CategoriaDevolucao[];
   entrevista: Entrevista | null;
   acoes: {
     avancar: boolean;

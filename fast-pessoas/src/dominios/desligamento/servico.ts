@@ -12,6 +12,8 @@ import {
 import { PayloadSessao } from "../identidade/esquemas";
 import { liquidarBancoNaRescisao } from "../ponto/servico";
 import {
+  CategoriaDevolucao,
+  chaveDeNome,
   CorpoAgendarEntrevista,
   CorpoEncerrar,
   CorpoRealizarEntrevista,
@@ -19,11 +21,11 @@ import {
   ESTADOS_TERMINAIS,
   EstadoProcesso,
   IniciarProcesso,
+  NomeCategoria,
   NovoItem,
   PROXIMO_ESTADO,
   Respostas,
   ResultadoEstabilidade,
-  ROTULOS_CATEGORIA_ITEM,
   ROTULOS_ESTADO,
   ROTULOS_INICIATIVA,
   ROTULOS_MODALIDADE_AVISO,
@@ -40,6 +42,8 @@ import {
   agendarEntrevista,
   atualizarEstado,
   atualizarStatusItem,
+  buscarCategoriaParaAtualizar,
+  buscarCategoriaPorChave,
   buscarColaboradorBasico,
   buscarEntrevista,
   buscarEntrevistaParaTransicao,
@@ -53,6 +57,7 @@ import {
   buscarTipoAtivo,
   ColaboradorElegivel,
   colaboradoresElegiveis,
+  definirInativacaoCategoria,
   ehGestorDoColaborador,
   encerrarLiderancaNoDesligamento,
   encerrarProcesso,
@@ -60,11 +65,13 @@ import {
   existeProcessoAberto,
   IndicadorEntrevistas,
   indicadorEntrevistas,
+  inserirCategoriaDevolucao,
   inserirEntrevista,
   inserirItem,
   inserirProcesso,
   inserirVerificacao,
   ItemDevolucao,
+  listarCategoriasDevolucao,
   listarItens,
   listarProcessos,
   listarVerificacoes,
@@ -74,6 +81,7 @@ import {
   registrarEntrevistaRealizada,
   registrarLeituraSensivel,
   relacoesLiderancaAbertas,
+  renomearCategoriaDevolucao,
   temAfastamentoAcidentario12m,
   temPermissao,
   TipoDesligamentoAtivo,
@@ -84,6 +92,8 @@ import {
 const TABELA_PROCESSO = "rh.processo_desligamento";
 const TABELA_ENTREVISTA = "rh.entrevista_desligamento";
 const TABELA_ITEM = "rh.item_devolucao";
+const TABELA_CATEGORIA = "rh.categoria_devolucao";
+const CHAVE_CATEGORIA_ADMIN = "desligamento.categoria.administrar";
 
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
@@ -422,6 +432,11 @@ export interface DetalheProcesso {
   motivo?: string | null;
   verificacoes: VerificacaoEstabilidade[];
   itens: ItemDevolucao[];
+  /**
+   * As categorias que o seletor de item pode oferecer — só as ATIVAS, e só
+   * para quem gere itens. Vem do catálogo (0054): a tela não tem mais lista.
+   */
+  categorias: CategoriaDevolucao[];
   entrevista: EntrevistaResumo | null;
   acoes: {
     avancar: boolean;
@@ -443,10 +458,11 @@ export async function obterDetalhe(
     throw new ErroHttp(404, "Processo não encontrado.");
   }
   const pode = await permissoesDe(sessao.usuario_id);
-  const [verificacoes, itens, entrevista] = await Promise.all([
+  const [verificacoes, itens, entrevista, categorias] = await Promise.all([
     listarVerificacoes(id),
     listarItens(id),
     buscarEntrevista(id),
+    listarCategoriasDevolucao(true),
   ]);
 
   const terminal = ESTADOS_TERMINAIS.includes(processo.estado);
@@ -454,10 +470,13 @@ export async function obterDetalhe(
     entrevista !== null &&
     !STATUS_TERMINAIS_ENTREVISTA.includes(entrevista.status);
 
+  const gerirItens = pode.gerir && !terminal;
+
   const detalhe: DetalheProcesso = {
     processo,
     verificacoes,
     itens,
+    categorias: gerirItens ? categorias : [],
     entrevista,
     acoes: {
       avancar: pode.gerir && PROXIMO_ESTADO[processo.estado] !== undefined,
@@ -466,7 +485,7 @@ export async function obterDetalhe(
       encerrar_bloqueado_por_entrevista:
         processo.estado === "em_acerto" && entrevistaPendente,
       cancelar: pode.gerir && !terminal,
-      gerir_itens: pode.gerir && !terminal,
+      gerir_itens: gerirItens,
       entrevista_transicionar:
         pode.conduzir_entrevista &&
         !terminal &&
@@ -782,9 +801,26 @@ export async function adicionarItemDevolucao(
 ): Promise<ItemDevolucao[]> {
   await comTransacao(sessao.usuario_id, async (cliente) => {
     await exigirProcessoAtivo(cliente, processoId);
+    // A categoria vem do catálogo, e o servidor reconfere: chave que não existe
+    // ou que foi inativada é recusada aqui, antes da FK e do trigger da 0054.
+    const categoria = await buscarCategoriaPorChave(cliente, dados.categoria);
+    if (!categoria) {
+      throw new ErroHttpCampo(
+        400,
+        "Categoria de devolução inexistente.",
+        "categoria"
+      );
+    }
+    if (!categoria.ativa) {
+      throw new ErroHttpCampo(
+        409,
+        `A categoria "${categoria.nome}" está inativa — escolha uma ativa.`,
+        "categoria"
+      );
+    }
     const itemId = await inserirItem(cliente, {
       processo_id: processoId,
-      categoria: dados.categoria,
+      categoria: categoria.chave,
       descricao: dados.descricao,
     });
     await registrarAlteracao(cliente, {
@@ -795,7 +831,7 @@ export async function adicionarItemDevolucao(
       registroId: String(itemId),
       diff: {
         Processo: { de: null, para: String(processoId) },
-        Categoria: { de: null, para: ROTULOS_CATEGORIA_ITEM[dados.categoria] },
+        Categoria: { de: null, para: categoria.nome },
         "Descrição": { de: null, para: dados.descricao },
         Status: { de: null, para: ROTULOS_STATUS_ITEM.pendente },
       },
@@ -829,7 +865,7 @@ export async function atualizarItemDevolucao(
       diff: {
         Item: {
           de: null,
-          para: `${ROTULOS_CATEGORIA_ITEM[item.categoria]} — ${item.descricao}`,
+          para: `${item.categoria_nome} — ${item.descricao}`,
         },
         Status: {
           de: ROTULOS_STATUS_ITEM[item.status],
@@ -839,6 +875,145 @@ export async function atualizarItemDevolucao(
     });
   });
   return listarItens(processoId);
+}
+
+// ------------------------------------------------------------------ catálogo de categorias de devolução (0054)
+// A lista que era CHECK de sete valores no banco. Carro, desktop e tablet não
+// cabiam nela; agora categoria nova é ato de tela, com trilha, e o que sai de
+// circulação é INATIVADO — nunca apagado, porque a chave está gravada em item
+// de devolução de processo já encerrado.
+
+export interface CatalogoCategorias {
+  pode_administrar: boolean;
+  categorias: CategoriaDevolucao[];
+}
+
+/**
+ * Quem administra vê inclusive as inativas (para reativar); quem só gere itens
+ * recebe apenas as ativas, que é o que o seletor pode oferecer.
+ */
+export async function obterCatalogoCategorias(
+  sessao: PayloadSessao
+): Promise<CatalogoCategorias> {
+  const podeAdministrar = await temPermissao(
+    sessao.usuario_id,
+    CHAVE_CATEGORIA_ADMIN
+  );
+  return {
+    pode_administrar: podeAdministrar,
+    categorias: await listarCategoriasDevolucao(!podeAdministrar),
+  };
+}
+
+export async function criarCategoriaDevolucao(
+  sessao: PayloadSessao,
+  dados: NomeCategoria
+): Promise<CategoriaDevolucao[]> {
+  const chave = chaveDeNome(dados.nome);
+  if (chave === "") {
+    throw new ErroHttpCampo(
+      400,
+      "O nome precisa ter ao menos uma letra ou número.",
+      "nome"
+    );
+  }
+  try {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      const id = await inserirCategoriaDevolucao(cliente, {
+        chave,
+        nome: dados.nome,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_CATEGORIA,
+        registroId: String(id),
+        diff: {
+          Nome: { de: null, para: dados.nome },
+          Chave: { de: null, para: chave },
+        },
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "categoria_devolucao_chave_key") {
+      const existente = await listarCategoriasDevolucao(false);
+      const igual = existente.find((categoria) => categoria.chave === chave);
+      throw new ErroHttpCampo(
+        409,
+        igual && !igual.ativa
+          ? `Já existe a categoria "${igual.nome}", hoje inativa — reative em vez de criar outra.`
+          : `Já existe uma categoria com esse nome ("${igual?.nome ?? dados.nome}").`,
+        "nome"
+      );
+    }
+    throw erro;
+  }
+  return listarCategoriasDevolucao(false);
+}
+
+/** Renomear mexe só no rótulo: a chave é a identidade e o histórico segue nela. */
+export async function renomearCategoria(
+  sessao: PayloadSessao,
+  id: number,
+  dados: NomeCategoria
+): Promise<CategoriaDevolucao[]> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const categoria = await buscarCategoriaParaAtualizar(cliente, id);
+    if (!categoria) {
+      throw new ErroHttp(404, "Categoria não encontrada.");
+    }
+    if (categoria.nome === dados.nome) return;
+    await renomearCategoriaDevolucao(cliente, id, dados.nome);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "edicao",
+      tabela: TABELA_CATEGORIA,
+      registroId: String(id),
+      diff: { Nome: { de: categoria.nome, para: dados.nome } },
+    });
+  });
+  return listarCategoriasDevolucao(false);
+}
+
+/**
+ * Inativar/reativar — o lugar da exclusão. Item já gravado com a categoria
+ * continua valendo, continua editável e continua aparecendo com o nome dela;
+ * o que muda é que ela some do seletor de itens NOVOS.
+ */
+export async function definirCategoriaInativa(
+  sessao: PayloadSessao,
+  id: number,
+  inativa: boolean
+): Promise<CategoriaDevolucao[]> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const categoria = await buscarCategoriaParaAtualizar(cliente, id);
+    if (!categoria) {
+      throw new ErroHttp(404, "Categoria não encontrada.");
+    }
+    if (inativa === !categoria.ativa) return;
+    await definirInativacaoCategoria(
+      cliente,
+      id,
+      inativa ? sessao.usuario_id : null
+    );
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "edicao",
+      tabela: TABELA_CATEGORIA,
+      registroId: String(id),
+      diff: {
+        Categoria: { de: null, para: categoria.nome },
+        "Situação": {
+          de: inativa ? "ativa" : "inativa",
+          para: inativa ? "inativa" : "ativa",
+        },
+      },
+    });
+  });
+  return listarCategoriasDevolucao(false);
 }
 
 // ------------------------------------------------------------------ entrevista

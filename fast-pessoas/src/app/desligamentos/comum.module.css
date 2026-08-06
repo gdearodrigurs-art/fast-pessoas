@@ -105,6 +105,9 @@
   border-radius: 6px;
   padding: 6px 12px;
   cursor: pointer;
+  /* também é usado em <Link> (catálogo de categorias), que vem sublinhado */
+  text-decoration: none;
+  display: inline-block;
 }
 
 .botaoSecundario:hover:enabled {

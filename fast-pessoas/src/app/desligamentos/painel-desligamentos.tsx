@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import { ESTADOS_TERMINAIS } from "@/dominios/desligamento/esquemas";
@@ -67,16 +68,23 @@ export function PainelDesligamentos() {
       <main className={estilos.conteudo}>
         <div className={estilos.linhaTitulo}>
           <h1>Desligamentos</h1>
-          {visao?.pode.iniciar && (
-            <button
-              className={comum.botaoPrimario}
-              type="button"
-              onClick={() => setWizardAberto(true)}
-              disabled={!visao.tipos || !visao.colaboradores}
-            >
-              + Iniciar desligamento
-            </button>
-          )}
+          <div className={comum.acoes}>
+            {/* O catálogo administrável das categorias de devolução (0054):
+                carro, tablet e desktop entraram por aqui, sem deploy. */}
+            <Link className={comum.botaoSecundario} href="/desligamentos/categorias">
+              Categorias de devolução
+            </Link>
+            {visao?.pode.iniciar && (
+              <button
+                className={comum.botaoPrimario}
+                type="button"
+                onClick={() => setWizardAberto(true)}
+                disabled={!visao.tipos || !visao.colaboradores}
+              >
+                + Iniciar desligamento
+              </button>
+            )}
+          </div>
         </div>
         <p className={estilos.subtitulo}>
           Processo auditado ponta a ponta: estabilidades no gate, prazo do art.

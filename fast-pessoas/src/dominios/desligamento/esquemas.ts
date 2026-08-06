@@ -113,27 +113,50 @@ export const ROTULOS_RESULTADO_ESTABILIDADE: Record<
 
 // ------------------------------------------------------------------ itens de devolução
 
-export const CATEGORIAS_ITEM = [
-  "epi",
-  "notebook",
-  "cracha",
-  "uniforme",
-  "chave",
-  "celular",
-  "outro",
-] as const;
+/**
+ * Categoria de item de devolução vem do CATÁLOGO (rh.categoria_devolucao),
+ * nunca de lista fixa aqui. Até a 0054 eram sete valores chumbados na CHECK do
+ * banco e num Record neste arquivo — e carro, desktop e tablet, que são ativos
+ * reais da empresa, não cabiam em nenhum deles: caíam em "outro" e sumiam de
+ * qualquer relatório por tipo. Categoria nova é ato de tela, não de deploy.
+ */
+export interface CategoriaDevolucao {
+  id: number;
+  /** Slug estável — é o que rh.item_devolucao.categoria grava. */
+  chave: string;
+  nome: string;
+  ordem: number;
+  ativa: boolean;
+  /** Quantos itens de devolução já usam esta categoria (por isso não se apaga). */
+  em_uso: number;
+}
 
-export type CategoriaItem = (typeof CATEGORIAS_ITEM)[number];
+/** O mesmo formato que o banco impõe em rh.categoria_devolucao.chave. */
+const FORMATO_CHAVE_CATEGORIA = /^[a-z][a-z0-9_]*$/;
 
-export const ROTULOS_CATEGORIA_ITEM: Record<CategoriaItem, string> = {
-  epi: "EPI",
-  notebook: "Notebook",
-  cracha: "Crachá",
-  uniforme: "Uniforme",
-  chave: "Chave",
-  celular: "Celular",
-  outro: "Outro",
-};
+export const esquemaChaveCategoria = z
+  .string()
+  .trim()
+  .max(60, "Categoria inválida")
+  .regex(FORMATO_CHAVE_CATEGORIA, "Categoria inválida");
+
+/**
+ * Nome digitado → chave estável ("Carro da frota" → "carro_da_frota").
+ * A chave é derivada uma vez, na criação: renomear depois mexe só no nome, para
+ * que o histórico já gravado continue apontando para a mesma linha.
+ */
+export function chaveDeNome(nome: string): string {
+  const base = nome
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60)
+    .replace(/_+$/g, "");
+  if (base === "") return "";
+  return /^[a-z]/.test(base) ? base : `cat_${base}`;
+}
 
 export const STATUS_ITEM = [
   "pendente",
@@ -303,7 +326,9 @@ export const esquemaMotivoAcao = z.object({
 export type CorpoMotivoAcao = z.infer<typeof esquemaMotivoAcao>;
 
 export const esquemaNovoItem = z.object({
-  categoria: z.enum([...CATEGORIAS_ITEM]),
+  // A chave vem do catálogo; quem confere se ela existe e está ATIVA é o
+  // serviço (e, por último, a FK + o trigger da 0054). Nunca um enum aqui.
+  categoria: esquemaChaveCategoria,
   descricao: z
     .string()
     .trim()
@@ -312,6 +337,23 @@ export const esquemaNovoItem = z.object({
 });
 
 export type NovoItem = z.infer<typeof esquemaNovoItem>;
+
+// ------------------------------------------------------------------ administração do catálogo de categorias
+
+export const esquemaNomeCategoria = z.object({
+  nome: z
+    .string()
+    .trim()
+    .min(2, "Informe o nome da categoria")
+    .max(60, "Nome longo demais"),
+});
+
+export type NomeCategoria = z.infer<typeof esquemaNomeCategoria>;
+
+/** Um verbo só: liga e desliga a categoria para uso NOVO. Nunca exclui. */
+export const esquemaInativacaoCategoria = z.object({ inativa: z.boolean() });
+
+export type InativacaoCategoria = z.infer<typeof esquemaInativacaoCategoria>;
 
 export const esquemaStatusItem = z.object({
   status: z.enum([...STATUS_ITEM]),

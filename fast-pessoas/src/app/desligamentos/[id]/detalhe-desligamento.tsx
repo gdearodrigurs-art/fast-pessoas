@@ -4,10 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
-  CATEGORIAS_ITEM,
-  CategoriaItem,
   PROXIMO_ESTADO,
-  ROTULOS_CATEGORIA_ITEM,
   ROTULOS_ESTADO,
   ROTULOS_RESULTADO_ESTABILIDADE,
   ROTULOS_STATUS_ENTREVISTA,
@@ -53,7 +50,9 @@ export function DetalheDesligamento({ id }: { id: number }) {
   );
   const [consentimento, setConsentimento] = useState(false);
 
-  const [novaCategoria, setNovaCategoria] = useState<CategoriaItem>("epi");
+  // Nasce vazio: a categoria vem do catálogo do servidor e quem escolhe é o
+  // usuário — campo que nasce escolhido manda ao POST um valor que ninguém olhou.
+  const [novaCategoria, setNovaCategoria] = useState("");
   const [novaDescricao, setNovaDescricao] = useState("");
   const [erroItem, setErroItem] = useState<string | null>(null);
   const [salvandoItem, setSalvandoItem] = useState(false);
@@ -128,7 +127,7 @@ export function DetalheDesligamento({ id }: { id: number }) {
 
   async function adicionarItem(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
-    if (!novaDescricao.trim()) return;
+    if (!novaDescricao.trim() || !novaCategoria) return;
     setSalvandoItem(true);
     setErroItem(null);
     try {
@@ -369,7 +368,7 @@ export function DetalheDesligamento({ id }: { id: number }) {
                 detalhe.itens.map((item) => (
                   <div key={item.id} className={estilos.itemLista}>
                     <span className={`${comum.badge} ${comum.badgeNeutro}`}>
-                      {ROTULOS_CATEGORIA_ITEM[item.categoria]}
+                      {item.categoria_nome}
                     </span>
                     <div className={estilos.itemTexto}>{item.descricao}</div>
                     {detalhe.acoes.gerir_itens ? (
@@ -407,36 +406,48 @@ export function DetalheDesligamento({ id }: { id: number }) {
                 ))
               )}
               {detalhe.acoes.gerir_itens && (
-                <form className={estilos.formLinha} onSubmit={adicionarItem}>
-                  <select
-                    aria-label="Categoria do novo item"
-                    value={novaCategoria}
-                    onChange={(e) =>
-                      setNovaCategoria(e.target.value as CategoriaItem)
-                    }
-                  >
-                    {CATEGORIAS_ITEM.map((categoria) => (
-                      <option key={categoria} value={categoria}>
-                        {ROTULOS_CATEGORIA_ITEM[categoria]}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    className={estilos.campoDescricao}
-                    type="text"
-                    maxLength={500}
-                    placeholder="Descrição do item (ex.: notebook Dell patrimônio 123)"
-                    value={novaDescricao}
-                    onChange={(e) => setNovaDescricao(e.target.value)}
-                  />
-                  <button
-                    className={comum.botaoSecundario}
-                    type="submit"
-                    disabled={salvandoItem || !novaDescricao.trim()}
-                  >
-                    {salvandoItem ? "Adicionando…" : "Adicionar item"}
-                  </button>
-                </form>
+                <>
+                  <form className={estilos.formLinha} onSubmit={adicionarItem}>
+                    {/* As opções vêm do catálogo administrável (só as ativas),
+                        nunca de uma lista escrita aqui. */}
+                    <select
+                      aria-label="Categoria do novo item"
+                      value={novaCategoria}
+                      onChange={(e) => setNovaCategoria(e.target.value)}
+                    >
+                      <option value="">Categoria…</option>
+                      {detalhe.categorias.map((categoria) => (
+                        <option key={categoria.chave} value={categoria.chave}>
+                          {categoria.nome}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className={estilos.campoDescricao}
+                      type="text"
+                      maxLength={500}
+                      placeholder="Descrição do item (ex.: notebook Dell patrimônio 123)"
+                      value={novaDescricao}
+                      onChange={(e) => setNovaDescricao(e.target.value)}
+                    />
+                    <button
+                      className={comum.botaoSecundario}
+                      type="submit"
+                      disabled={
+                        salvandoItem || !novaDescricao.trim() || !novaCategoria
+                      }
+                    >
+                      {salvandoItem ? "Adicionando…" : "Adicionar item"}
+                    </button>
+                  </form>
+                  <p className={estilos.notaRestrito}>
+                    Falta uma categoria (carro, tablet, empilhadeira…)?{" "}
+                    <Link href="/desligamentos/categorias">
+                      Administre o catálogo
+                    </Link>{" "}
+                    — não é preciso chamar o time de sistemas.
+                  </p>
+                </>
               )}
               {erroItem && <p className={comum.erroAcao}>{erroItem}</p>}
             </section>

@@ -1,7 +1,7 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
 import {
-  CategoriaItem,
+  CategoriaDevolucao,
   EstadoProcesso,
   Iniciativa,
   ModalidadeAviso,
@@ -465,28 +465,42 @@ export async function inserirVerificacao(
 
 export interface ItemDevolucao {
   id: number;
-  categoria: CategoriaItem;
+  /** Chave em rh.categoria_devolucao (0054) — não é mais valor de enum. */
+  categoria: string;
+  /** Nome de exibição vindo do catálogo: a tela não tem mapa de rótulo. */
+  categoria_nome: string;
   descricao: string;
   status: StatusItem;
   criado_em: string;
   atualizado_em: string;
 }
 
+/**
+ * LEFT JOIN e não JOIN: a FK garante a linha do catálogo, mas item sem rótulo
+ * é melhor do que item que some da lista de devoluções por causa de um join.
+ */
+const SELECT_ITEM = `SELECT i.id,
+                            i.categoria,
+                            COALESCE(c.nome, i.categoria) AS categoria_nome,
+                            i.descricao, i.status, i.criado_em, i.atualizado_em
+                       FROM rh.item_devolucao i
+                       LEFT JOIN rh.categoria_devolucao c ON c.chave = i.categoria`;
+
 export async function listarItens(
   processoId: number
 ): Promise<ItemDevolucao[]> {
   const linhas = await consultar<{
     id: string;
-    categoria: CategoriaItem;
+    categoria: string;
+    categoria_nome: string;
     descricao: string;
     status: StatusItem;
     criado_em: string;
     atualizado_em: string;
   }>(
-    `SELECT id, categoria, descricao, status, criado_em, atualizado_em
-       FROM rh.item_devolucao
-      WHERE processo_id = $1
-      ORDER BY (status = 'pendente') DESC, id`,
+    `${SELECT_ITEM}
+      WHERE i.processo_id = $1
+      ORDER BY (i.status = 'pendente') DESC, i.id`,
     [processoId]
   );
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
@@ -494,7 +508,7 @@ export async function listarItens(
 
 export async function inserirItem(
   cliente: PoolClient,
-  dados: { processo_id: number; categoria: CategoriaItem; descricao: string }
+  dados: { processo_id: number; categoria: string; descricao: string }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.item_devolucao (processo_id, categoria, descricao)
@@ -512,20 +526,130 @@ export async function buscarItemParaAtualizar(
 ): Promise<ItemDevolucao | null> {
   const { rows } = await cliente.query<{
     id: string;
-    categoria: CategoriaItem;
+    categoria: string;
+    categoria_nome: string;
     descricao: string;
     status: StatusItem;
     criado_em: string;
     atualizado_em: string;
   }>(
-    `SELECT id, categoria, descricao, status, criado_em, atualizado_em
-       FROM rh.item_devolucao
-      WHERE id = $1 AND processo_id = $2
-      FOR UPDATE`,
+    `${SELECT_ITEM}
+      WHERE i.id = $1 AND i.processo_id = $2
+      FOR UPDATE OF i`,
     [itemId, processoId]
   );
   if (rows.length === 0) return null;
   return { ...rows[0], id: Number(rows[0].id) };
+}
+
+// ------------------------------------------------------------------ catálogo de categorias de devolução (0054)
+
+// `type` e não `interface`: só o alias de literal ganha índice implícito, que é
+// o que `consultar<T extends Record<string, unknown>>` exige.
+type LinhaCategoria = {
+  id: string;
+  chave: string;
+  nome: string;
+  ordem: number;
+  ativa: boolean;
+  em_uso: string;
+};
+
+function montarCategoria(linha: LinhaCategoria): CategoriaDevolucao {
+  return {
+    id: Number(linha.id),
+    chave: linha.chave,
+    nome: linha.nome,
+    ordem: linha.ordem,
+    ativa: linha.ativa,
+    em_uso: Number(linha.em_uso),
+  };
+}
+
+const SELECT_CATEGORIA = `SELECT c.id, c.chave, c.nome, c.ordem,
+                                 (c.inativado_em IS NULL) AS ativa,
+                                 (SELECT count(*) FROM rh.item_devolucao i
+                                   WHERE i.categoria = c.chave) AS em_uso
+                            FROM rh.categoria_devolucao c`;
+
+/**
+ * `apenasAtivas` é o que o seletor da tela de desligamento usa: categoria
+ * inativada some das escolhas NOVAS e continua rotulando o que já foi gravado.
+ */
+export async function listarCategoriasDevolucao(
+  apenasAtivas: boolean
+): Promise<CategoriaDevolucao[]> {
+  const linhas = await consultar<LinhaCategoria>(
+    `${SELECT_CATEGORIA}
+      ${apenasAtivas ? "WHERE c.inativado_em IS NULL" : ""}
+      ORDER BY (c.inativado_em IS NULL) DESC, c.ordem, c.nome`
+  );
+  return linhas.map(montarCategoria);
+}
+
+export async function buscarCategoriaPorChave(
+  cliente: PoolClient,
+  chave: string
+): Promise<CategoriaDevolucao | null> {
+  const { rows } = await cliente.query<LinhaCategoria>(
+    `${SELECT_CATEGORIA} WHERE c.chave = $1`,
+    [chave]
+  );
+  return rows.length === 0 ? null : montarCategoria(rows[0]);
+}
+
+export async function buscarCategoriaParaAtualizar(
+  cliente: PoolClient,
+  id: number
+): Promise<CategoriaDevolucao | null> {
+  const { rows } = await cliente.query<LinhaCategoria>(
+    `${SELECT_CATEGORIA} WHERE c.id = $1 FOR UPDATE OF c`,
+    [id]
+  );
+  return rows.length === 0 ? null : montarCategoria(rows[0]);
+}
+
+export async function inserirCategoriaDevolucao(
+  cliente: PoolClient,
+  dados: { chave: string; nome: string }
+): Promise<number> {
+  // Nasce no fim da ordem, antes só do "Outro" (999) — quem reordena é a tela,
+  // não uma constante escrita aqui.
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.categoria_devolucao (chave, nome, ordem)
+     VALUES ($1, $2,
+             COALESCE((SELECT max(ordem) + 10 FROM rh.categoria_devolucao
+                        WHERE ordem < 999), 100))
+     RETURNING id`,
+    [dados.chave, dados.nome]
+  );
+  return Number(rows[0].id);
+}
+
+export async function renomearCategoriaDevolucao(
+  cliente: PoolClient,
+  id: number,
+  nome: string
+): Promise<void> {
+  await cliente.query(
+    "UPDATE rh.categoria_devolucao SET nome = $2 WHERE id = $1",
+    [id, nome]
+  );
+}
+
+/** `inativadoPor` nulo = reativar. Exclusão não existe: o trigger da 0054 barra. */
+export async function definirInativacaoCategoria(
+  cliente: PoolClient,
+  id: number,
+  inativadoPor: number | null
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.categoria_devolucao
+        SET inativado_em  = CASE WHEN $2::BIGINT IS NULL THEN NULL ELSE now() END,
+            inativado_por = $2
+      WHERE id = $1`,
+    [id, inativadoPor]
+  );
 }
 
 export async function atualizarStatusItem(
