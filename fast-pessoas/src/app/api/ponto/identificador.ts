@@ -10,6 +10,23 @@ export function idPonto(valor: string): number {
 }
 
 /**
+ * Dia civil vindo da query string, obrigatório. Sem padrão de propósito: "o
+ * dia" de uma correção de ponto vem sempre da intercorrência que a motivou, e
+ * adivinhar "hoje" aqui gravaria ajuste no dia errado.
+ */
+export function dataDaBusca(url: string, parametro = "data"): string {
+  const valor = new URL(url).searchParams.get(parametro);
+  if (
+    valor === null ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(valor) ||
+    Number.isNaN(Date.parse(`${valor}T00:00:00Z`))
+  ) {
+    throw new ErroHttp(400, "Informe a data no formato AAAA-MM-DD");
+  }
+  return valor;
+}
+
+/**
  * Competência vinda da query string. Ausente = a última FECHADA (o mês
  * passado), que é o que o DP e a diretoria olham por padrão.
  */

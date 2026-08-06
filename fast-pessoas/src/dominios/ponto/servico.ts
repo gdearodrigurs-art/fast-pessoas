@@ -23,8 +23,10 @@ import {
   IntercorrenciaDetectada,
   JornadaMotor,
   limitarCreditoDoBanco,
+  MarcacaoMotor,
   MINUTOS_DO_DIA,
   ResultadoApuracao,
+  TIPOS_MARCACAO,
   TipoMarcacao,
 } from "./calculo";
 import {
@@ -2235,6 +2237,11 @@ export async function listarIntercorrencias(
  * Devolve null quando não há escala vigente na data: sem jornada não existe
  * conferência, e afirmar correção no escuro é justamente o que esta função
  * existe para impedir.
+ *
+ * Devolve TAMBÉM as batidas do dia e o previsto — é o mesmo agrupamento, e é o
+ * que o formulário de correção precisa para não oferecer campo fixo (ver
+ * `diaParaAjuste`). O veredito não muda por causa disso: quem lê
+ * `intercorrencias` continua lendo exatamente o que lia.
  */
 async function conferirDia(
   colaboradorId: number,
@@ -2242,6 +2249,10 @@ async function conferirDia(
 ): Promise<{
   intercorrencias: IntercorrenciaDetectada[];
   sequencia: string;
+  /** As batidas VÁLIDAS já amarradas a este dia (minuto ≥ 1440 veio da virada). */
+  batidas: MarcacaoMotor[];
+  jornada: repo.JornadaVersao;
+  previsto_minutos: number;
 } | null> {
   const escala = await repo.escalaVigenteNaData(colaboradorId, data);
   if (!escala) return null;
@@ -2287,6 +2298,181 @@ async function conferirDia(
   return {
     intercorrencias: resultado.intercorrencias,
     sequencia: sequencia || "nenhuma marcação válida no dia",
+    batidas: doDia,
+    jornada: escala.jornada,
+    previsto_minutos: resultado.dias[0]?.previsto_minutos ?? 0,
+  };
+}
+
+// ------------------------------------- o dia, do jeito que a correção precisa
+
+/** Uma batida que o dia REALMENTE tem, já amarrada ao dia de apuração. */
+export interface BatidaDoDia {
+  id: number;
+  /** Minutos desde a meia-noite do DIA DE APURAÇÃO; ≥1440 veio da virada. */
+  minuto: number;
+  /** Relógio HH:MM (já normalizado quando a batida veio da madrugada). */
+  hora: string;
+  /** Dia CIVIL da batida — é a data que o ajuste tem de gravar. */
+  data_civil: string;
+  /** A batida caiu no dia civil seguinte: turno que atravessa a meia-noite. */
+  dia_seguinte: boolean;
+}
+
+/**
+ * Um dos quatro registros do dia, com o que ele TEM e o que a jornada ESPERA.
+ *
+ * `batidas` vazio é a resposta honesta para "essa batida não existe" — e é ela
+ * que faz o formulário de correção parar de exigir hora que não há. `esperado`
+ * responde a outra pergunta, a que impede a lista fixa de quatro campos:
+ * jornada de 6h não tem intervalo obrigatório (art. 71 caput) e dia de repouso
+ * não espera batida nenhuma.
+ */
+export interface RegistroDoDia {
+  tipo: TipoMarcacao;
+  batidas: BatidaDoDia[];
+  esperado: boolean;
+}
+
+export interface DiaParaAjuste {
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data: string;
+  /** Dia civil seguinte, pré-calculado: o turno da noite grava nele. */
+  data_seguinte: string;
+  jornada: string | null;
+  /** Sem escala vigente não há jornada — a tela avisa em vez de adivinhar. */
+  tem_escala: boolean;
+  previsto_minutos: number;
+  /**
+   * O turno DESTE dia pode fechar depois da meia-noite? Quando pode, a tela
+   * pergunta em que dia civil a batida nova cai; quando não pode, não pergunta.
+   */
+  vira_a_noite: boolean;
+  registros: RegistroDoDia[];
+  /** O que o motor ainda enxerga no dia — a mesma leitura de `conferirDia`. */
+  intercorrencias: IntercorrenciaDetectada[];
+  sequencia: string;
+}
+
+/**
+ * A jornada DAQUELE dia espera este registro?
+ *
+ * Dia sem previsto (repouso, feriado, dia fora do ciclo da escala) não espera
+ * nada — o que for batido ali é extra, não é o cumprimento de uma jornada.
+ * Entrada e saída são o par mínimo de qualquer dia trabalhado. O intervalo só
+ * é obrigatório acima do limite da jornada (CLT art. 71 caput), que é
+ * parâmetro dela e não número deste código.
+ */
+function esperaRegistro(
+  tipo: TipoMarcacao,
+  previstoMinutos: number,
+  jornada: JornadaMotor
+): boolean {
+  if (previstoMinutos <= 0) return false;
+  if (tipo === "entrada" || tipo === "saida") return true;
+  return previstoMinutos > jornada.intervalo_obrigatorio_acima_minutos;
+}
+
+/**
+ * Leitura de UM dia de UMA pessoa, do tamanho exato do formulário de correção:
+ * quais das quatro batidas o dia tem (com id e hora), quais faltam, e quais a
+ * jornada daquele dia sequer espera.
+ *
+ * POR QUE NÃO O ESPELHO: o espelho devolve as marcações do MÊS pelo dia civil
+ * em que foram batidas. Quem entra 19h e sai 07h tem a saída no dia civil
+ * SEGUINTE, e quem amarra as duas ao mesmo dia de apuração é
+ * `agruparMarcacoesPorDia`, com a janela de arraste da jornada. Filtrar o
+ * espelho por data no cliente perderia justamente a batida do plantão noturno —
+ * e o espelho também não sabe dizer que uma jornada de 6h não tem intervalo.
+ * Esta função usa o MESMO agrupamento da apuração, então o que a tela oferece é
+ * o que o motor enxerga.
+ *
+ * Ler ponto de terceiro é leitura sensível como qualquer outra do módulo, e
+ * grava a chave que DE FATO autorizou.
+ */
+export async function diaParaAjuste(
+  sessao: PayloadSessao,
+  colaboradorId: number,
+  data: string
+): Promise<DiaParaAjuste> {
+  const chave = (await ehVinculoProprio(sessao, colaboradorId))
+    ? null
+    : await exigirAlcanceSobre(sessao, colaboradorId);
+  const colaborador = await repo.buscarColaboradorPonto(colaboradorId);
+  if (!colaborador) throw new ErroHttp(404, "Colaborador não encontrado");
+  if (chave) {
+    await registrarLeituraDePonto(
+      sessao,
+      chave,
+      "ponto.dia",
+      `${colaboradorId}:${data}`
+    );
+  }
+
+  const conferencia = await conferirDia(colaboradorId, data);
+  // Sem escala vigente não há jornada para amarrar a virada nem para dizer o
+  // que o dia espera. O que ainda dá para afirmar é o que está gravado no dia
+  // civil — e a tela diz que é só isso (`tem_escala: false`).
+  const brutas = conferencia
+    ? conferencia.batidas.map((marcacao) => ({
+        id: marcacao.id,
+        tipo: marcacao.tipo,
+        minuto: marcacao.minuto,
+      }))
+    : repo
+        .marcacoesValidas(
+          await repo.listarMarcacoesDoPeriodo(colaboradorId, data, data)
+        )
+        .map((marcacao) => ({
+          id: marcacao.id,
+          tipo: marcacao.tipo,
+          minuto: marcacao.minuto_local,
+        }));
+
+  const dataSeguinte = somarDias(data, 1);
+  const registros: RegistroDoDia[] = TIPOS_MARCACAO.map((tipo) => ({
+    tipo,
+    batidas: brutas
+      .filter((bruta) => bruta.tipo === tipo)
+      .map((bruta) => ({
+        id: bruta.id,
+        minuto: bruta.minuto,
+        hora: formatarRelogio(bruta.minuto),
+        data_civil: bruta.minuto >= MINUTOS_DO_DIA ? dataSeguinte : data,
+        dia_seguinte: bruta.minuto >= MINUTOS_DO_DIA,
+      })),
+    esperado: conferencia
+      ? esperaRegistro(tipo, conferencia.previsto_minutos, conferencia.jornada)
+      : false,
+  }));
+
+  // "Pode fechar depois da meia-noite" é da JORNADA, não do relógio: fim
+  // contratual acima de 1440 (turno que já nasce virando), ou jornada sem
+  // horário fixo com janela de arraste ligada (o 12x36 é exatamente isso).
+  // Um dia que JÁ tem batida arrastada responde sozinho.
+  const jornada = conferencia?.jornada ?? null;
+  const viraANoite =
+    brutas.some((bruta) => bruta.minuto >= MINUTOS_DO_DIA) ||
+    (jornada !== null &&
+      jornada.janela_arraste_minutos > 0 &&
+      (jornada.horario_saida_minuto === null ||
+        jornada.horario_saida_minuto > MINUTOS_DO_DIA));
+
+  return {
+    colaborador_id: colaborador.id,
+    colaborador_nome: colaborador.nome_completo,
+    matricula: colaborador.matricula,
+    data,
+    data_seguinte: dataSeguinte,
+    jornada: jornada ? `${jornada.codigo} — ${jornada.nome}` : null,
+    tem_escala: conferencia !== null,
+    previsto_minutos: conferencia?.previsto_minutos ?? 0,
+    vira_a_noite: viraANoite,
+    registros,
+    intercorrencias: conferencia?.intercorrencias ?? [],
+    sequencia: conferencia?.sequencia ?? "sem escala vigente para conferir",
   };
 }
 

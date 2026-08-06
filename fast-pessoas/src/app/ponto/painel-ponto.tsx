@@ -8,6 +8,7 @@ import {
   formatarMinutos,
   ROTULOS_STATUS_INTERCORRENCIA,
   ROTULOS_TIPO_INTERCORRENCIA,
+  ROTULOS_TIPO_MARCACAO,
   StatusIntercorrencia,
 } from "@/dominios/ponto/esquemas";
 import estilos from "./ponto.module.css";
@@ -53,6 +54,42 @@ interface Intercorrencia {
   status: StatusIntercorrencia;
   detalhe: string;
   observacao: string | null;
+}
+
+type TipoMarcacao = keyof typeof ROTULOS_TIPO_MARCACAO;
+
+/** Corpo de GET /api/ponto/dia/[colaboradorId]?data=AAAA-MM-DD. */
+interface BatidaDoDia {
+  id: number;
+  minuto: number;
+  hora: string;
+  /** Dia CIVIL da batida — é a data que o ajuste tem de gravar. */
+  data_civil: string;
+  dia_seguinte: boolean;
+}
+
+interface RegistroDoDia {
+  tipo: TipoMarcacao;
+  /** Vazio = essa batida NÃO EXISTE no dia. Não é zero, é ausência. */
+  batidas: BatidaDoDia[];
+  /** A jornada daquele dia prevê este registro? (6h não tem intervalo) */
+  esperado: boolean;
+}
+
+interface DiaParaAjuste {
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data: string;
+  data_seguinte: string;
+  jornada: string | null;
+  tem_escala: boolean;
+  previsto_minutos: number;
+  /** Turno que pode fechar depois da meia-noite: a tela pergunta o dia civil. */
+  vira_a_noite: boolean;
+  registros: RegistroDoDia[];
+  intercorrencias: { data: string; tipo: string; detalhe: string }[];
+  sequencia: string;
 }
 
 interface Visao {
@@ -192,7 +229,22 @@ export function PainelPonto() {
 
   const [tratando, setTratando] = useState<number | null>(null);
   const [erroFila, setErroFila] = useState<string | null>(null);
+  const [sucessoFila, setSucessoFila] = useState<string | null>(null);
   const [observacoes, setObservacoes] = useState<Record<number, string>>({});
+
+  // ------------------------------------------------ correção pela própria fila
+  const [corrigindo, setCorrigindo] = useState<Intercorrencia | null>(null);
+  const [dia, setDia] = useState<DiaParaAjuste | null>(null);
+  const [carregandoDia, setCarregandoDia] = useState(false);
+  const [erroCorrecao, setErroCorrecao] = useState<string | null>(null);
+  const [salvandoCorrecao, setSalvandoCorrecao] = useState(false);
+  const [passoCorrecao, setPassoCorrecao] = useState<string | null>(null);
+  /** "id:<n>" = a batida que existe; "falta:<tipo>" = a que não existe. */
+  const [escolha, setEscolha] = useState("");
+  const [horaNova, setHoraNova] = useState("");
+  const [noDiaSeguinte, setNoDiaSeguinte] = useState(false);
+  const [anular, setAnular] = useState(false);
+  const [justificativa, setJustificativa] = useState("");
 
   /** A página não deu conta da fila inteira — e isso tem que aparecer. */
   const filaCortada =
@@ -347,9 +399,266 @@ export function PainelPonto() {
     }
   }
 
+  // ---------------------------------------------------------------- correção
+  //
+  // Corrigir é gravar marcação NOVA (origem ajuste manual) apontando para a que
+  // ela troca — nunca editar a batida anterior, que o banco recusa por trigger.
+  // O formulário se preenche sozinho porque as opções saem do DIA DAQUELA
+  // PESSOA (rota /api/ponto/dia), e não de uma lista fixa de quatro campos.
+
+  function opcaoDaBatida(id: number): string {
+    return `id:${id}`;
+  }
+
+  function opcaoQueFalta(tipo: TipoMarcacao): string {
+    return `falta:${tipo}`;
+  }
+
+  /** O registro e a batida por trás da opção escolhida no seletor. */
+  function alvoDaEscolha(
+    diaAtual: DiaParaAjuste | null,
+    valor: string
+  ): { registro: RegistroDoDia; batida: BatidaDoDia | null } | null {
+    if (!diaAtual || valor === "") return null;
+    if (valor.startsWith("falta:")) {
+      const tipo = valor.slice("falta:".length);
+      const registro = diaAtual.registros.find((item) => item.tipo === tipo);
+      return registro ? { registro, batida: null } : null;
+    }
+    const id = Number(valor.slice("id:".length));
+    for (const registro of diaAtual.registros) {
+      const batida = registro.batidas.find((item) => item.id === id);
+      if (batida) return { registro, batida };
+    }
+    return null;
+  }
+
+  /**
+   * A opção que o tipo da intercorrência já indica — o resto do formulário é
+   * consequência dela. Batida a mais quer a segunda do tipo repetido (e sai
+   * anulada); batida que falta quer o registro que o dia espera e não tem.
+   */
+  function sugerirEscolha(
+    diaAtual: DiaParaAjuste,
+    tipo: Intercorrencia["tipo"]
+  ): { valor: string; anular: boolean } {
+    if (tipo === "marcacao_duplicada") {
+      const repetido = diaAtual.registros.find(
+        (registro) => registro.batidas.length > 1
+      );
+      if (repetido) {
+        const ultima = repetido.batidas[repetido.batidas.length - 1];
+        return { valor: opcaoDaBatida(ultima.id), anular: true };
+      }
+    }
+    const faltando = diaAtual.registros.find(
+      (registro) => registro.esperado && registro.batidas.length === 0
+    );
+    if (faltando) return { valor: opcaoQueFalta(faltando.tipo), anular: false };
+    const primeiraExistente = diaAtual.registros.find(
+      (registro) => registro.batidas.length > 0
+    );
+    if (primeiraExistente) {
+      return {
+        valor: opcaoDaBatida(primeiraExistente.batidas[0].id),
+        anular: false,
+      };
+    }
+    return { valor: opcaoQueFalta(diaAtual.registros[0].tipo), anular: false };
+  }
+
+  function aplicarEscolha(diaAtual: DiaParaAjuste, valor: string): void {
+    setEscolha(valor);
+    const alvo = alvoDaEscolha(diaAtual, valor);
+    // A "hora que está" vira o ponto de partida da hora nova: quem corrige
+    // 16:22 costuma escrever 16:2… e não a jornada inteira do zero.
+    setHoraNova(alvo?.batida ? alvo.batida.hora : "");
+    setNoDiaSeguinte(alvo?.batida ? alvo.batida.dia_seguinte : false);
+    if (!alvo?.batida) setAnular(false);
+  }
+
+  async function carregarDia(
+    item: Intercorrencia,
+    sugerir: boolean
+  ): Promise<void> {
+    setCarregandoDia(true);
+    try {
+      const resposta = await fetch(
+        `/api/ponto/dia/${item.colaborador_id}?data=${item.data.slice(0, 10)}`,
+        { cache: "no-store" }
+      );
+      if (!resposta.ok) {
+        setErroCorrecao(await lerErro(resposta));
+        setDia(null);
+        return;
+      }
+      const dados = (await resposta.json()) as DiaParaAjuste;
+      setDia(dados);
+      // Recarregar depois de um ajuste troca os ids do dia (a batida trocada
+      // fica superada e sai da lista). Escolha que não existe mais volta para a
+      // sugestão, senão o seletor mostraria uma opção e o envio usaria outra.
+      if (sugerir || alvoDaEscolha(dados, escolha) === null) {
+        const sugestao = sugerirEscolha(dados, item.tipo);
+        aplicarEscolha(dados, sugestao.valor);
+        setAnular(sugestao.anular);
+      }
+    } catch {
+      setErroCorrecao("Falha de conexão. Recarregue a página.");
+      setDia(null);
+    } finally {
+      setCarregandoDia(false);
+    }
+  }
+
+  function abrirCorrecao(item: Intercorrencia) {
+    setCorrigindo(item);
+    setDia(null);
+    setErroCorrecao(null);
+    setEscolha("");
+    setHoraNova("");
+    setNoDiaSeguinte(false);
+    setAnular(false);
+    setJustificativa("");
+    void carregarDia(item, true);
+  }
+
+  function fecharCorrecao() {
+    setCorrigindo(null);
+    setDia(null);
+    setErroCorrecao(null);
+    setPassoCorrecao(null);
+  }
+
+  /** Reapura a competência de UMA pessoa. Devolve o erro, ou null se deu certo. */
+  async function reapurar(
+    ano: number,
+    mes: number,
+    colaboradorId: number
+  ): Promise<string | null> {
+    const resposta = await fetch("/api/ponto/apurar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ano, mes, colaborador_id: colaboradorId }),
+    });
+    return resposta.ok ? null : await lerErro(resposta);
+  }
+
+  /**
+   * Os três atos de uma correção, nesta ordem: gravar a marcação, FECHAR a
+   * intercorrência como corrigida e só então reapurar a competência.
+   *
+   * POR QUE FECHAR ANTES DE REAPURAR. A ordem intuitiva é reapurar primeiro,
+   * mas a reapuração fecha sozinha toda linha aberta cujo fato ela não acha
+   * mais — como `resolvida_por_reapuracao`, o carimbo da máquina. Medido em
+   * 06/08/2026 contra a intercorrência 4 (Márcio Santana Macedo, 22/07): com a
+   * reapuração na frente, o PATCH seguinte voltava 409 "a linha saiu da fila
+   * sozinha" e o desfecho `corrigida` NUNCA acontecia — quem corrigiu ficava
+   * fora da própria correção. Fechando antes, a linha guarda quem fechou e a
+   * conferência do motor como prova, e a reapuração que vem depois não a
+   * reabre (só reabre o que o motor voltar a acusar).
+   *
+   * A trava continua inteira: `tratarIntercorrencia` reconfere o dia com o
+   * MESMO motor e RECUSA se o fato ainda estiver de pé. Quando recusa, quem
+   * explica o que fazer é a mensagem dele, que aparece inteira aqui.
+   */
+  async function corrigir() {
+    if (!corrigindo || !dia) return;
+    const alvo = alvoDaEscolha(dia, escolha);
+    if (!alvo) return;
+    const anulando = anular && alvo.batida !== null;
+    const dataDaBatida = anulando
+      ? alvo.batida!.data_civil
+      : noDiaSeguinte
+        ? dia.data_seguinte
+        : dia.data;
+    const hora = anulando ? alvo.batida!.hora : horaNova;
+
+    setSalvandoCorrecao(true);
+    setErroCorrecao(null);
+    setSucessoFila(null);
+    const ano = Number(corrigindo.data.slice(0, 4));
+    const mes = Number(corrigindo.data.slice(5, 7));
+    try {
+      setPassoCorrecao("1 de 3 — gravando a marcação de ajuste…");
+      const gravacao = await fetch("/api/ponto/marcacoes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          colaborador_id: corrigindo.colaborador_id,
+          // O fuso vai EXPLÍCITO: o servidor guarda em UTC e o dia de apuração
+          // é o dia civil em America/Sao_Paulo.
+          momento: `${dataDaBatida}T${hora}:00-03:00`,
+          tipo: alvo.registro.tipo,
+          justificativa,
+          substitui_marcacao_id: alvo.batida?.id ?? null,
+          anular: anulando,
+        }),
+      });
+      if (!gravacao.ok) {
+        setErroCorrecao(await lerErro(gravacao));
+        return;
+      }
+
+      setPassoCorrecao("2 de 3 — conferindo o dia e fechando a linha…");
+      const fechamento = await fetch(
+        `/api/ponto/intercorrencias/${corrigindo.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "corrigida" }),
+        }
+      );
+      const mensagemFechamento = fechamento.ok
+        ? null
+        : await lerErro(fechamento);
+      // 409 é sempre "essa linha já não está aberta": outra reapuração a tirou
+      // da fila antes, ou alguém a tratou. Saiu da fila do mesmo jeito — não é
+      // falha, é a mensagem do servidor contando o que aconteceu.
+      const saiuDaFila = fechamento.ok || fechamento.status === 409;
+
+      // A marcação já mudou o dia: reapurar não é opcional nem depende do
+      // desfecho acima. Se o fato continuar de pé, a reapuração é justamente
+      // quem atualiza o detalhe da linha que ficou aberta.
+      setPassoCorrecao("3 de 3 — reapurando a competência da pessoa…");
+      const erroApuracao = await reapurar(ano, mes, corrigindo.colaborador_id);
+
+      if (saiuDaFila) {
+        const desfecho =
+          mensagemFechamento ??
+          `a intercorrência de ${formatarData(corrigindo.data)} saiu da fila como corrigida`;
+        setSucessoFila(
+          erroApuracao
+            ? `Marcação gravada e ${desfecho} — mas a reapuração de ` +
+                `${formatarCompetencia(ano, mes)} falhou: ${erroApuracao}. ` +
+                `Os números só mudam depois de apurar a competência.`
+            : `Marcação gravada, ${desfecho}, e ${formatarCompetencia(ano, mes)} ` +
+                `reapurada para esta pessoa.`
+        );
+        fecharCorrecao();
+        setVersao((v) => v + 1);
+        return;
+      }
+
+      // 422: o fato continua de pé. A mensagem do servidor já diz o que fazer,
+      // e o dia recarregado mostra as batidas depois do que acabou de entrar.
+      setErroCorrecao(
+        mensagemFechamento ?? "Não foi possível fechar a intercorrência."
+      );
+      setJustificativa("");
+      await carregarDia(corrigindo, false);
+      setVersao((v) => v + 1);
+    } catch {
+      setErroCorrecao("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvandoCorrecao(false);
+      setPassoCorrecao(null);
+    }
+  }
+
   async function tratar(id: number, status: "justificada" | "ignorada") {
     setTratando(id);
     setErroFila(null);
+    setSucessoFila(null);
     try {
       const resposta = await fetch(`/api/ponto/intercorrencias/${id}`, {
         method: "PATCH",
@@ -380,6 +689,24 @@ export function PainelPonto() {
     }),
     { trabalhado: 0, he: 0, faltas: 0, saldo: 0 }
   );
+
+  // Estado derivado do diálogo de correção. Três dos quatro campos saem daqui
+  // sem ninguém digitar: o dia vem da intercorrência, a "hora que está" vem da
+  // marcação existente e o tipo vem da opção escolhida.
+  const alvoCorrecao = alvoDaEscolha(dia, escolha);
+  const anulando = anular && alvoCorrecao?.batida != null;
+  const dataDaBatida = anulando
+    ? alvoCorrecao!.batida!.data_civil
+    : noDiaSeguinte && dia
+      ? dia.data_seguinte
+      : (dia?.data ?? "");
+  const horaDaBatida = anulando ? alvoCorrecao!.batida!.hora : horaNova;
+  const podeCorrigir =
+    dia !== null &&
+    alvoCorrecao !== null &&
+    justificativa.trim().length >= 10 &&
+    (anulando || /^\d{2}:\d{2}$/.test(horaNova)) &&
+    !salvandoCorrecao;
 
   return (
     <div className={estilos.pagina}>
@@ -740,12 +1067,17 @@ export function PainelPonto() {
             </div>
           )}
           <p className={estilos.notaRodape}>
-            Corrigir de verdade é gravar marcação nova (origem{" "}
-            <em>ajuste manual</em>) no espelho da pessoa e reapurar — nunca
-            editar a batida anterior. Justificar ou ignorar exige observação: é
-            o texto que a fiscalização lê.
+            <strong>Corrigir</strong> resolve daqui mesmo: o formulário grava
+            marcação nova (origem <em>ajuste manual</em>) apontando para a que
+            ela troca, reapura a competência e só então fecha a linha — nunca
+            editar a batida anterior, que é append-only. As opções saem das
+            batidas que aquele dia daquela pessoa tem de verdade. O espelho
+            continua aberto para quem quiser ver a trilha inteira do mês.{" "}
+            <strong>Justificar</strong> ou <strong>ignorar</strong> assume o
+            fato de pé e exige observação: é o texto que a fiscalização lê.
           </p>
           {erroFila && <p className={estilos.erro}>{erroFila}</p>}
+          {sucessoFila && <p className={estilos.sucesso}>{sucessoFila}</p>}
           <div className={estilos.tabelaEnvolucro}>
             <table className={estilos.tabela}>
               <thead>
@@ -791,6 +1123,18 @@ export function PainelPonto() {
                       />
                     </td>
                     <td>
+                      {visao?.pode.ajustar && (
+                        <>
+                          <button
+                            className={estilos.botaoLinha}
+                            type="button"
+                            disabled={tratando === item.id}
+                            onClick={() => abrirCorrecao(item)}
+                          >
+                            Corrigir
+                          </button>{" "}
+                        </>
+                      )}
                       <button
                         className={estilos.botaoLinha}
                         type="button"
@@ -958,6 +1302,246 @@ export function PainelPonto() {
           saldo do banco é a soma dos movimentos — nunca um campo editável.
         </p>
       </main>
+
+      {/* ------------------------------------------------ corrigir (diálogo) */}
+      {corrigindo && (
+        <div className={estilos.fundoDialogo}>
+          <div className={estilos.dialogo} role="dialog" aria-modal="true">
+            <h3>Corrigir a batida</h3>
+            <p className={estilos.subDialogo}>
+              {corrigindo.colaborador_nome} · matrícula {corrigindo.matricula} ·{" "}
+              {ROTULOS_TIPO_INTERCORRENCIA[corrigindo.tipo]} em{" "}
+              {formatarData(corrigindo.data)}
+              <br />
+              {corrigindo.detalhe}
+            </p>
+
+            {carregandoDia && !dia && (
+              <p className={estilos.notaRodape}>Lendo as batidas do dia…</p>
+            )}
+
+            {dia && !dia.tem_escala && (
+              <div className={estilos.aviso}>
+                Sem escala vigente em {formatarData(dia.data)}: a lista abaixo é
+                o que está gravado no dia civil, sem a jornada para amarrar o
+                turno que vira a noite nem para dizer o que o dia esperava. O
+                fechamento como corrigida vai recusar — trate como justificada,
+                explicando o caso.
+              </div>
+            )}
+
+            {dia && (
+              <>
+                <p className={estilos.notaRodape} style={{ marginTop: 0 }}>
+                  Jornada: {dia.jornada ?? "sem escala vigente"} · previsto{" "}
+                  {formatarMinutos(dia.previsto_minutos)} · o dia hoje:{" "}
+                  {dia.sequencia}
+                </p>
+
+                <label className={estilos.rotuloCampo} htmlFor="correcao-dia">
+                  Dia do ajuste
+                </label>
+                <div className={estilos.leituraFixa} id="correcao-dia">
+                  {formatarData(dia.data)} — vem da intercorrência, não se
+                  digita
+                </div>
+
+                <label
+                  className={estilos.rotuloCampo}
+                  htmlFor="correcao-registro"
+                >
+                  Qual registro
+                </label>
+                <select
+                  className={estilos.campoLargo}
+                  id="correcao-registro"
+                  value={escolha}
+                  onChange={(evento) => aplicarEscolha(dia, evento.target.value)}
+                >
+                  {/*
+                    A lista NÃO é fixa: sai das batidas que ESTE dia desta
+                    pessoa tem. Jornada de 6h não tem intervalo, e o turno que
+                    atravessa a meia-noite traz a batida da madrugada amarrada
+                    aqui — quem amarra é o mesmo motor que apura.
+                  */}
+                  {dia.registros.map((registro) =>
+                    registro.batidas.length > 0
+                      ? registro.batidas.map((batida) => (
+                          <option
+                            key={batida.id}
+                            value={opcaoDaBatida(batida.id)}
+                          >
+                            {ROTULOS_TIPO_MARCACAO[registro.tipo]} — existe às{" "}
+                            {batida.hora}
+                            {batida.dia_seguinte ? " do dia seguinte" : ""}
+                          </option>
+                        ))
+                      : [
+                          <option
+                            key={registro.tipo}
+                            value={opcaoQueFalta(registro.tipo)}
+                          >
+                            {ROTULOS_TIPO_MARCACAO[registro.tipo]} — não existe
+                            {registro.esperado
+                              ? " (o dia esperava)"
+                              : " (a jornada deste dia não prevê)"}
+                          </option>,
+                        ]
+                  )}
+                </select>
+
+                <div className={estilos.paresDialogo}>
+                  <div>
+                    <label
+                      className={estilos.rotuloCampo}
+                      htmlFor="correcao-atual"
+                    >
+                      Hora que está
+                    </label>
+                    {/*
+                      Batida que não existe não tem hora — e o formulário diz
+                      isso em vez de exigir número. É este campo vazio que faz o
+                      envio ir SEM substitui_marcacao_id: inclusão, não troca.
+                    */}
+                    <div
+                      className={`${estilos.leituraFixa} ${
+                        alvoCorrecao?.batida ? "" : estilos.leituraVazia
+                      }`}
+                      id="correcao-atual"
+                    >
+                      {alvoCorrecao?.batida
+                        ? `${alvoCorrecao.batida.hora}${
+                            alvoCorrecao.batida.dia_seguinte
+                              ? " (dia seguinte)"
+                              : ""
+                          }`
+                        : "não existe"}
+                    </div>
+                  </div>
+                  <span className={estilos.setaPar} aria-hidden="true">
+                    →
+                  </span>
+                  <div>
+                    <label
+                      className={estilos.rotuloCampo}
+                      htmlFor="correcao-nova"
+                    >
+                      Hora que vai virar
+                    </label>
+                    {anulando ? (
+                      <div
+                        className={`${estilos.leituraFixa} ${estilos.leituraVazia}`}
+                        id="correcao-nova"
+                      >
+                        nenhuma — a batida sai da apuração
+                      </div>
+                    ) : (
+                      <input
+                        className={estilos.campoLargo}
+                        id="correcao-nova"
+                        type="time"
+                        value={horaNova}
+                        onChange={(evento) => setHoraNova(evento.target.value)}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {alvoCorrecao?.batida && (
+                  <label className={estilos.caixaMarcar} htmlFor="correcao-anular">
+                    <input
+                      id="correcao-anular"
+                      type="checkbox"
+                      checked={anular}
+                      onChange={(evento) => setAnular(evento.target.checked)}
+                    />
+                    Batida a mais: anular esta, sem virar hora nenhuma
+                  </label>
+                )}
+
+                {dia.vira_a_noite && !anulando && (
+                  <>
+                    <label
+                      className={estilos.rotuloCampo}
+                      htmlFor="correcao-dia-civil"
+                    >
+                      Em que dia essa hora cai
+                    </label>
+                    <select
+                      className={estilos.campoLargo}
+                      id="correcao-dia-civil"
+                      value={noDiaSeguinte ? "seguinte" : "mesmo"}
+                      onChange={(evento) =>
+                        setNoDiaSeguinte(evento.target.value === "seguinte")
+                      }
+                    >
+                      <option value="mesmo">
+                        {formatarData(dia.data)} — o próprio dia
+                      </option>
+                      <option value="seguinte">
+                        {formatarData(dia.data_seguinte)} — madrugada seguinte
+                        (turno que vira a noite)
+                      </option>
+                    </select>
+                  </>
+                )}
+
+                <label
+                  className={estilos.rotuloCampo}
+                  htmlFor="correcao-justificativa"
+                >
+                  Justificativa (mínimo 10 caracteres — a fiscalização lê)
+                </label>
+                <textarea
+                  className={estilos.campoLargo}
+                  id="correcao-justificativa"
+                  rows={3}
+                  value={justificativa}
+                  placeholder="por que a batida ficou assim e o que comprova a correção"
+                  onChange={(evento) => setJustificativa(evento.target.value)}
+                />
+
+                <p className={estilos.notaRodape}>
+                  {anulando
+                    ? `Vai gravar uma ANULAÇÃO da batida de ${horaDaBatida} em ${formatarData(dataDaBatida)} (${ROTULOS_TIPO_MARCACAO[alvoCorrecao!.registro.tipo]}) — a original continua no espelho, riscada.`
+                    : horaDaBatida
+                      ? `Vai gravar ${ROTULOS_TIPO_MARCACAO[alvoCorrecao?.registro.tipo ?? "entrada"]} às ${horaDaBatida} de ${formatarData(dataDaBatida)}` +
+                        (alvoCorrecao?.batida
+                          ? `, substituindo a de ${alvoCorrecao.batida.hora}.`
+                          : ", como batida nova (não substitui nenhuma).")
+                      : "Informe a hora nova."}
+                </p>
+              </>
+            )}
+
+            {erroCorrecao && <p className={estilos.erro}>{erroCorrecao}</p>}
+            {passoCorrecao && (
+              <p className={estilos.passoCorrecao}>{passoCorrecao}</p>
+            )}
+
+            <div className={estilos.acoesDialogo}>
+              <button
+                className={estilos.botaoSecundario}
+                type="button"
+                disabled={salvandoCorrecao}
+                onClick={fecharCorrecao}
+              >
+                Fechar
+              </button>
+              <button
+                className={estilos.botao}
+                type="button"
+                disabled={!podeCorrigir}
+                onClick={() => void corrigir()}
+              >
+                {salvandoCorrecao
+                  ? "Corrigindo…"
+                  : "Gravar, reapurar e fechar como corrigida"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
