@@ -11,6 +11,7 @@ import {
   Parentesco,
   StatusAdesao,
   CHAVE_TIPO_DEMANDA_BENEFICIO,
+  CHAVE_TIPO_DEMANDA_REVISAO,
 } from "./esquemas";
 
 const HOJE_SP = "(now() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -563,6 +564,137 @@ export async function encerrarAdesaoPorFimDoVinculo(
   );
 }
 
+// ------------------------------------------------------------------ revisão de valor (H3/H4)
+
+/**
+ * Fecha a adesão porque o VALOR dela foi revisto — não porque ela acabou.
+ *
+ * Distinta de `cancelarAdesaoNoBanco` (alguém pediu para sair) e de
+ * `encerrarAdesaoPorFimDoVinculo` (o contrato acabou): aqui o benefício
+ * CONTINUA, com outro valor. Por isso o status permanece `ativa` e só o `fim`
+ * é escrito — o CHECK da 0009 só exige `fim` para o status `cancelada`, e o
+ * índice `adesao_uma_vigente` é parcial em `WHERE fim IS NULL`, então escrever
+ * o `fim` é o que libera o lugar para a adesão nova do mesmo par.
+ *
+ * `GREATEST` protege o CHECK `fim >= inicio` na revisão feita no mesmo dia em
+ * que a adesão começou — o mesmo cuidado da transferência entre empresas.
+ */
+export async function encerrarAdesaoPorRevisao(
+  cliente: PoolClient,
+  id: number,
+  inicioDoValorNovo: string
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.adesao
+        SET fim = GREATEST(inicio, $2::date - 1), atualizado_em = now()
+      WHERE id = $1 AND fim IS NULL`,
+    [id, inicioDoValorNovo]
+  );
+}
+
+export async function inserirPedidoRevisao(
+  cliente: PoolClient,
+  dados: {
+    adesao_id: number;
+    demanda_id: number;
+    valor_pedido: number;
+    motivo: string;
+  }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.pedido_revisao_beneficio
+       (adesao_id, demanda_id, valor_pedido, motivo)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id`,
+    [dados.adesao_id, dados.demanda_id, dados.valor_pedido, dados.motivo]
+  );
+  return Number(rows[0].id);
+}
+
+export interface PedidoRevisao {
+  id: number;
+  adesao_id: number;
+  demanda_id: number;
+  valor_pedido: number;
+  motivo: string;
+  colaborador_id: number;
+  beneficio_id: number;
+  beneficio_nome: string;
+  valor_atual: number;
+  desconto_atual: number;
+  adesao_encerrada: boolean;
+}
+
+/** O pedido de uma demanda, com a adesão que ele quer mudar. */
+export async function buscarPedidoRevisaoPorDemanda(
+  cliente: PoolClient,
+  demandaId: number
+): Promise<PedidoRevisao | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    adesao_id: string;
+    demanda_id: string;
+    valor_pedido: string;
+    motivo: string;
+    colaborador_id: string;
+    beneficio_id: string;
+    beneficio_nome: string;
+    valor_atual: string;
+    desconto_atual: string;
+    adesao_encerrada: boolean;
+  }>(
+    `SELECT p.id, p.adesao_id, p.demanda_id, p.valor_pedido, p.motivo,
+            a.colaborador_id, a.beneficio_id, b.nome AS beneficio_nome,
+            a.valor AS valor_atual, a.desconto AS desconto_atual,
+            a.fim IS NOT NULL AS adesao_encerrada
+       FROM rh.pedido_revisao_beneficio p
+       JOIN rh.adesao a ON a.id = p.adesao_id
+       JOIN rh.beneficio b ON b.id = a.beneficio_id
+      WHERE p.demanda_id = $1`,
+    [demandaId]
+  );
+  if (rows.length === 0) return null;
+  const linha = rows[0];
+  return {
+    id: Number(linha.id),
+    adesao_id: Number(linha.adesao_id),
+    demanda_id: Number(linha.demanda_id),
+    valor_pedido: Number(linha.valor_pedido),
+    motivo: linha.motivo,
+    colaborador_id: Number(linha.colaborador_id),
+    beneficio_id: Number(linha.beneficio_id),
+    beneficio_nome: linha.beneficio_nome,
+    valor_atual: Number(linha.valor_atual),
+    desconto_atual: Number(linha.desconto_atual),
+    adesao_encerrada: linha.adesao_encerrada,
+  };
+}
+
+/**
+ * A competência de folha que cobre a data JÁ FOI FECHADA?
+ *
+ * Guarda de dinheiro: revisão de valor aprovada hoje não pode retroagir para
+ * dentro de um mês cuja folha já fechou — o holerite daquele mês foi emitido, e
+ * mudar o valor por baixo faria a folha de uma competência encerrada deixar de
+ * bater com o que foi pago. Quem quiser corrigir mês fechado tem o caminho
+ * próprio da folha, com reabertura registrada.
+ */
+export async function competenciaFechadaNaData(
+  cliente: PoolClient,
+  data: string
+): Promise<string | null> {
+  const { rows } = await cliente.query<{ competencia: string }>(
+    `SELECT lpad(mes::text, 2, '0') || '/' || ano::text AS competencia
+       FROM rh_folha.competencia_folha
+      WHERE estado = 'fechada'
+        AND make_date(ano, mes, 1) <= $1::date
+        AND ($1::date) < (make_date(ano, mes, 1) + INTERVAL '1 month')
+      LIMIT 1`,
+    [data]
+  );
+  return rows.length > 0 ? rows[0].competencia : null;
+}
+
 export async function atualizarStatusAdesao(
   cliente: PoolClient,
   id: number,
@@ -610,7 +742,8 @@ const SELECT_SOLICITACAO = `
     FROM rh.demanda d
     JOIN rh.tipo_demanda_versao t ON t.id = d.tipo_demanda_versao_id
     JOIN sistema.usuario u ON u.id = d.solicitante_usuario_id
-   WHERE t.chave = '${CHAVE_TIPO_DEMANDA_BENEFICIO}'`;
+   WHERE t.chave IN ('${CHAVE_TIPO_DEMANDA_BENEFICIO}',
+                     '${CHAVE_TIPO_DEMANDA_REVISAO}')`;
 
 function paraSolicitacao(linha: LinhaSolicitacao): SolicitacaoBeneficio {
   return {
@@ -663,7 +796,8 @@ export async function existeSolicitacaoPendente(
     `SELECT 1 AS um
        FROM rh.demanda d
        JOIN rh.tipo_demanda_versao t ON t.id = d.tipo_demanda_versao_id
-      WHERE t.chave = '${CHAVE_TIPO_DEMANDA_BENEFICIO}'
+      WHERE t.chave IN ('${CHAVE_TIPO_DEMANDA_BENEFICIO}',
+                        '${CHAVE_TIPO_DEMANDA_REVISAO}')
         AND d.solicitante_usuario_id = $1
         AND d.status IN ('aguardando_aprovacao', 'aberta', 'em_atendimento')
         AND d.descricao LIKE $2 ESCAPE '\\'`,
@@ -693,11 +827,16 @@ export async function buscarDemandaBeneficioParaTransicao(
     solicitante_usuario_id: string;
     solicitante_colaborador_id: string | null;
   }>(
+    // Duas chaves: a antiga (adesão/cancelamento) e a da revisão de valor, que
+    // a H3 acrescentou. Sem a segunda, a demanda de revisão simplesmente não
+    // era encontrada aqui e o DP levava um 404 ao tentar decidir.
     `SELECT d.id, d.numero, d.status, d.descricao,
             d.solicitante_usuario_id, d.solicitante_colaborador_id
        FROM rh.demanda d
        JOIN rh.tipo_demanda_versao t ON t.id = d.tipo_demanda_versao_id
-      WHERE d.id = $1 AND t.chave = '${CHAVE_TIPO_DEMANDA_BENEFICIO}'
+      WHERE d.id = $1
+        AND t.chave IN ('${CHAVE_TIPO_DEMANDA_BENEFICIO}',
+                        '${CHAVE_TIPO_DEMANDA_REVISAO}')
       FOR UPDATE OF d`,
     [id]
   );

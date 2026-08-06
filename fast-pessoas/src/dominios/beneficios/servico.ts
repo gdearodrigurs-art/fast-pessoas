@@ -33,6 +33,7 @@ import {
   AtualizacaoDependente,
   CancelamentoAdesao,
   CHAVE_TIPO_DEMANDA_BENEFICIO,
+  CHAVE_TIPO_DEMANDA_REVISAO,
   CriacaoBeneficio,
   CriacaoDependente,
   descreverCriterio,
@@ -50,7 +51,11 @@ import {
   AdesaoResumo,
   atualizarStatusAdesao,
   BeneficioComRegra,
+  competenciaFechadaNaData,
   encerrarAdesaoPorFimDoVinculo,
+  encerrarAdesaoPorRevisao,
+  inserirPedidoRevisao,
+  buscarPedidoRevisaoPorDemanda,
   buscarAdesaoParaAtualizar,
   buscarAdesaoResumo,
   buscarBeneficio,
@@ -96,6 +101,8 @@ const TABELA_DEPENDENTE = "rh.dependente";
 const TABELA_DEMANDA = "rh.demanda";
 
 const PREFIXO_CANCELAMENTO = "Cancelamento do benefício";
+/** Onda H3 — a terceira voz do colaborador, ao lado do cancelamento. */
+const PREFIXO_REVISAO = "Revisão de valor do benefício";
 
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
@@ -546,9 +553,17 @@ async function exigirPerfilAtivo(
 async function abrirDemandaBeneficio(
   sessao: PayloadSessao,
   colaboradorId: number,
-  descricao: string
+  descricao: string,
+  /** A H3 trouxe um segundo tipo (revisão de valor) para a mesma porta. */
+  chaveTipo: string = CHAVE_TIPO_DEMANDA_BENEFICIO,
+  /**
+   * Roda DENTRO da transação da demanda, com o id dela em mãos. Existe porque a
+   * revisão de valor precisa gravar o pedido estruturado amarrado à demanda —
+   * e as duas linhas têm de nascer juntas ou nenhuma nascer.
+   */
+  aoCriar?: (cliente: PoolClient, demandaId: number) => Promise<void>
 ): Promise<SolicitacaoBeneficio> {
-  const tipo = await buscarTipoAtivo(CHAVE_TIPO_DEMANDA_BENEFICIO);
+  const tipo = await buscarTipoAtivo(chaveTipo);
   if (!tipo) {
     throw new ErroHttp(
       500,
@@ -588,6 +603,7 @@ async function abrirDemandaBeneficio(
         Prazo: { de: null, para: formatarData(demanda.prazo) },
       },
     });
+    if (aoCriar) await aoCriar(cliente, demanda.id);
     return demanda;
   });
   const solicitacoes = await listarSolicitacoesDoUsuario(sessao.usuario_id);
@@ -634,6 +650,66 @@ export async function solicitarCancelamento(
     motivo
   );
   return abrirDemandaBeneficio(sessao, perfil.colaborador_id, descricao);
+}
+
+/**
+ * O colaborador pede que o VALOR de um benefício que ele já tem seja revisto.
+ *
+ * O caso do dono: mudou de casa, a passagem subiu. Ele PROPÕE um valor; quem
+ * decide é o DP, e o concedido pode ser outro — por isso o pedido vira linha
+ * própria (`rh.pedido_revisao_beneficio`) em vez de texto na descrição: dinheiro
+ * em texto livre não se compara nem se soma.
+ */
+export async function solicitarRevisaoValor(
+  sessao: PayloadSessao,
+  adesaoId: number,
+  valorPedido: number,
+  motivo: string
+): Promise<SolicitacaoBeneficio> {
+  const perfil = await exigirPerfilAtivo(
+    sessao.usuario_id,
+    await perfilPorUsuario(sessao.usuario_id)
+  );
+  const adesao = await buscarAdesaoResumo(adesaoId);
+  if (!adesao || adesao.colaborador_id !== perfil.colaborador_id) {
+    // Ausência, não máscara — igual ao cancelamento.
+    throw new ErroHttp(404, "Adesão não encontrada.");
+  }
+  if (adesao.fim !== null) {
+    throw new ErroHttp(
+      409,
+      "Esta adesão já está encerrada — não há valor a rever."
+    );
+  }
+  if (
+    await existeSolicitacaoPendente(
+      sessao.usuario_id,
+      PREFIXO_REVISAO,
+      adesao.beneficio_chave
+    )
+  ) {
+    throw new ErroHttp(
+      409,
+      "Você já tem um pedido de revisão em andamento para este benefício."
+    );
+  }
+  const descricao =
+    `${PREFIXO_REVISAO} "${adesao.beneficio_nome}" ` +
+    `(chave: ${adesao.beneficio_chave}).\n\nMotivo: ${motivo}`;
+  return abrirDemandaBeneficio(
+    sessao,
+    perfil.colaborador_id,
+    descricao,
+    CHAVE_TIPO_DEMANDA_REVISAO,
+    async (cliente, demandaId) => {
+      await inserirPedidoRevisao(cliente, {
+        adesao_id: adesaoId,
+        demanda_id: demandaId,
+        valor_pedido: valorPedido,
+        motivo,
+      });
+    }
+  );
 }
 
 // ------------------------------------------------------------------ gestão pelo DP (adesao.gerir)
@@ -861,6 +937,115 @@ export async function efetivarAdesao(
   const resumo = await buscarAdesaoResumo(adesaoId);
   if (!resumo) {
     throw new ErroHttp(500, "Falha ao carregar a adesão efetivada.");
+  }
+  return resumo;
+}
+
+/**
+ * O DP decide a revisão: encerra a adesão vigente e abre outra com o valor novo.
+ *
+ * "Valor anterior vira versão encerrada" (docs/10, H3) mapeia exatamente aqui —
+ * a CADEIA DE ADESÕES é o histórico, e `adesao_congelar` torna a encerrada
+ * imutável. Não há tabela de histórico paralela, e não há UPDATE no valor: o
+ * passado fica de pé, com as datas em que valeu.
+ *
+ * O valor que vale é o do DP, não o pedido. Os dois vão para a trilha lado a
+ * lado — a diferença entre o que se pediu e o que se concedeu é justamente o
+ * que alguém vai querer entender daqui a um ano.
+ *
+ * A ORDEM IMPORTA: `adesao_uma_vigente` é único em (colaborador, benefício)
+ * WHERE fim IS NULL. Abrir a nova antes de fechar a velha bate no índice.
+ */
+export async function aprovarRevisaoValor(
+  sessao: PayloadSessao,
+  demandaId: number,
+  dados: { valor: number; desconto: number; inicio: string }
+): Promise<AdesaoResumo> {
+  const novaId = await comTransacao(sessao.usuario_id, async (cliente) => {
+    // Sem filtro de natureza: `interpretarDescricaoSolicitacao` só conhece os
+    // dois prefixos antigos e devolveria `null` para revisão, deixando a
+    // checagem passar em silêncio. Quem prova que a demanda é de revisão é a
+    // EXISTÊNCIA do pedido estruturado, conferida logo abaixo.
+    const demanda = await exigirDemandaAberta(cliente, demandaId);
+    const pedido = await buscarPedidoRevisaoPorDemanda(cliente, demandaId);
+    if (!pedido) {
+      throw new ErroHttp(
+        409,
+        "Esta demanda não tem pedido de revisão de valor vinculado."
+      );
+    }
+    if (pedido.adesao_encerrada) {
+      throw new ErroHttp(
+        409,
+        "A adesão que este pedido queria rever já foi encerrada — nada a fazer."
+      );
+    }
+    const fechada = await competenciaFechadaNaData(cliente, dados.inicio);
+    if (fechada) {
+      throw new ErroHttpCampo(
+        409,
+        `A folha de ${fechada} já foi fechada. O valor novo não pode começar ` +
+          `dentro de uma competência encerrada — escolha uma data a partir da ` +
+          `competência aberta.`,
+        "inicio"
+      );
+    }
+
+    await encerrarAdesaoPorRevisao(cliente, pedido.adesao_id, dados.inicio);
+    const criada = await inserirAdesao(cliente, {
+      colaborador_id: pedido.colaborador_id,
+      beneficio_id: pedido.beneficio_id,
+      inicio: dados.inicio,
+      valor: dados.valor,
+      desconto: dados.desconto,
+      demanda_id: demandaId,
+    });
+
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_ADESAO,
+      registroId: String(criada),
+      diff: {
+        "Benefício": { de: null, para: pedido.beneficio_nome },
+        Origem: {
+          de: null,
+          para: `revisão de valor aprovada (${formatarNumeroDemanda(demanda.numero)})`,
+        },
+        Valor: {
+          de: formatarMoeda(pedido.valor_atual),
+          para: formatarMoeda(dados.valor),
+        },
+        "Valor pedido pela pessoa": {
+          de: null,
+          para: formatarMoeda(pedido.valor_pedido),
+        },
+        Desconto: {
+          de: formatarMoeda(pedido.desconto_atual),
+          para: formatarMoeda(dados.desconto),
+        },
+        "Adesão encerrada": { de: null, para: String(pedido.adesao_id) },
+        "Vale a partir de": { de: null, para: formatarData(dados.inicio) },
+      },
+    });
+
+    await encerrarDemandaVinculada(
+      cliente,
+      sessao,
+      demanda,
+      "concluida",
+      `Revisão aprovada: ${formatarMoeda(pedido.valor_atual)} → ` +
+        `${formatarMoeda(dados.valor)} a partir de ${formatarData(dados.inicio)}` +
+        (dados.valor === pedido.valor_pedido
+          ? "."
+          : ` (a pessoa havia pedido ${formatarMoeda(pedido.valor_pedido)}).`)
+    );
+    return criada;
+  });
+  const resumo = await buscarAdesaoResumo(novaId);
+  if (!resumo) {
+    throw new ErroHttp(500, "Falha ao carregar a adesão criada.");
   }
   return resumo;
 }

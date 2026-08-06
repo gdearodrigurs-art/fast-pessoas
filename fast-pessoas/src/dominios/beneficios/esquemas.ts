@@ -284,6 +284,8 @@ export type AtualizacaoDependente = z.infer<typeof esquemaAtualizacaoDependente>
 // ------------------------------------------------------------------ ponte com o motor de demandas
 
 export const CHAVE_TIPO_DEMANDA_BENEFICIO = "adesao_beneficio";
+/** Onda H3 — pedido de revisão de valor, migration 0057. */
+export const CHAVE_TIPO_DEMANDA_REVISAO = "revisao_valor_beneficio";
 
 export type NaturezaSolicitacao = "adesao" | "cancelamento";
 
