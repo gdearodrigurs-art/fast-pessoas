@@ -354,6 +354,24 @@ export async function colaboradorDoUsuario(
   return rows.length ? Number(rows[0].id) : null;
 }
 
+/**
+ * Conta de SISTEMA: usuário sem PESSOA por trás (`sistema.usuario.pessoa_id`
+ * nulo) — é o admin semeado por `db/seed-admin.js`, chave de entrada e não gente
+ * do quadro. Serve só para escolher a FRASE da recusa, nunca para autorizar: não
+ * confundir com pessoa cujo vínculo terminou, que tem `pessoa_id` preenchido e
+ * `rh.vinculo_atual` nulo — para essa, "procure o DP" continua sendo o caminho.
+ */
+export async function contaSemPessoa(
+  cliente: PoolClient,
+  usuarioId: number
+): Promise<boolean> {
+  const { rows } = await cliente.query<{ sem_pessoa: boolean }>(
+    "SELECT pessoa_id IS NULL AS sem_pessoa FROM sistema.usuario WHERE id = $1",
+    [usuarioId]
+  );
+  return rows.length > 0 && rows[0].sem_pessoa;
+}
+
 export async function criar(
   cliente: PoolClient,
   dados: {

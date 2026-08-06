@@ -76,6 +76,7 @@ import {
   cargoVersaoAtiva,
   colaboradorDoUsuario,
   ComentarioDemanda,
+  contaSemPessoa,
   criar,
   decidirEtapa,
   DemandaParaTransicao,
@@ -221,6 +222,35 @@ function demandaAtiva(status: StatusDemanda): boolean {
   return STATUS_ATIVOS.includes(status);
 }
 
+/**
+ * A MESMA trava que o portal do colaborador aplica (`montarPortal`, 409) e que
+ * férias e o check-in de clima já aplicavam — a abertura de demanda era a única
+ * porta que deixava passar. E o estrago não é hipotético: a DEM-0069 nasceu com
+ * `solicitante_colaborador_id` nulo pela conta de sistema, ficou em atendimento
+ * com atendente designado e não apontava para colaborador nenhum; concluí-la
+ * criaria a adesão a benefício para ninguém.
+ *
+ * A frase é escolhida pelo FATO, não pelo papel: quem não tem pessoa por trás é
+ * conta administrativa e não há DP a quem recorrer — mandá-la procurar o DP é
+ * instrução vazia. Quem tem pessoa e perdeu o vínculo recebe a frase do portal,
+ * palavra por palavra, porque para essa o DP É o caminho.
+ */
+async function exigirColaboradorDoSolicitante(
+  cliente: PoolClient,
+  usuarioId: number
+): Promise<number> {
+  const colaboradorId = await colaboradorDoUsuario(cliente, usuarioId);
+  if (colaboradorId !== null) {
+    return colaboradorId;
+  }
+  throw new ErroHttp(
+    409,
+    (await contaSemPessoa(cliente, usuarioId))
+      ? "Esta é uma conta administrativa, sem ficha de colaborador — não há a quem creditar o pedido."
+      : "Sua conta não está vinculada a uma ficha de colaborador — procure o DP."
+  );
+}
+
 async function permissoesDe(usuarioId: number): Promise<PermissoesDemandas> {
   const [
     aprovar,
@@ -311,7 +341,10 @@ export async function criarDemanda(
     : "aberta";
 
   const criada = await comTransacao(sessao.usuario_id, async (cliente) => {
-    const colaboradorId = await colaboradorDoUsuario(
+    // Antes de qualquer escrita: sem ficha, não há demanda. O id devolvido é o
+    // mesmo que vai para `solicitante_colaborador_id` — a coluna deixa de poder
+    // nascer nula por este caminho.
+    const colaboradorId = await exigirColaboradorDoSolicitante(
       cliente,
       sessao.usuario_id
     );

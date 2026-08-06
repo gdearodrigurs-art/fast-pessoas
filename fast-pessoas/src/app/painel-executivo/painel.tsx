@@ -231,6 +231,8 @@ function Sparkline({ serie }: { serie: MicroSerie }) {
   // é lida como "zero", e um indicador estável não é um indicador zerado.
   const y = (valor: number) =>
     amplitude === 0 ? ALTURA / 2 : ALTURA - ((valor - minimo) / amplitude) * ALTURA;
+  // Faixa de mouse por mês: divide a largura em fatias iguais, uma por mês.
+  const faixaMes = LARGURA / total;
 
   // Segmentos: cada corrida contínua de pontos com valor vira uma polyline.
   const segmentos: string[][] = [];
@@ -293,6 +295,29 @@ function Sparkline({ serie }: { serie: MicroSerie }) {
           cy={y(ultimo.valor as number)}
           r={3}
         />
+        {/* Faixa invisível por mês, POR CIMA do desenho: o <title> do SVG já é
+            tooltip nativa do navegador, então o valor do mês aparece ao passar o
+            mouse sem estado, sem evento e sem re-render. Mês sem dado também tem
+            faixa — "não apurado" é informação, e a lacuna na linha sozinha não
+            diz qual mês é. */}
+        {serie.pontos.map((ponto, indice) => (
+          <rect
+            key={`faixa-${ponto.mes}`}
+            x={(indice * faixaMes).toFixed(1)}
+            y={0}
+            width={faixaMes.toFixed(1)}
+            height={ALTURA}
+            fill="transparent"
+          >
+            <title>
+              {ponto.valor === null
+                ? `${mesLongo(ponto.mes)}: sem dado apurado neste mês`
+                : `${mesLongo(ponto.mes)}: ${formatarPonto(ponto.valor, serie.unidade)}${
+                    ponto.parcial ? " (mês em curso)" : ""
+                  }`}
+            </title>
+          </rect>
+        ))}
       </svg>
       <div className={estilos.eixo}>
         <span>
@@ -309,8 +334,51 @@ function Sparkline({ serie }: { serie: MicroSerie }) {
   );
 }
 
+/**
+ * A variação do período, em número.
+ *
+ * O sparkline tem escala LOCAL (mínimo e máximo da própria série), então a linha
+ * ocupa a caixa inteira sempre: uma variação de 0,03 é desenhada igual a uma de
+ * 30. A forma aparece; a magnitude some. Este texto devolve a magnitude — do
+ * primeiro ao último mês COM dado, na unidade da série.
+ *
+ * A unidade não é decorativa: percentual varia em PONTO PERCENTUAL (turnover de
+ * 3% para 5% é +2 p.p., não +2%), contagem varia em unidades, dinheiro em reais
+ * e nota em pontos de nota. Escrever "p.p." para tudo seria errado em três dos
+ * quatro casos.
+ */
+function variacaoDoPeriodo(serie: MicroSerie): string | null {
+  const comValor = serie.pontos.filter((ponto) => ponto.valor !== null);
+  if (comValor.length < 2) return null;
+
+  const primeiro = comValor[0];
+  const ultimo = comValor[comValor.length - 1];
+  const delta = (ultimo.valor as number) - (primeiro.valor as number);
+  // Meses COBERTOS pela comparação (inclusive as duas pontas), não o índice: de
+  // jan a dez são 12 meses, não 11.
+  const meses =
+    serie.pontos.indexOf(ultimo) - serie.pontos.indexOf(primeiro) + 1;
+  const janela = `em ${meses} ${meses === 1 ? "mês" : "meses"}`;
+  if (delta === 0) return `sem variação ${janela}`;
+
+  const absoluto = Math.abs(delta);
+  const medida =
+    serie.unidade === "%"
+      ? // Duas casas de propósito: com uma casa, um giro de 0,03 p.p. viraria
+        // "0,0 p.p." — exatamente a informação que este texto existe para dar.
+        `${decimal(absoluto, 2)} p.p.`
+      : serie.unidade === "R$"
+        ? moedaCurta(absoluto)
+        : serie.unidade === "nota"
+          ? `${decimal(absoluto, 2)} ponto(s)`
+          : inteiro(absoluto);
+
+  return `${delta > 0 ? "+" : "-"}${medida} ${janela}`;
+}
+
 function Serie({ serie }: { serie: MicroSerie }) {
   const { direcao, subir_e_bom: subirEBom, texto } = serie.tendencia;
+  const variacao = variacaoDoPeriodo(serie);
   const seta =
     direcao === "sobe" ? "▲" : direcao === "desce" ? "▼" : direcao === "estavel" ? "▬" : "–";
   // A cor sai do SIGNIFICADO, não do sinal: turnover e absenteísmo subindo é
@@ -331,6 +399,7 @@ function Serie({ serie }: { serie: MicroSerie }) {
           {seta}
         </span>
         <span>{texto}</span>
+        {variacao && <span className={estilos.variacao}>· {variacao}</span>}
       </p>
     </div>
   );

@@ -185,9 +185,17 @@
 .tendencia {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
   color: #6b6763;
+}
+
+/* A magnitude da variação do período. Não quebra no meio do número, e usa
+   tabular-nums para os cards ficarem alinhados entre si. */
+.variacao {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .seta {

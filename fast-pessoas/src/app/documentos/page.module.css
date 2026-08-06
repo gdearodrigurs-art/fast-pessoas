@@ -240,3 +240,125 @@
   font-size: 0.78rem;
   color: #6b6763;
 }
+
+/* Abas do acervo: publicações da empresa × documentos da pessoa */
+
+.abasPrincipais {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 16px;
+  border-bottom: 1px solid #e3e0dc;
+  flex-wrap: wrap;
+}
+
+.aba {
+  border: none;
+  background: transparent;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  color: #6b6763;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+}
+
+.abaAtiva {
+  color: #1c1b1a;
+  border-bottom-color: #d21217;
+}
+
+.acoesLinha {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Pop-up de visualização */
+
+.fundoDialogo {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+
+.dialogoVisualizador {
+  background: #fff;
+  color: #1c1b1a;
+  border: 1px solid #e3e0dc;
+  border-radius: 12px;
+  padding: 20px 24px;
+  width: 860px;
+  max-width: 100%;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.cabecalhoDialogo {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cabecalhoDialogo h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.subDialogo {
+  font-size: 13px;
+  color: #6b6763;
+  margin: 0 0 12px;
+}
+
+.corpoVisualizador {
+  flex: 1;
+  min-height: 240px;
+  overflow: auto;
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 12px;
+  background: #faf9f8;
+}
+
+.quadroPdf {
+  width: 100%;
+  height: 65vh;
+  border: none;
+  background: #fff;
+}
+
+.imagemVisualizada {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.textoVisualizado {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.avisoFormato {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #6b6763;
+}
+
+.acoesDialogo {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}

@@ -1,14 +1,23 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
+  AbaDocumento,
+  ABAS_DOCUMENTO,
+  abaDaCategoria,
   CATEGORIAS_DOCUMENTO,
   CategoriaDocumento,
   formatarTamanho,
+  ROTULOS_ABA,
   ROTULOS_CATEGORIA,
 } from "@/dominios/documentos/esquemas";
 import estilos from "./page.module.css";
+import {
+  caminhoConteudoDocumento,
+  DocumentoParaVer,
+  VisualizadorDocumento,
+} from "./visualizador-documento";
 
 interface Documento {
   id: number;
@@ -68,6 +77,11 @@ export function PainelDocumentos({
   const campoArquivo = useRef<HTMLInputElement>(null);
 
   const [dandoCiencia, setDandoCiencia] = useState<number | null>(null);
+  const [aba, setAba] = useState<AbaDocumento>(ABAS_DOCUMENTO[0]);
+  const [documentoAberto, setDocumentoAberto] =
+    useState<DocumentoParaVer | null>(null);
+
+  const fecharVisualizador = useCallback(() => setDocumentoAberto(null), []);
 
   useEffect(() => {
     let ativo = true;
@@ -201,6 +215,27 @@ export function PainelDocumentos({
     }
   }
 
+  // A aba separa CATEGORIA, que é apresentação — não escopo nem autorização.
+  // Escopo (documento.ver.todos / vínculos da pessoa) e sensível continuam
+  // filtrando no servidor, dentro da consulta de `listarDocumentos`; a aba
+  // recorta a lista que já veio filtrada, e por isso não abre nada que a tela
+  // não mostrasse antes.
+  //
+  // E há um motivo forte para NÃO empurrar a aba para o servidor: refazer a
+  // busca a cada clique de aba reexecutaria `listarDocumentos(sensivel=true)`,
+  // que grava uma linha em `audit.leitura_sensivel` por documento sensível
+  // listado. A trilha viraria ruído — uma leitura por clique de aba.
+  const documentosDaAba = documentos.filter(
+    (documento) => abaDaCategoria(documento.categoria) === aba
+  );
+  const contagemPorAba = new Map<AbaDocumento, number>(
+    ABAS_DOCUMENTO.map((chave) => [chave, 0])
+  );
+  for (const documento of documentos) {
+    const chave = abaDaCategoria(documento.categoria);
+    contagemPorAba.set(chave, (contagemPorAba.get(chave) ?? 0) + 1);
+  }
+
   return (
     <div className={estilos.pagina}>
       <Cabecalho />
@@ -310,6 +345,20 @@ export function PainelDocumentos({
             </label>
           )}
           {erro && <p className={estilos.erro}>{erro}</p>}
+          <div className={estilos.abasPrincipais} role="tablist">
+            {ABAS_DOCUMENTO.map((chave) => (
+              <button
+                key={chave}
+                className={`${estilos.aba} ${aba === chave ? estilos.abaAtiva : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={aba === chave}
+                onClick={() => setAba(chave)}
+              >
+                {ROTULOS_ABA[chave]} ({contagemPorAba.get(chave) ?? 0})
+              </button>
+            ))}
+          </div>
           {carregando ? (
             <p className={estilos.subtitulo}>Carregando…</p>
           ) : (
@@ -327,7 +376,7 @@ export function PainelDocumentos({
                   </tr>
                 </thead>
                 <tbody>
-                  {documentos.map((documento) => (
+                  {documentosDaAba.map((documento) => (
                     <tr key={documento.id}>
                       <td>
                         {documento.titulo}
@@ -369,18 +418,37 @@ export function PainelDocumentos({
                         )}
                       </td>
                       <td>
-                        <a
-                          className={estilos.botaoLinhaLink}
-                          href={`/api/documentos/${documento.id}/download`}
-                        >
-                          Baixar
-                        </a>
+                        <div className={estilos.acoesLinha}>
+                          <button
+                            className={estilos.botaoLinha}
+                            type="button"
+                            onClick={() =>
+                              setDocumentoAberto({
+                                id: documento.id,
+                                titulo: documento.titulo,
+                                nome_arquivo: documento.nome_arquivo,
+                                mime: documento.mime,
+                                sensivel: documento.sensivel,
+                              })
+                            }
+                          >
+                            Visualizar
+                          </button>
+                          <a
+                            className={estilos.botaoLinhaLink}
+                            href={caminhoConteudoDocumento(documento.id)}
+                          >
+                            Baixar
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   ))}
-                  {documentos.length === 0 && (
+                  {documentosDaAba.length === 0 && (
                     <tr>
-                      <td colSpan={7}>Nenhum documento disponível.</td>
+                      <td colSpan={7}>
+                        Nenhum documento em {ROTULOS_ABA[aba].toLowerCase()}.
+                      </td>
                     </tr>
                   )}
                 </tbody>
@@ -392,6 +460,14 @@ export function PainelDocumentos({
           </p>
         </section>
       </main>
+
+      {documentoAberto && (
+        <VisualizadorDocumento
+          key={documentoAberto.id}
+          documento={documentoAberto}
+          aoFechar={fecharVisualizador}
+        />
+      )}
     </div>
   );
 }
