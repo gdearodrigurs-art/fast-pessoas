@@ -441,18 +441,12 @@ export async function buscarAdesaoParaAtualizar(
   return rows.length > 0 ? paraAdesao(rows[0]) : null;
 }
 
-export async function temAdesaoVigente(
-  colaboradorId: number,
-  beneficioId: number,
-  cliente?: PoolClient
-): Promise<boolean> {
-  const sql = `SELECT 1 AS um FROM rh.adesao
-                WHERE colaborador_id = $1 AND beneficio_id = $2 AND fim IS NULL`;
-  const linhas = cliente
-    ? (await cliente.query(sql, [colaboradorId, beneficioId])).rows
-    : await consultar(sql, [colaboradorId, beneficioId]);
-  return linhas.length > 0;
-}
+// `temAdesaoVigente` morava aqui: era a pré-checagem do pedido de adesão do
+// colaborador, que acabou na onda H. Quem garante uma vigente por par
+// (colaborador, benefício) é o índice `adesao_uma_vigente` da 0009, e quem
+// traduz a violação em 409 legível é `efetivarAdesao` — a pré-checagem em
+// consulta separada não travava nada que o índice já não travasse, e ainda
+// abria janela entre a leitura e a escrita.
 
 export interface AdesaoParaTransferir {
   id: number;

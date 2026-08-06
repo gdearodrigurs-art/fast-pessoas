@@ -19,16 +19,25 @@
  * o que autorizar por id porque não há id de entrada — o furo clássico
  * "/portal?colaborador_id=999" não tem por onde nascer.
  *
+ * A onda H5 abriu a PRIMEIRA escrita deste portal (manter os próprios
+ * dependentes) e a mesma forma foi mantida, porque escrita é onde IDOR dói
+ * mais: nenhuma das quatro operações aceita `colaborador_id`, o titular sai
+ * sempre da sessão, e o id de linha que PATCH/DELETE precisam nomear é
+ * reconferido contra o titular dentro da transação, com a linha travada — id de
+ * outra pessoa responde o mesmo 404 que id inexistente. Ver o bloco "meus
+ * dependentes (H5)" mais abaixo.
+ *
  * Também não há chave de permissão para o portal em si: qualquer sessão
  * autenticada vê o PRÓPRIO portal, do mesmo modo que qualquer sessão vê a
  * própria ficha. Cada BLOCO, porém, respeita a chave do seu domínio (férias
- * exige `ferias.programar`, documentos `documento.ver`, e assim por diante):
- * um perfil recomposto em /perfis que perca uma chave perde o bloco, não o
- * portal inteiro.
+ * exige `ferias.programar`, documentos `documento.ver`, dependentes
+ * `dependente.proprio.manter`, e assim por diante): um perfil recomposto em
+ * /perfis que perca uma chave perde o bloco, não o portal inteiro.
  *
  * SALÁRIO: ausente. Ver o comentário de `MeusDados` em colaborador-esquemas.ts.
  */
 
+import type { PoolClient } from "pg";
 import { mensagemSemFicha } from "../../lib/ficha-de-colaborador";
 import { ROTULOS_TIPO_CICLO } from "../avaliacao/esquemas";
 import {
@@ -38,6 +47,10 @@ import {
   interpretarDescricaoSolicitacao,
 } from "../beneficios/esquemas";
 import {
+  atualizarDependente as atualizarDependenteNoBanco,
+  buscarDependenteParaAtualizar,
+  excluirDependente,
+  inserirDependente,
   listarAdesoesDoColaborador,
   listarBeneficios,
   listarDependentes,
@@ -65,18 +78,25 @@ import {
 } from "../ferias/esquemas";
 import { montarVisao as montarVisaoFerias } from "../ferias/servico";
 import { PayloadSessao } from "../identidade/esquemas";
-import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { comTransacao } from "../../lib/banco";
+import { Diff, registrarAlteracao } from "../../lib/auditoria";
+import { ErroHttp, exigirPermissao, lerSessao } from "../../lib/sessao";
 import {
   ANDAMENTO_CICLO,
   BlocoAvaliacoes,
   BlocoBeneficios,
   BlocoCheckin,
+  BlocoDependentes,
   BlocoDocumentos,
   BlocoFerias,
   BlocoSolicitacoes,
   DIAS_ALERTA_FERIAS,
   EXPLICACAO_TREINAMENTOS,
+  MeuDependente,
+  MeuDependenteEdicao,
+  MeuDependenteNovo,
   MeusDados,
+  PARENTESCOS_POSSIVEIS,
   PortalColaborador,
   ROTULOS_STATUS_PDI,
   tempoDeCasa,
@@ -92,6 +112,10 @@ const CHAVE_DEMANDAS = "demanda.criar";
 const CHAVE_BENEFICIOS = "adesao.solicitar";
 const CHAVE_DOCUMENTOS = "documento.ver";
 const CHAVE_CHECKIN = "clima.responder";
+/** Manter os PRÓPRIOS dependentes — onda H5, migration 0056. */
+const CHAVE_DEPENDENTES = "dependente.proprio.manter";
+/** O mesmo nome que o DP grava em audit.alteracao: uma tabela, uma trilha. */
+const TABELA_DEPENDENTE = "rh.dependente";
 /** Quem pode abrir o RCF imprimível em /cargos/[id]/rcf (guarda daquela tela). */
 const CHAVES_RCF_IMPRIMIVEL = [
   "rh.cargo.administrar",
@@ -235,11 +259,10 @@ async function montarBlocoBeneficios(
 ): Promise<BlocoBeneficios> {
   const perfil = await perfilPorUsuario(usuarioId);
   if (!perfil) {
-    return { ativos: [], elegiveis_sem_adesao: [], dependentes: [] };
+    return { ativos: [], elegiveis_sem_adesao: [] };
   }
-  const [adesoes, dependentes, beneficios, solicitacoes] = await Promise.all([
+  const [adesoes, beneficios, solicitacoes] = await Promise.all([
     listarAdesoesDoColaborador(colaboradorId),
-    listarDependentes(colaboradorId),
     listarBeneficios(true),
     listarSolicitacoesDoUsuario(usuarioId),
   ]);
@@ -293,19 +316,237 @@ async function montarBlocoBeneficios(
       solicitacao_pendente: chavesPendentes.has(beneficio.chave),
     }));
 
+  return { ativos, elegiveis_sem_adesao: elegiveis };
+}
+
+// --------------------------------------------------------- meus dependentes (H5)
+//
+// A ÚNICA ESCRITA DO PORTAL, e a que mais precisava da defesa deste arquivo.
+//
+// Onda H5 (docs/10:110), confirmada pela Diretora de Pessoas: "dependentes pelo
+// próprio usuário". Até aqui rh.dependente só tinha uma porta de escrita, a do
+// DP (`adesao.gerir`, em /api/beneficios/dependentes). Essa porta CONTINUA
+// aberta e inteira — o DP não perdeu nada. O que nasce é uma segunda porta, mais
+// estreita, que só alcança uma pessoa.
+//
+// COMO A PORTA ESTREITA É ESTREITA, em três camadas:
+//   1. o alvo sai de `colaboradorIdDoUsuario(sessao.usuario_id)` — igual ao
+//      resto do portal. Nenhuma das quatro operações aceita `colaborador_id`;
+//   2. UPDATE e DELETE precisam nomear a LINHA, e aí existe um id vindo da
+//      requisição. Ele nomeia a linha, nunca a pessoa: `linhaDoTitular` relê a
+//      linha com FOR UPDATE dentro da própria transação e compara o
+//      `colaborador_id` dela com o da sessão. Não bate → 404, ausência e não
+//      máscara, a mesma resposta que o id inexistente recebe. Quem sondar
+//      /dependentes/48 não descobre nem que 48 existe;
+//   3. a conferência e a escrita moram na MESMA transação, com a linha travada.
+//      Conferir fora e escrever depois seria janela para troca de dono no meio.
+//
+// ESCOPO É O VÍNCULO CORRENTE, de propósito. Na transferência entre empresas os
+// dependentes são COPIADOS para o vínculo novo (migration 0048), então a pessoa
+// enxerga aqui os dependentes que valem para o contrato de hoje. As linhas do
+// contrato antigo continuam existindo e continuam sendo a base do IRRF já
+// calculado lá — deixá-las editáveis por esta porta seria reescrever o passado
+// de uma folha fechada.
+
+/** Nada de CPF no payload — ver o comentário de `MeuDependente`. */
+function projetarDependente(dependente: {
+  id: number;
+  nome: string;
+  parentesco: keyof typeof ROTULOS_PARENTESCO;
+  nascimento: string;
+  cpf: string | null;
+}): MeuDependente {
   return {
-    ativos,
-    elegiveis_sem_adesao: elegiveis,
-    // CPF do dependente fica FORA: minimização por desenho (migration 0009).
-    // Nome, parentesco e nascimento bastam para a pessoa conferir quem está
-    // coberto pelo plano.
-    dependentes: dependentes.map((dependente) => ({
-      id: dependente.id,
-      nome: dependente.nome,
-      parentesco_rotulo: ROTULOS_PARENTESCO[dependente.parentesco],
-      nascimento: dependente.nascimento,
-    })),
+    id: dependente.id,
+    nome: dependente.nome,
+    parentesco: dependente.parentesco,
+    parentesco_rotulo: ROTULOS_PARENTESCO[dependente.parentesco],
+    nascimento: dependente.nascimento,
+    cpf_informado: dependente.cpf !== null,
   };
+}
+
+async function montarBlocoDependentes(
+  colaboradorId: number
+): Promise<BlocoDependentes> {
+  const dependentes = await listarDependentes(colaboradorId);
+  return {
+    itens: dependentes.map(projetarDependente),
+    parentescos_possiveis: PARENTESCOS_POSSIVEIS,
+  };
+}
+
+/**
+ * Guarda das quatro operações: chave conferida no banco + o colaborador da
+ * sessão. Devolve o id do titular; quem não tem ficha não tem dependente para
+ * manter (409, com a mensagem que já explica o que fazer).
+ */
+async function exigirTitular(): Promise<{
+  sessao: PayloadSessao;
+  colaboradorId: number;
+}> {
+  const sessao = await exigirPermissao(CHAVE_DEPENDENTES);
+  const colaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
+  if (colaboradorId === null) {
+    throw new ErroHttp(409, await mensagemSemFicha(sessao.usuario_id));
+  }
+  return { sessao, colaboradorId };
+}
+
+/**
+ * A linha, travada, SE for do titular. Fora isso, 404 — o mesmo 404 do id que
+ * não existe. É aqui que a defesa contra IDOR encosta no banco.
+ */
+async function linhaDoTitular(
+  cliente: PoolClient,
+  id: number,
+  colaboradorId: number
+) {
+  const atual = await buscarDependenteParaAtualizar(cliente, id);
+  if (!atual || atual.colaborador_id !== colaboradorId) {
+    throw new ErroHttp(404, "Dependente não encontrado.");
+  }
+  return atual;
+}
+
+/**
+ * Trilha com o DE e o PARA de verdade.
+ *
+ * O diff do DP (beneficios/servico.ts:1141) grava só o PARA, porque nasceu na
+ * criação. Aqui a edição é do próprio interessado e é ela que a conferência do
+ * IRRF vai querer ler: "quem trocou a data de nascimento do dependente, de quê
+ * para quê, e quando". Sem o `de`, a trilha responde metade da pergunta.
+ *
+ * CPF continua fora, virando "informado"/"removido": a trilha de auditoria é
+ * lida por gente que não precisa do CPF do filho de ninguém.
+ */
+function diffDependente(
+  antes: { nome: string; nascimento: string; parentesco: string; cpf: string | null } | null,
+  depois: {
+    nome?: string;
+    nascimento?: string;
+    parentesco?: string;
+    cpf?: string | null;
+  }
+): Diff {
+  const diff: Diff = {};
+  if (depois.nome !== undefined) {
+    diff["Nome"] = { de: antes?.nome ?? null, para: depois.nome };
+  }
+  if (depois.nascimento !== undefined) {
+    diff["Nascimento"] = { de: antes?.nascimento ?? null, para: depois.nascimento };
+  }
+  if (depois.parentesco !== undefined) {
+    diff["Parentesco"] = {
+      de: antes === null ? null : ROTULOS_PARENTESCO[antes.parentesco as keyof typeof ROTULOS_PARENTESCO],
+      para: ROTULOS_PARENTESCO[depois.parentesco as keyof typeof ROTULOS_PARENTESCO],
+    };
+  }
+  if (depois.cpf !== undefined) {
+    diff["CPF"] = {
+      de: antes === null ? null : antes.cpf ? "informado" : "não informado",
+      para: depois.cpf ? "informado" : "removido",
+    };
+  }
+  return diff;
+}
+
+export async function listarMeusDependentes(): Promise<BlocoDependentes> {
+  const { colaboradorId } = await exigirTitular();
+  // Sem audit.leitura_sensivel: a trilha de leitura existe para dado de
+  // TERCEIRO (beneficios/servico.ts:1130 grava quando o leitor NÃO é o
+  // titular). Aqui o leitor é sempre o titular — a mesma razão pela qual o
+  // portal inteiro não grava leitura ao mostrar a própria ficha.
+  return montarBlocoDependentes(colaboradorId);
+}
+
+export async function criarMeuDependente(
+  dados: MeuDependenteNovo
+): Promise<MeuDependente> {
+  const { sessao, colaboradorId } = await exigirTitular();
+  const id = await comTransacao(sessao.usuario_id, async (cliente) => {
+    const novoId = await inserirDependente(cliente, {
+      // NÃO vem do corpo da requisição. Este é o ponto do arquivo em que isso
+      // mais importa: é a única linha que decide de quem é o dependente.
+      colaborador_id: colaboradorId,
+      nome: dados.nome,
+      nascimento: dados.nascimento,
+      parentesco: dados.parentesco,
+      cpf: dados.cpf ?? null,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_DEPENDENTE,
+      registroId: String(novoId),
+      diff: {
+        Origem: { de: null, para: "portal do colaborador (o próprio titular)" },
+        ...diffDependente(null, dados),
+      },
+    });
+    return novoId;
+  });
+  const criado = (await listarDependentes(colaboradorId)).find(
+    (item) => item.id === id
+  );
+  if (!criado) {
+    throw new ErroHttp(500, "Falha ao carregar o dependente criado.");
+  }
+  return projetarDependente(criado);
+}
+
+export async function atualizarMeuDependente(
+  id: number,
+  dados: MeuDependenteEdicao
+): Promise<MeuDependente> {
+  const { sessao, colaboradorId } = await exigirTitular();
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const antes = await linhaDoTitular(cliente, id, colaboradorId);
+    await atualizarDependenteNoBanco(cliente, id, dados);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_DEPENDENTE,
+      registroId: String(id),
+      diff: {
+        Origem: { de: null, para: "portal do colaborador (o próprio titular)" },
+        ...diffDependente(antes, dados),
+      },
+    });
+  });
+  const atualizado = (await listarDependentes(colaboradorId)).find(
+    (item) => item.id === id
+  );
+  if (!atualizado) {
+    throw new ErroHttp(500, "Falha ao recarregar o dependente.");
+  }
+  return projetarDependente(atualizado);
+}
+
+export async function removerMeuDependente(id: number): Promise<void> {
+  const { sessao, colaboradorId } = await exigirTitular();
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const atual = await linhaDoTitular(cliente, id, colaboradorId);
+    await excluirDependente(cliente, id);
+    // A linha some da tabela; o que ela era fica na trilha. É o único registro
+    // que sobra de uma dedução de IRRF que existiu e deixou de existir —
+    // rh.dependente não tem vigência (ver docs/pendencias.md).
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "exclusao",
+      tabela: TABELA_DEPENDENTE,
+      registroId: String(id),
+      diff: {
+        Origem: { de: null, para: "portal do colaborador (o próprio titular)" },
+        Nome: { de: atual.nome, para: null },
+        Nascimento: { de: atual.nascimento, para: null },
+        Parentesco: { de: ROTULOS_PARENTESCO[atual.parentesco], para: null },
+      },
+    });
+  });
 }
 
 async function montarBlocoDocumentos(
@@ -415,6 +656,7 @@ export async function montarPortal(
     CHAVE_BENEFICIOS,
     CHAVE_DOCUMENTOS,
     CHAVE_CHECKIN,
+    CHAVE_DEPENDENTES,
     ...CHAVES_RCF_IMPRIMIVEL,
   ]);
   const pode = {
@@ -423,6 +665,7 @@ export async function montarPortal(
     beneficios: concedidas.has(CHAVE_BENEFICIOS),
     documentos: concedidas.has(CHAVE_DOCUMENTOS),
     checkin: concedidas.has(CHAVE_CHECKIN),
+    dependentes: concedidas.has(CHAVE_DEPENDENTES),
   };
   const podeAbrirRcfImprimivel = CHAVES_RCF_IMPRIMIVEL.some((chave) =>
     concedidas.has(chave)
@@ -473,21 +716,31 @@ export async function montarPortal(
     status: ROTULOS_STATUS[colaborador.status],
   };
 
-  const [blocoFerias, blocoSolicitacoes, blocoBeneficios, blocoDocumentos, blocoCheckin, avaliacoes] =
-    await Promise.all([
-      pode.ferias ? montarBlocoFerias(sessao) : Promise.resolve(null),
-      pode.solicitacoes
-        ? montarBlocoSolicitacoes(sessao.usuario_id)
-        : Promise.resolve(null),
-      pode.beneficios
-        ? montarBlocoBeneficios(sessao.usuario_id, colaboradorId)
-        : Promise.resolve(null),
-      pode.documentos
-        ? montarBlocoDocumentos(sessao.usuario_id)
-        : Promise.resolve(null),
-      pode.checkin ? montarBlocoCheckin(sessao) : Promise.resolve(null),
-      montarBlocoAvaliacoes(colaboradorId),
-    ]);
+  const [
+    blocoFerias,
+    blocoSolicitacoes,
+    blocoBeneficios,
+    blocoDependentes,
+    blocoDocumentos,
+    blocoCheckin,
+    avaliacoes,
+  ] = await Promise.all([
+    pode.ferias ? montarBlocoFerias(sessao) : Promise.resolve(null),
+    pode.solicitacoes
+      ? montarBlocoSolicitacoes(sessao.usuario_id)
+      : Promise.resolve(null),
+    pode.beneficios
+      ? montarBlocoBeneficios(sessao.usuario_id, colaboradorId)
+      : Promise.resolve(null),
+    pode.dependentes
+      ? montarBlocoDependentes(colaboradorId)
+      : Promise.resolve(null),
+    pode.documentos
+      ? montarBlocoDocumentos(sessao.usuario_id)
+      : Promise.resolve(null),
+    pode.checkin ? montarBlocoCheckin(sessao) : Promise.resolve(null),
+    montarBlocoAvaliacoes(colaboradorId),
+  ]);
 
   return {
     pode,
@@ -495,6 +748,7 @@ export async function montarPortal(
     ferias: blocoFerias,
     solicitacoes: blocoSolicitacoes,
     beneficios: blocoBeneficios,
+    dependentes: blocoDependentes,
     documentos: blocoDocumentos,
     avaliacoes,
     checkin: blocoCheckin,

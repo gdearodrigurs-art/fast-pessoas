@@ -327,6 +327,28 @@
   resize: vertical;
 }
 
+/* Campo cujo conteúdo veio da regra e ainda não passou por ninguém. A borda
+   tracejada é o ponto: valor escolhido e valor herdado deixam de ter a mesma
+   aparência, que era exatamente como o valor da tabela virava o valor da
+   pessoa sem ninguém decidir. */
+.campoSugerido {
+  border-style: dashed;
+  border-color: #b58a00;
+  background: #fffdf5;
+}
+
+.marcaSugestao {
+  font-size: 12px;
+  color: #8a6a00;
+  margin: 4px 0 0;
+}
+
+.marcaEscolhido {
+  font-size: 12px;
+  color: #6b6763;
+  margin: 4px 0 0;
+}
+
 .linhaCampos {
   display: flex;
   gap: 10px;

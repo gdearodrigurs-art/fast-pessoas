@@ -1,6 +1,7 @@
 import { PoolClient } from "pg";
 import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
+import { mensagemSemFicha } from "../../lib/ficha-de-colaborador";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
 import { exigirVigenciaNaoFutura } from "../../lib/vigencia";
@@ -43,7 +44,6 @@ import {
   NovaRegra,
   ROTULOS_CATEGORIA,
   ROTULOS_STATUS_ADESAO,
-  SolicitacaoAdesao,
 } from "./esquemas";
 import {
   adesoesParaTransferir,
@@ -84,7 +84,6 @@ import {
   perfilPorUsuario,
   RegraVersao,
   SolicitacaoBeneficio,
-  temAdesaoVigente,
   UnidadeOpcao,
   atualizarBeneficio as atualizarBeneficioNoBanco,
   atualizarDependente as atualizarDependenteNoBanco,
@@ -96,7 +95,6 @@ const TABELA_ADESAO = "rh.adesao";
 const TABELA_DEPENDENTE = "rh.dependente";
 const TABELA_DEMANDA = "rh.demanda";
 
-const PREFIXO_ADESAO = "Adesão ao benefício";
 const PREFIXO_CANCELAMENTO = "Cancelamento do benefício";
 
 function formatarData(dataIso: string): string {
@@ -233,9 +231,16 @@ export async function montarVisao(
     listarBeneficios(false),
     perfilPorUsuario(sessao.usuario_id),
   ]);
-  const ativosComRegra = todosBeneficios.filter(
-    (item) => item.ativo && item.regra !== null
-  );
+  // ATIVO BASTA — a regra deixou de ser portão.
+  //
+  // Aqui se filtrava `ativo && regra !== null`, e o critério da regra ainda
+  // peneirava o catálogo pessoa a pessoa. Duas consequências que a onda H
+  // desfaz: benefício recém-criado ficava invisível até alguém publicar uma
+  // versão de regra (o DP não conseguia conceder o que acabara de cadastrar), e
+  // a lista que a pessoa via prometia direito por um critério que agora não
+  // decide mais nada. O catálogo diz o que EXISTE; quem concede é o DP, e a
+  // regra entra só como valor de referência na hora de conceder.
+  const ativos = todosBeneficios.filter((item) => item.ativo);
 
   let catalogo: ItemCatalogo[] = [];
   let minhasAdesoes: AdesaoResumo[] = [];
@@ -265,24 +270,20 @@ export async function montarVisao(
         )
         .map((item) => item.beneficio_id)
     );
-    catalogo = ativosComRegra
-      .filter((item) =>
-        atendeCriterio(item.regra?.criterio ?? {}, {
-          tipo_vinculo: perfil.tipo_vinculo,
-          estabelecimento_id: perfil.estabelecimento_id,
-        })
-      )
-      .map((item) => ({
-        beneficio_id: item.id,
-        chave: item.chave,
-        nome: item.nome,
-        categoria: item.categoria,
-        categoria_rotulo: ROTULOS_CATEGORIA[item.categoria],
-        valor_padrao: item.regra?.valor_padrao ?? null,
-        desconto_padrao: item.regra?.desconto_padrao ?? null,
-        ja_aderido: vigentes.some((adesao) => adesao.beneficio_id === item.id),
-        solicitacao_pendente: pendentesAdesao.has(item.id),
-      }));
+    catalogo = ativos.map((item) => ({
+      beneficio_id: item.id,
+      chave: item.chave,
+      nome: item.nome,
+      categoria: item.categoria,
+      categoria_rotulo: ROTULOS_CATEGORIA[item.categoria],
+      valor_padrao: item.regra?.valor_padrao ?? null,
+      desconto_padrao: item.regra?.desconto_padrao ?? null,
+      ja_aderido: vigentes.some((adesao) => adesao.beneficio_id === item.id),
+      // Só sobrevive para os pedidos abertos ANTES de a candidatura acabar: não
+      // nasce mais nenhum, e a tela usa isto para dizer à pessoa que o pedido
+      // antigo dela ainda está na fila do DP.
+      solicitacao_pendente: pendentesAdesao.has(item.id),
+    }));
   }
 
   let gestao: VisaoBeneficios["gestao"] = null;
@@ -300,7 +301,7 @@ export async function montarVisao(
       ),
       adesoes,
       colaboradores,
-      beneficios: ativosComRegra,
+      beneficios: ativos,
     };
   }
 
@@ -511,17 +512,33 @@ export async function criarVersaoRegra(
   return atualizado;
 }
 
-// ------------------------------------------------------------------ solicitação do colaborador (via demanda)
+// ------------------------------------------------------------------ pedido de cancelamento (via demanda)
+//
+// A ADESÃO NÃO SE PEDE MAIS. Aqui existia `solicitarAdesao`: o colaborador se
+// candidatava, a candidatura virava demanda e o DP efetivava. A Diretora de
+// Pessoas encerrou esse modelo ("benefícios sem candidatura, só reajuste",
+// docs/11 §3; onda H1 em docs/10, "a pessoa já entra com direito; o botão
+// solicitar adesão desaparece"). Conceder é ato do DP — `efetivarAdesao`.
+//
+// O CANCELAMENTO CONTINUA SENDO PEDIDO PELO TITULAR. O que ela tirou foi a
+// candidatura, não a voz de quem quer sair do plano: quem paga coparticipação
+// tem de conseguir dizer "quero sair" sem depender de achar alguém do DP.
 
-function exigirPerfilAtivo(perfil: PerfilBeneficios | null): PerfilBeneficios {
+async function exigirPerfilAtivo(
+  usuarioId: number,
+  perfil: PerfilBeneficios | null
+): Promise<PerfilBeneficios> {
   if (!perfil) {
-    throw new ErroHttp(
-      400,
-      "Sua conta não tem ficha de colaborador — procure o DP."
-    );
+    // Dois fatos diferentes, uma frase só era o defeito: "procure o DP" dito a
+    // uma conta administrativa manda a diretora procurar quem está abaixo dela.
+    // `mensagemSemFicha` separa conta sem pessoa de vínculo encerrado.
+    throw new ErroHttp(400, await mensagemSemFicha(usuarioId));
   }
   if (perfil.status === "desligado") {
-    throw new ErroHttp(409, "Colaborador desligado não solicita benefício.");
+    throw new ErroHttp(
+      409,
+      "Colaborador desligado não movimenta benefício — procure o DP."
+    );
   }
   return perfil;
 }
@@ -581,69 +598,15 @@ async function abrirDemandaBeneficio(
   return resumo;
 }
 
-export async function solicitarAdesao(
-  sessao: PayloadSessao,
-  dados: SolicitacaoAdesao
-): Promise<SolicitacaoBeneficio> {
-  const perfil = exigirPerfilAtivo(await perfilPorUsuario(sessao.usuario_id));
-  const beneficio = await buscarBeneficio(dados.beneficio_id);
-  if (!beneficio || !beneficio.ativo) {
-    throw new ErroHttpCampo(404, "Benefício não encontrado.", "beneficio_id");
-  }
-  if (!beneficio.regra) {
-    throw new ErroHttpCampo(
-      409,
-      "Benefício sem regra de elegibilidade vigente — procure o DP.",
-      "beneficio_id"
-    );
-  }
-  if (
-    !atendeCriterio(beneficio.regra.criterio, {
-      tipo_vinculo: perfil.tipo_vinculo,
-      estabelecimento_id: perfil.estabelecimento_id,
-    })
-  ) {
-    throw new ErroHttpCampo(
-      403,
-      "Você não é elegível a este benefício pela regra vigente.",
-      "beneficio_id"
-    );
-  }
-  if (await temAdesaoVigente(perfil.colaborador_id, beneficio.id)) {
-    throw new ErroHttpCampo(
-      409,
-      "Você já tem adesão vigente a este benefício.",
-      "beneficio_id"
-    );
-  }
-  if (
-    await existeSolicitacaoPendente(
-      sessao.usuario_id,
-      PREFIXO_ADESAO,
-      beneficio.chave
-    )
-  ) {
-    throw new ErroHttpCampo(
-      409,
-      "Você já tem solicitação de adesão em andamento para este benefício.",
-      "beneficio_id"
-    );
-  }
-  const descricao = montarDescricaoSolicitacao(
-    "adesao",
-    beneficio.nome,
-    beneficio.chave,
-    dados.observacao
-  );
-  return abrirDemandaBeneficio(sessao, perfil.colaborador_id, descricao);
-}
-
 export async function solicitarCancelamento(
   sessao: PayloadSessao,
   adesaoId: number,
   motivo: string
 ): Promise<SolicitacaoBeneficio> {
-  const perfil = exigirPerfilAtivo(await perfilPorUsuario(sessao.usuario_id));
+  const perfil = await exigirPerfilAtivo(
+    sessao.usuario_id,
+    await perfilPorUsuario(sessao.usuario_id)
+  );
   const adesao = await buscarAdesaoResumo(adesaoId);
   if (!adesao || adesao.colaborador_id !== perfil.colaborador_id) {
     // Ausência, não máscara: adesão de outra pessoa não existe para quem pede.
@@ -755,6 +718,21 @@ async function exigirDemandaAberta(
   return demanda;
 }
 
+/**
+ * O DP CONCEDE o benefício a uma pessoa, com o valor DAQUELA pessoa.
+ *
+ * Era "efetivar o que o colaborador pediu"; virou o ato de origem. `demanda_id`
+ * continua aceito para despachar as adesões pedidas ANTES de a candidatura
+ * acabar — a fila que já existia não some, ela é atendida.
+ *
+ * A regra de elegibilidade deixou de barrar. Ela não some: continua versionada,
+ * continua explicando adesões antigas e continua dando o valor de referência
+ * que a tela sugere. O que ela perdeu foi o poder de dizer "não" no lugar do
+ * DP — quem sabe se a pessoa tem direito é quem concede, e o critério de hoje
+ * não cabe em todo caso real (o motoboy que passou a usar transporte, a pessoa
+ * transferida de unidade na véspera). O que a pessoa NÃO atendia fica gravado
+ * na trilha, em vez de virar 409: o ato continua legível depois.
+ */
 export async function efetivarAdesao(
   sessao: PayloadSessao,
   dados: EfetivacaoAdesao
@@ -779,25 +757,14 @@ export async function efetivarAdesao(
     if (!beneficio || !beneficio.ativo) {
       throw new ErroHttpCampo(404, "Benefício não encontrado.", "beneficio_id");
     }
-    if (!beneficio.regra) {
-      throw new ErroHttpCampo(
-        409,
-        "Benefício sem regra de elegibilidade vigente.",
-        "beneficio_id"
-      );
-    }
-    if (
-      !atendeCriterio(beneficio.regra.criterio, {
-        tipo_vinculo: perfil.tipo_vinculo,
-        estabelecimento_id: perfil.estabelecimento_id,
-      })
-    ) {
-      throw new ErroHttpCampo(
-        409,
-        "Colaborador não é elegível a este benefício pela regra vigente.",
-        "colaborador_id"
-      );
-    }
+    // Não barra; anota. Sem regra vigente não há critério, e isso também é fato
+    // a registrar — o benefício novo é concedível no dia em que é cadastrado.
+    const dentroDoCriterio = beneficio.regra
+      ? atendeCriterio(beneficio.regra.criterio, {
+          tipo_vinculo: perfil.tipo_vinculo,
+          estabelecimento_id: perfil.estabelecimento_id,
+        })
+      : null;
     let demanda: DemandaBeneficio | null = null;
     if (dados.demanda_id !== undefined) {
       demanda = await exigirDemandaAberta(cliente, dados.demanda_id, "adesao");
@@ -809,9 +776,10 @@ export async function efetivarAdesao(
         );
       }
     }
-    // Omitido = congela o padrão da regra vigente na adesão.
-    const valor = dados.valor ?? beneficio.regra.valor_padrao;
-    const desconto = dados.desconto ?? beneficio.regra.desconto_padrao;
+    // Vêm do pedido, sempre — o esquema já os tornou obrigatórios. Nada de
+    // `?? beneficio.regra.valor_padrao`: era esse `??` que fazia o valor da
+    // pessoa nascer escolhido pelo sistema quando o DP deixava o campo vazio.
+    const { valor, desconto } = dados;
     let novaId: number;
     try {
       novaId = await inserirAdesao(cliente, {
@@ -856,6 +824,21 @@ export async function efetivarAdesao(
         "Início": { de: null, para: formatarData(dados.inicio) },
         Valor: { de: null, para: formatarMoeda(valor) },
         Desconto: { de: null, para: formatarMoeda(desconto) },
+        // O que a regra sugeria, ao lado do que o DP concedeu. É isto que
+        // torna o reajuste individual auditável: sem a referência, ninguém
+        // consegue dizer depois se R$ 600 foi escolha ou tabela. E é aqui que
+        // a elegibilidade não atendida aparece, já que deixou de ser 409.
+        "Referência da regra": {
+          de: null,
+          para: beneficio.regra
+            ? `valor ${formatarMoeda(beneficio.regra.valor_padrao)} · desconto ` +
+              `${formatarMoeda(beneficio.regra.desconto_padrao)} (versão desde ` +
+              `${formatarData(beneficio.regra.inicio_vigencia)})` +
+              (dentroDoCriterio === false
+                ? " — concedido FORA do critério desta versão"
+                : "")
+            : "benefício sem versão de regra vigente",
+        },
         Demanda: {
           de: null,
           para: demanda ? formatarNumeroDemanda(demanda.numero) : "registro direto",

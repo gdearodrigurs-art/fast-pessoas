@@ -7,14 +7,20 @@
  * CONSOLIDAÇÃO: nenhuma tabela nova, nenhuma migration. Todo bloco lê dado
  * que já existe pelo serviço do domínio dono.
  *
- * Não há esquema zod de entrada aqui de propósito: o portal é SÓ LEITURA e o
- * alvo é sempre o colaborador da sessão. Não existe parâmetro para validar —
- * e é justamente essa ausência que fecha a porta para IDOR (ver
+ * O portal nasceu SÓ LEITURA, e por isso não tinha esquema zod de entrada. A
+ * onda H5 abriu a primeira — e só — escrita: o colaborador mantém os PRÓPRIOS
+ * dependentes. Os esquemas de entrada estão no fim deste arquivo e seguem a
+ * mesma defesa contra IDOR do resto do portal: NENHUM deles tem
+ * `colaborador_id`. O alvo continua saindo da sessão, e a ausência do campo é
+ * o que fecha a porta — não uma validação que pode falhar (ver
  * colaborador-servico.ts).
  */
 
+import { z } from "zod";
 import type { StatusDemanda } from "../demandas/esquemas";
+import { PARENTESCOS, ROTULOS_PARENTESCO } from "../beneficios/esquemas";
 import type { StatusAdesao } from "../beneficios/esquemas";
+import { cpfValido } from "../colaboradores/esquemas";
 import type { StatusCiclo, TipoCiclo } from "../avaliacao/esquemas";
 
 // ------------------------------------------------------------------ blocos
@@ -142,18 +148,73 @@ export interface BeneficioElegivel {
   solicitacao_pendente: boolean;
 }
 
-export interface MeuDependente {
-  id: number;
-  nome: string;
-  parentesco_rotulo: string;
-  nascimento: string;
-}
-
 export interface BlocoBeneficios {
   ativos: MinhaAdesao[];
   elegiveis_sem_adesao: BeneficioElegivel[];
-  dependentes: MeuDependente[];
 }
+
+/**
+ * Bloco 4b — Meus dependentes.
+ *
+ * SAIU DE DENTRO DE `BlocoBeneficios` na onda H5, e a mudança não é cosmética.
+ * Enquanto era só leitura, dependente cabia como rodapé do cartão de
+ * benefícios. Ao virar CADASTRO ele deixou de caber por dois motivos:
+ *
+ *   1. a chave passou a ser outra. O cartão de benefícios responde por
+ *      `adesao.solicitar`; o cadastro do próprio dependente responde por
+ *      `dependente.proprio.manter` (migration 0056). Quem perder uma não pode
+ *      perder a outra de carona — e a Onda H1 vai esvaziar justamente a
+ *      primeira;
+ *   2. dependente não é assunto só de benefício. Ele conta na dedução de IRRF
+ *      (folha/repositorio.ts:452). Deixá-lo dentro do cartão de plano de saúde
+ *      contaria ao colaborador metade do que aquele cadastro faz.
+ */
+export interface MeuDependente {
+  id: number;
+  nome: string;
+  /** Valor cru — a tela precisa dele para pré-selecionar o campo na edição. */
+  parentesco: string;
+  parentesco_rotulo: string;
+  nascimento: string;
+  /**
+   * O CPF do dependente NÃO viaja para a tela — só a notícia de que existe.
+   *
+   * Minimização por desenho, herdada da migration 0009 e mantida de propósito
+   * agora que a pessoa pode escrever: dado de menor de idade que sai do banco
+   * é dado que pode ficar em cache de navegador, em log de proxy e em captura
+   * de tela. Para conferir se está certo o colaborador redigita; para tirar,
+   * limpa o campo. A trilha de auditoria segue a mesma régua e grava
+   * "informado"/"removido", nunca o número.
+   */
+  cpf_informado: boolean;
+}
+
+/** Opção do seletor de parentesco — ver `parentescos_possiveis`. */
+export interface OpcaoParentesco {
+  valor: string;
+  rotulo: string;
+}
+
+export interface BlocoDependentes {
+  itens: MeuDependente[];
+  /**
+   * A lista vem do SERVIDOR, e não de um `<option>` escrito na tela.
+   *
+   * Hoje ela é curta e fixa: `CHECK (parentesco IN ('filho','conjuge','outro'))`
+   * na migration 0009 — um literal de negócio dentro de uma CHECK, que é
+   * exatamente o que o eixo 9 chama de chumbado (mesmo formato que a 0054 teve
+   * de desfazer para as categorias de devolução). Não é esta onda que resolve
+   * isso, e a decisão é do dono. Mandar a lista pelo payload é o que torna a
+   * correção barata quando ela vier: no dia em que `parentesco` virar catálogo
+   * administrável, muda o servidor e a tela não sabe que mudou.
+   */
+  parentescos_possiveis: OpcaoParentesco[];
+}
+
+/** O seletor de hoje, montado do domínio — nunca digitado na tela. */
+export const PARENTESCOS_POSSIVEIS: OpcaoParentesco[] = PARENTESCOS.map(
+  (valor) => ({ valor, rotulo: ROTULOS_PARENTESCO[valor] })
+);
 
 /** Bloco 5 — Meus documentos. */
 export interface MeuDocumento {
@@ -218,11 +279,13 @@ export interface PortalColaborador {
     beneficios: boolean;
     documentos: boolean;
     checkin: boolean;
+    dependentes: boolean;
   };
   meus_dados: MeusDados;
   ferias: BlocoFerias | null;
   solicitacoes: BlocoSolicitacoes | null;
   beneficios: BlocoBeneficios | null;
+  dependentes: BlocoDependentes | null;
   documentos: BlocoDocumentos | null;
   avaliacoes: BlocoAvaliacoes;
   checkin: BlocoCheckin | null;
@@ -303,3 +366,57 @@ export function tempoDeCasa(dataAdmissao: string, hoje: string): string {
   }
   return partes.join(" e ");
 }
+
+// ------------------------------------------------------- entrada (a única do portal)
+//
+// O QUE NÃO ESTÁ AQUI É O QUE IMPORTA: não existe `colaborador_id`.
+//
+// O esquema do DP (beneficios/esquemas.ts:232) tem o campo, e tem que ter — o
+// DP cadastra dependente DE OUTRA PESSOA, e o id é a única forma de dizer de
+// quem. Aqui não há de quem dizer: o titular é o dono da sessão. Se o campo
+// existisse, mesmo ignorado, a próxima pessoa a mexer neste arquivo teria de
+// descobrir sozinha que ele não vale — e é assim que IDOR volta.
+
+/** Data civil, no mesmo formato dos outros domínios. */
+const esquemaData = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
+  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
+    message: "Data inválida",
+  });
+
+/**
+ * CPF do dependente: opcional (recém-nascido pode não ter), mas quando vem tem
+ * de ser CPF de verdade. Digito verificador conferido pela MESMA função do
+ * domínio de colaboradores — um CPF inválido gravado aqui vira rejeição no
+ * eSocial meses depois, longe de quem digitou.
+ */
+const esquemaCpf = z
+  .string()
+  .trim()
+  .transform((valor) => valor.replace(/\D/g, ""))
+  .refine((valor) => valor === "" || cpfValido(valor), { message: "CPF inválido" })
+  .transform((valor) => (valor === "" ? null : valor));
+
+export const esquemaMeuDependenteNovo = z.object({
+  nome: z.string().trim().min(3, "Informe o nome do dependente").max(200),
+  nascimento: esquemaData,
+  parentesco: z.enum(PARENTESCOS),
+  /** Ausente = não informado; string vazia = não informado (o campo em branco). */
+  cpf: esquemaCpf.nullable().optional(),
+});
+
+export type MeuDependenteNovo = z.infer<typeof esquemaMeuDependenteNovo>;
+
+export const esquemaMeuDependenteEdicao = z
+  .object({
+    nome: z.string().trim().min(3, "Informe o nome do dependente").max(200).optional(),
+    nascimento: esquemaData.optional(),
+    parentesco: z.enum(PARENTESCOS).optional(),
+    cpf: esquemaCpf.nullable().optional(),
+  })
+  .refine((dados) => Object.values(dados).some((valor) => valor !== undefined), {
+    message: "Informe ao menos um campo para atualizar",
+  });
+
+export type MeuDependenteEdicao = z.infer<typeof esquemaMeuDependenteEdicao>;

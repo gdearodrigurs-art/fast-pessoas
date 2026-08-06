@@ -15,6 +15,7 @@
 | 4 | Folha: 5º dia corrido ou útil | Guilherme | 30/07/2026 | indicador de prazo de fechamento |
 | 5 | Lista de rubricas e layout dos importadores | Diego | 29/07/2026 | folha completa, importação |
 | 6 | Balde anônimo já gravado com corte errado | Guilherme | 01/08/2026 | nada hoje; conta na implantação |
+| 7 | Benefício na transferência entre CNPJs: o critério ainda barra | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
 
 ---
 
@@ -128,3 +129,44 @@ essa trava existe para impedir.
 **Por que isso é barato hoje e caro depois:** o banco atual só tem dado fictício. Essa decisão vira
 séria no dia da implantação — se a correção não estiver feita **antes** da primeira pesquisa real,
 não haverá mais como escolher.
+
+---
+
+## 7 · Na transferência entre CNPJs, o critério da regra ainda decide o que atravessa
+
+**Onde está:** `fast-pessoas/src/dominios/beneficios/servico.ts` —
+`transferirAdesoesEntreVinculos`, na linha do `atendeCriterio(adesao.criterio, perfilDestino)`;
+e a mesma lógica gravada em `db/migrations/0051_beneficio_atravessa_a_transferencia.sql:60-77`.
+
+**O que mudou em volta dela.** Na onda H (06/08/2026) a regra de elegibilidade deixou de ser portão:
+a pessoa já entra com direito, quem concede é o DP, e o critério da regra virou **valor de
+referência** — ele não recusa mais concessão em lugar nenhum. Em lugar nenhum **exceto aqui**. Na
+transferência entre CNPJs o benefício continua sendo encerrado no vínculo velho e **só renasce no
+vínculo novo se o critério do destino admitir a pessoa**; se não admitir, ele fica para trás e a
+pessoa é informada disso no cartão da movimentação.
+
+**Minha decisão: manter como está por enquanto** — e é por isso que estou perguntando em vez de
+mudar.
+
+**A favor de manter:** benefício é contrato do EMPREGADOR com a operadora, não da pessoa. Quando o
+contrato de trabalho muda de CNPJ, a apólice muda de titular; a empresa B pode simplesmente não ter
+plano odontológico. O critério ali não está funcionando como "elegibilidade da pessoa", está
+funcionando como "o que a empresa de destino oferece" — que é outra pergunta, e continua legítima.
+Foi essa regra que fechou um buraco real: o RH via cinco adesões vigentes numa matrícula encerrada e
+a pessoa via zero.
+
+**Contra, e é real:** a mesma tabela agora significa duas coisas. No ato do DP ela é sugestão de
+valor; na transferência ela é portão. Um DP que conceder VT a um PJ (o que hoje é permitido e fica
+registrado na trilha) verá esse VT **sumir sozinho** na primeira transferência entre CNPJs, porque o
+critério do destino diz "só CLT". Nada na tela avisa que a regra tem esse segundo poder.
+
+**As duas saídas, se a resposta for "mudar":**
+1. **Atravessa tudo, e o DP corta o que a empresa nova não oferece.** Coerente com "a pessoa já entra
+   com direito", e o corte fica sendo um ato com autor. Custo: a lista de adesões do vínculo novo
+   pode nascer com benefício que a empresa B não tem contrato para pagar.
+2. **Separar as duas perguntas:** criar no catálogo do benefício quais empresas o oferecem (hoje o
+   critério mistura tipo de vínculo com unidade), e a transferência passa a olhar essa lista, não o
+   critério de elegibilidade. É a resposta certa e a mais cara.
+
+**O que trava:** nada hoje — o comportamento continua o de antes. Vira sério na primeira
+transferência real entre CNPJs depois de o DP começar a conceder fora do critério.

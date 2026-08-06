@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cabecalho, acaoCabecalho } from "@/app/cabecalho";
 import type {
   BeneficioElegivel,
   BlocoAvaliacoes,
   BlocoBeneficios,
   BlocoCheckin,
+  BlocoDependentes,
   BlocoDocumentos,
   BlocoFerias,
   BlocoSolicitacoes,
@@ -42,6 +43,7 @@ interface Visao {
   ferias: BlocoFerias | null;
   solicitacoes: BlocoSolicitacoes | null;
   beneficios: BlocoBeneficios | null;
+  dependentes: BlocoDependentes | null;
   documentos: BlocoDocumentos | null;
   avaliacoes: BlocoAvaliacoes;
   checkin: BlocoCheckin | null;
@@ -369,9 +371,12 @@ function LinhaElegivel({ beneficio }: { beneficio: BeneficioElegivel }) {
           </>
         )}
       </p>
+      {/* "Você já pediu" era verdade enquanto a adesão nascia de pedido. Na H1
+          ela virou ato do DP, e a frase passaria a mentir para quem tem uma
+          demanda antiga ainda na fila — por isso ela diz o que de fato há. */}
       <span className={estilos.metaItem}>
         {beneficio.solicitacao_pendente
-          ? "Você já pediu — aguardando o DP efetivar"
+          ? "Há um pedido seu na fila do DP, de antes da mudança"
           : `Valor de tabela ${formatarMoeda(beneficio.valor_padrao)} · desconto ${formatarMoeda(beneficio.desconto_padrao)}`}
       </span>
     </li>
@@ -384,7 +389,10 @@ function CartaoBeneficios({ bloco }: { bloco: BlocoBeneficios }) {
       <div className={estilos.cabecalhoCartao}>
         <h2>Meus benefícios</h2>
         <Link className={estilos.ligacao} href="/beneficios">
-          Aderir ou cancelar →
+          {/* Aderir saiu na H1 — quem concede é o DP. Cancelar continua sendo
+              do titular: a diretora tirou a candidatura, não a voz de quem
+              quer sair. */}
+          Pedir cancelamento →
         </Link>
       </div>
       {bloco.ativos.length === 0 ? (
@@ -431,29 +439,16 @@ function CartaoBeneficios({ bloco }: { bloco: BlocoBeneficios }) {
         </div>
       )}
 
-      <h3 className={estilos.metaItem}>Meus dependentes</h3>
-      {bloco.dependentes.length === 0 ? (
-        <p className={estilos.vazio}>
-          Nenhum dependente cadastrado. Inclusão de dependente é feita pelo DP.
-        </p>
-      ) : (
-        <ul className={estilos.lista}>
-          {bloco.dependentes.map((dependente) => (
-            <li className={estilos.itemLista} key={dependente.id}>
-              <p>{dependente.nome}</p>
-              <span className={estilos.metaItem}>
-                {dependente.parentesco_rotulo} · nascimento{" "}
-                {formatarData(dependente.nascimento)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* Dependentes saíram daqui na H5 — viraram cartão próprio, com chave
+          própria (`dependente.proprio.manter`) e cadastro do titular. */}
 
-      <h3 className={estilos.metaItem}>Você é elegível e ainda não aderiu</h3>
+      {/* Na H1 a adesão deixou de ser pedida pelo colaborador: quem concede é o
+          DP. Esta lista continua útil como "o que existe e você não tem", mas
+          parou de ser um convite a aderir — não há mais botão. */}
+      <h3 className={estilos.metaItem}>Disponíveis que você ainda não tem</h3>
       {bloco.elegiveis_sem_adesao.length === 0 ? (
         <p className={estilos.vazio}>
-          Você já aderiu a tudo a que tem direito hoje.
+          Você já tem tudo o que se aplica ao seu caso hoje.
         </p>
       ) : (
         <ul className={estilos.lista}>
@@ -469,6 +464,195 @@ function CartaoBeneficios({ bloco }: { bloco: BlocoBeneficios }) {
         Os valores acima são os da tabela vigente. O cálculo do que entra no
         holerite (teto de 6% do VT, PAT e incidências) é feito na folha.
       </p>
+    </section>
+  );
+}
+
+/**
+ * Meus dependentes — o primeiro lugar do portal onde o colaborador ESCREVE.
+ *
+ * Saiu de dentro do cartão de benefícios na H5 porque virou cadastro, e cadastro
+ * responde por outra chave (`dependente.proprio.manter`). Nenhuma das operações
+ * manda `colaborador_id`: o titular sai da sessão, no servidor. O id de linha
+ * que editar e excluir precisam nomear é reconferido contra o titular dentro da
+ * transação — id alheio devolve o mesmo 404 de id inexistente.
+ */
+function CartaoDependentes({
+  bloco,
+  aoMudar,
+}: {
+  bloco: BlocoDependentes;
+  aoMudar: () => void;
+}) {
+  const [aberto, setAberto] = useState(false);
+  const [editando, setEditando] = useState<number | null>(null);
+  const [nome, setNome] = useState("");
+  const [nascimento, setNascimento] = useState("");
+  const [parentesco, setParentesco] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  function limpar() {
+    setAberto(false);
+    setEditando(null);
+    setNome("");
+    setNascimento("");
+    setParentesco("");
+    setErro(null);
+  }
+
+  async function gravar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setEnviando(true);
+    setErro(null);
+    try {
+      const corpo = { nome, nascimento, parentesco };
+      const resposta = await fetch(
+        editando === null
+          ? "/api/portais/colaborador/dependentes"
+          : `/api/portais/colaborador/dependentes/${editando}`,
+        {
+          method: editando === null ? "POST" : "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(corpo),
+        }
+      );
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        limpar();
+        aoMudar();
+      } else {
+        setErro(dados.erro ?? "Não foi possível gravar o dependente.");
+      }
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  async function remover(id: number) {
+    setEnviando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(
+        `/api/portais/colaborador/dependentes/${id}`,
+        { method: "DELETE" }
+      );
+      if (resposta.ok) {
+        aoMudar();
+      } else {
+        const dados = await resposta.json().catch(() => ({}));
+        setErro(dados.erro ?? "Não foi possível remover o dependente.");
+      }
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <section className={estilos.cartao}>
+      <h2>Meus dependentes</h2>
+      <p className={estilos.metaItem}>
+        Você mesmo mantém esta lista. Ela conta na dedução de imposto de renda e
+        nos benefícios que se estendem a dependente.
+      </p>
+
+      {bloco.itens.length === 0 ? (
+        <p className={estilos.vazio}>Nenhum dependente cadastrado.</p>
+      ) : (
+        <ul className={estilos.lista}>
+          {bloco.itens.map((dependente) => (
+            <li className={estilos.itemLista} key={dependente.id}>
+              <p>{dependente.nome}</p>
+              <span className={estilos.metaItem}>
+                {dependente.parentesco_rotulo} · nascimento{" "}
+                {formatarData(dependente.nascimento)}
+              </span>{" "}
+              <button
+                className={estilos.ligacao}
+                type="button"
+                disabled={enviando}
+                onClick={() => {
+                  setEditando(dependente.id);
+                  setNome(dependente.nome);
+                  setNascimento(dependente.nascimento);
+                  setParentesco(dependente.parentesco);
+                  setAberto(true);
+                  setErro(null);
+                }}
+              >
+                editar
+              </button>{" "}
+              <button
+                className={estilos.ligacao}
+                type="button"
+                disabled={enviando}
+                onClick={() => remover(dependente.id)}
+              >
+                remover
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {!aberto ? (
+        <button
+          className={estilos.ligacao}
+          type="button"
+          onClick={() => setAberto(true)}
+        >
+          + Acrescentar dependente
+        </button>
+      ) : (
+        <form onSubmit={gravar}>
+          {/* Campos nascem vazios ao acrescentar: quem escolhe é a pessoa. */}
+          <input
+            aria-label="Nome do dependente"
+            placeholder="Nome completo"
+            required
+            minLength={3}
+            maxLength={200}
+            value={nome}
+            onChange={(e) => setNome(e.target.value)}
+            disabled={enviando}
+          />{" "}
+          <input
+            aria-label="Data de nascimento"
+            type="date"
+            required
+            value={nascimento}
+            onChange={(e) => setNascimento(e.target.value)}
+            disabled={enviando}
+          />{" "}
+          {/* A lista vem do servidor — no dia em que parentesco virar catálogo
+              administrável, a tela não precisa saber que mudou. */}
+          <select
+            aria-label="Parentesco"
+            required
+            value={parentesco}
+            onChange={(e) => setParentesco(e.target.value)}
+            disabled={enviando}
+          >
+            <option value="">Escolha…</option>
+            {bloco.parentescos_possiveis.map((opcao) => (
+              <option key={opcao.valor} value={opcao.valor}>
+                {opcao.rotulo}
+              </option>
+            ))}
+          </select>{" "}
+          <button type="submit" disabled={enviando}>
+            {enviando ? "Gravando…" : editando === null ? "Acrescentar" : "Salvar"}
+          </button>{" "}
+          <button type="button" onClick={limpar} disabled={enviando}>
+            Cancelar
+          </button>
+        </form>
+      )}
+      {erro && <p className={estilos.vazio}>{erro}</p>}
     </section>
   );
 }
@@ -741,31 +925,44 @@ export function PortalColaborador() {
     };
   }, []);
 
+  // Recarrega a visão inteira. A H5 abriu ESCRITA no portal (dependentes), e
+  // depois de gravar o payload muda — em vez de remendar o estado local, o
+  // servidor volta a ser a única verdade.
+  const recarregar = useCallback(async () => {
+    try {
+      const resposta = await fetch("/api/portais/colaborador", {
+        cache: "no-store",
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        setVisao(dados as Visao);
+        setErro(null);
+      } else {
+        setErro(
+          (dados as { erro?: string }).erro ?? "Falha ao carregar o portal."
+        );
+      }
+    } catch {
+      setErro("Falha de rede ao carregar o portal.");
+    } finally {
+      setCarregando(false);
+    }
+  }, []);
+
+  // A carga inicial mantém a forma guardada do resto do arquivo: a escrita de
+  // estado acontece DEPOIS do await e só se o componente ainda estiver montado.
+  // Chamar `recarregar()` cru aqui faria o estado ser escrito de dentro do
+  // efeito, que é o que a regra react-hooks/set-state-in-effect barra.
   useEffect(() => {
     let ativo = true;
-    (async () => {
-      try {
-        const resposta = await fetch("/api/portais/colaborador");
-        const dados = await resposta.json().catch(() => ({}));
-        if (!ativo) return;
-        if (resposta.ok) {
-          setVisao(dados as Visao);
-          setErro(null);
-        } else {
-          setErro(
-            (dados as { erro?: string }).erro ?? "Falha ao carregar o portal."
-          );
-        }
-      } catch {
-        if (ativo) setErro("Falha de rede ao carregar o portal.");
-      } finally {
-        if (ativo) setCarregando(false);
-      }
+    void (async () => {
+      if (!ativo) return;
+      await recarregar();
     })();
     return () => {
       ativo = false;
     };
-  }, []);
+  }, [recarregar]);
 
   return (
     <div className={estilos.pagina}>
@@ -803,6 +1000,12 @@ export function PortalColaborador() {
               )}
               {visao.beneficios !== null && (
                 <CartaoBeneficios bloco={visao.beneficios} />
+              )}
+              {visao.dependentes !== null && (
+                <CartaoDependentes
+                  bloco={visao.dependentes}
+                  aoMudar={recarregar}
+                />
               )}
               {visao.documentos !== null && (
                 <CartaoDocumentos bloco={visao.documentos} />

@@ -55,11 +55,20 @@ const esquemaData = z
     message: "Data inválida",
   });
 
-const esquemaValor = z
-  .number()
-  .min(0, "Valor não pode ser negativo")
-  .max(9_999_999, "Valor acima do limite")
-  .transform((valor) => Math.round(valor * 100) / 100);
+/**
+ * Dinheiro na borda. A frase entra por parâmetro porque a mensagem que importa
+ * é a do campo AUSENTE: sem ela o DP recebe "expected number, received
+ * undefined" quando esquece o valor da pessoa, e não há tela que traduza isso.
+ */
+function esquemaDinheiro(frase: string) {
+  return z
+    .number({ error: frase })
+    .min(0, "Valor não pode ser negativo")
+    .max(9_999_999, "Valor acima do limite")
+    .transform((valor) => Math.round(valor * 100) / 100);
+}
+
+const esquemaValor = esquemaDinheiro("Informe um valor em reais");
 
 const esquemaCpf = z
   .string()
@@ -150,7 +159,7 @@ export function descreverCriterio(
 
 // A regra de elegibilidade é lida por STATUS, não por data: o `LEFT JOIN` de
 // `SELECT_BENEFICIO` (repositorio.ts) casa por `r.status = 'ativa'`, e é esse
-// mesmo join que alimenta o catálogo do colaborador, `solicitarAdesao`,
+// mesmo join que alimenta o catálogo do colaborador, o valor sugerido em
 // `efetivarAdesao` e o critério que decide o que atravessa a transferência
 // entre CNPJs. Logo, versão gravada hoje com início em 2027 passa a mandar
 // HOJE — e ainda encerra a versão que de fato vale com `fim_vigencia` em
@@ -179,12 +188,13 @@ export type NovaRegra = z.infer<typeof esquemaNovaRegra>;
 
 // ------------------------------------------------------------------ adesão
 
-export const esquemaSolicitacaoAdesao = z.object({
-  beneficio_id: z.number().int().positive(),
-  observacao: z.string().trim().max(2000, "Observação longa demais").optional(),
-});
-
-export type SolicitacaoAdesao = z.infer<typeof esquemaSolicitacaoAdesao>;
+// A ADESÃO NÃO SE PEDE. Decisão da Diretora de Pessoas ("benefícios sem
+// candidatura, só reajuste", docs/11 §3; onda H1 em docs/10): a pessoa já entra
+// com direito e quem concede é o DP. Por isso não existe mais um
+// `esquemaSolicitacaoAdesao` — a única porta de entrada de adesão é
+// `esquemaEfetivacaoAdesao`, abaixo, e ela exige o valor DAQUELA pessoa.
+// O cancelamento continua sendo pedido pelo titular: o que a diretora tirou foi
+// a candidatura, não a voz de quem quer sair.
 
 export const esquemaSolicitacaoCancelamento = z.object({
   motivo: z
@@ -198,12 +208,30 @@ export type SolicitacaoCancelamento = z.infer<
   typeof esquemaSolicitacaoCancelamento
 >;
 
+// CONCESSÃO PELO DP — o valor é DAQUELA PESSOA, e alguém tem de escolhê-lo.
+//
+// `valor` e `desconto` eram opcionais, e o serviço caía no `valor_padrao` da
+// regra vigente quando vinham em branco. Isso é o defeito conhecido deste
+// projeto — campo que nasce escolhido pelo sistema sem ninguém escolher: o DP
+// dava Enter e o VT daquela pessoa virava o R$ 264,00 da tabela, sem que nada
+// na tela dissesse que uma escolha tinha sido feita. Mediu-se em 06/08/2026, no
+// banco de desenvolvimento: em 4 dos 6 benefícios TODAS as adesões tinham o
+// mesmo valor (VR: 69 adesões, 1 valor; VA: 59, 1; farmácia: 62, 1). A onda H2
+// é literalmente "valor individual por pessoa (VT de R$ 600 para um, R$ 720
+// para outro)"; com o preenchimento silencioso, todo mundo recebia o mesmo.
+//
+// Agora os dois são OBRIGATÓRIOS. A regra vigente continua existindo e continua
+// dando o número — mas como SUGESTÃO que a tela preenche e marca como sugestão,
+// não como preenchimento invisível do servidor. Sem desconto é `0`, digitado;
+// zero escolhido e ausência de escolha deixam de ser a mesma coisa.
 export const esquemaEfetivacaoAdesao = z.object({
   colaborador_id: z.number().int().positive(),
   beneficio_id: z.number().int().positive(),
   inicio: esquemaData,
-  valor: esquemaValor.optional(),
-  desconto: esquemaValor.optional(),
+  valor: esquemaDinheiro("Informe o valor do benefício para esta pessoa"),
+  desconto: esquemaDinheiro(
+    "Informe o desconto em folha para esta pessoa (0 se não há desconto)"
+  ),
   demanda_id: z.number().int().positive().optional(),
 });
 
@@ -269,7 +297,12 @@ const PREFIXOS: Record<NaturezaSolicitacao, string> = {
   cancelamento: "Cancelamento do benefício",
 };
 
-/** Descrição estruturada da demanda — a chave do benefício viaja no texto. */
+/**
+ * Descrição estruturada da demanda — a chave do benefício viaja no texto.
+ *
+ * `adesao` continua no tipo e no prefixo porque ainda é preciso LER as demandas
+ * de adesão abertas antes de a candidatura acabar; ninguém mais as ESCREVE.
+ */
 export function montarDescricaoSolicitacao(
   natureza: NaturezaSolicitacao,
   nome: string,

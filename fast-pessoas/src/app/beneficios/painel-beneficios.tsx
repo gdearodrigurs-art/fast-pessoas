@@ -23,7 +23,6 @@ import {
   Adesao,
   Beneficio,
   Dependente,
-  ItemCatalogo,
   RegraVersao,
   Solicitacao,
   UnidadeOpcao,
@@ -32,10 +31,10 @@ import {
 
 type AbaPrincipal = "meus" | "gerir" | "catalogo";
 
+// Não há `{ tipo: "solicitar" }`: o colaborador não pede mais adesão (onda H1).
 type Dialogo =
-  | { tipo: "solicitar"; item: ItemCatalogo }
   | { tipo: "cancelamento_titular"; adesao: Adesao }
-  | { tipo: "efetivar"; solicitacao?: Solicitacao }
+  | { tipo: "conceder"; solicitacao?: Solicitacao }
   | { tipo: "negar"; solicitacao: Solicitacao }
   | { tipo: "cancelar_adesao"; adesao: Adesao; solicitacao?: Solicitacao }
   | { tipo: "beneficio"; beneficio?: Beneficio }
@@ -172,53 +171,10 @@ function useEnvio(
 }
 
 // ------------------------------------------------------------------ diálogos do titular
-
-function DialogoSolicitarAdesao({
-  item,
-  aoFechar,
-  aoConcluir,
-}: {
-  item: ItemCatalogo;
-  aoFechar: () => void;
-  aoConcluir: () => void;
-}) {
-  const [observacao, setObservacao] = useState("");
-  const [enviando, erro, executar] = useEnvio(aoConcluir);
-  return (
-    <CascaDialogo
-      titulo={`Solicitar adesão — ${item.nome}`}
-      sub="A solicitação vira uma demanda para o DP validar e efetivar."
-      textoEnviar="Solicitar adesão"
-      enviando={enviando}
-      erro={erro}
-      aoFechar={aoFechar}
-      aoEnviar={(evento) => {
-        evento.preventDefault();
-        executar(() =>
-          requisitar("/api/beneficios/adesoes/solicitar", "POST", {
-            beneficio_id: item.beneficio_id,
-            observacao: observacao.trim() === "" ? undefined : observacao,
-          })
-        );
-      }}
-    >
-      <p className={estilos.dica}>
-        Valor de referência: {formatarMoeda(item.valor_padrao)} · Desconto de
-        referência: {formatarMoeda(item.desconto_padrao)}
-      </p>
-      <label className={estilos.rotuloCampo} htmlFor="obs-adesao">
-        Observações (opcional)
-      </label>
-      <textarea
-        className={`${estilos.campo} ${estilos.campoTexto}`}
-        id="obs-adesao"
-        maxLength={2000}
-        value={observacao}
-        onChange={(evento) => setObservacao(evento.target.value)}
-      />
-    </CascaDialogo>
-  );
-}
+//
+// `DialogoSolicitarAdesao` existia aqui. Saiu com a onda H1: a pessoa já entra
+// com direito e quem concede é o DP. O pedido de CANCELAMENTO fica — o que
+// acabou foi a candidatura, não a voz de quem quer sair do plano.
 
 function DialogoCancelamentoTitular({
   adesao,
@@ -267,7 +223,80 @@ function DialogoCancelamentoTitular({
 
 // ------------------------------------------------------------------ diálogos do DP
 
-function DialogoEfetivar({
+/** Texto do número como o campo `number` espera — "" quando não há sugestão. */
+function textoDeReais(valor: number | null | undefined): string {
+  return valor === null || valor === undefined ? "" : String(valor);
+}
+
+/**
+ * O campo de dinheiro da concessão, com a sugestão VISÍVEL como sugestão.
+ *
+ * O defeito que isto fecha: o valor da pessoa nascia preenchido pelo servidor
+ * quando o DP deixava o campo vazio, e nada na tela dizia que uma escolha
+ * tinha sido feita. Agora a regra vigente preenche o campo — mas o campo diz,
+ * embaixo, que aquele número veio da tabela e ainda não passou por ninguém. No
+ * primeiro toque do DP a marca muda para "valor desta pessoa", e o caminho de
+ * volta à sugestão continua a um clique.
+ */
+function CampoDinheiroSugerido({
+  id,
+  rotulo,
+  valor,
+  sugestao,
+  ehSugestao,
+  origemSugestao,
+  aoDigitar,
+  aoRestaurar,
+}: {
+  id: string;
+  rotulo: string;
+  valor: string;
+  sugestao: number | null;
+  ehSugestao: boolean;
+  origemSugestao: string | null;
+  aoDigitar: (texto: string) => void;
+  aoRestaurar: () => void;
+}) {
+  return (
+    <div>
+      <label className={estilos.rotuloCampo} htmlFor={id}>
+        {rotulo}
+      </label>
+      <input
+        className={`${estilos.campo} ${ehSugestao ? estilos.campoSugerido : ""}`}
+        id={id}
+        type="number"
+        min={0}
+        step="0.01"
+        required
+        value={valor}
+        onChange={(evento) => aoDigitar(evento.target.value)}
+      />
+      {ehSugestao ? (
+        <p className={estilos.marcaSugestao}>
+          sugerido pela regra {origemSugestao} — confirme ou troque
+        </p>
+      ) : sugestao !== null ? (
+        <p className={estilos.marcaEscolhido}>
+          valor desta pessoa ·{" "}
+          <button
+            className={estilos.ligacaoLeve}
+            type="button"
+            onClick={aoRestaurar}
+          >
+            voltar à sugestão ({formatarMoeda(sugestao)})
+          </button>
+        </p>
+      ) : (
+        <p className={estilos.marcaEscolhido}>
+          a regra vigente não traz referência — o valor é o que você informar
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DialogoConceder({
   solicitacao,
   visao,
   aoFechar,
@@ -280,31 +309,61 @@ function DialogoEfetivar({
 }) {
   const beneficios = visao.gestao?.beneficios ?? [];
   const colaboradores = visao.gestao?.colaboradores ?? [];
+  const beneficioInicial = solicitacao?.beneficio_id
+    ? String(solicitacao.beneficio_id)
+    : "";
+  // A sugestão da demanda antiga também tem de aparecer já preenchida — por
+  // isso o estado nasce da regra, e não vazio com um `useEffect` depois.
+  const regraInicial =
+    beneficios.find((item) => String(item.id) === beneficioInicial)?.regra ??
+    null;
+
   const [colaboradorId, setColaboradorId] = useState(
     solicitacao?.solicitante_colaborador_id
       ? String(solicitacao.solicitante_colaborador_id)
       : ""
   );
-  const [beneficioId, setBeneficioId] = useState(
-    solicitacao?.beneficio_id ? String(solicitacao.beneficio_id) : ""
-  );
+  const [beneficioId, setBeneficioId] = useState(beneficioInicial);
   const [inicio, setInicio] = useState(hojeLocal());
-  const [valor, setValor] = useState("");
-  const [desconto, setDesconto] = useState("");
+  const [valor, setValor] = useState(textoDeReais(regraInicial?.valor_padrao));
+  const [desconto, setDesconto] = useState(
+    textoDeReais(regraInicial?.desconto_padrao)
+  );
+  // "Ninguém escolheu isto ainda." Vira false no primeiro toque do DP.
+  const [valorSugerido, setValorSugerido] = useState(
+    regraInicial?.valor_padrao != null
+  );
+  const [descontoSugerido, setDescontoSugerido] = useState(
+    regraInicial?.desconto_padrao != null
+  );
   const [enviando, erro, executar] = useEnvio(aoConcluir);
 
   const beneficio = beneficios.find((item) => String(item.id) === beneficioId);
+  const regra = beneficio?.regra ?? null;
   const veioDeSolicitacao = solicitacao !== undefined;
+  const origemSugestao = regra
+    ? `vigente desde ${formatarData(regra.inicio_vigencia)}`
+    : null;
+
+  function trocarBeneficio(novoId: string) {
+    setBeneficioId(novoId);
+    const nova =
+      beneficios.find((item) => String(item.id) === novoId)?.regra ?? null;
+    setValor(textoDeReais(nova?.valor_padrao));
+    setDesconto(textoDeReais(nova?.desconto_padrao));
+    setValorSugerido(nova?.valor_padrao != null);
+    setDescontoSugerido(nova?.desconto_padrao != null);
+  }
 
   return (
     <CascaDialogo
-      titulo="Efetivar adesão"
+      titulo="Conceder benefício"
       sub={
         veioDeSolicitacao
-          ? `Solicitação ${formatarNumeroDemanda(solicitacao.numero)} de ${solicitacao.solicitante_nome} — será concluída junto.`
-          : "Registro direto pelo DP, sem demanda de origem."
+          ? `Pedido ${formatarNumeroDemanda(solicitacao.numero)} de ${solicitacao.solicitante_nome}, do tempo em que se pedia adesão — será concluído junto.`
+          : "Ato do DP: a pessoa já tem direito. Informe o valor dela."
       }
-      textoEnviar="Efetivar"
+      textoEnviar="Conceder"
       enviando={enviando}
       erro={erro}
       aoFechar={aoFechar}
@@ -322,12 +381,12 @@ function DialogoEfetivar({
         );
       }}
     >
-      <label className={estilos.rotuloCampo} htmlFor="efetivar-colaborador">
+      <label className={estilos.rotuloCampo} htmlFor="conceder-colaborador">
         Colaborador
       </label>
       <select
         className={estilos.campo}
-        id="efetivar-colaborador"
+        id="conceder-colaborador"
         required
         disabled={veioDeSolicitacao}
         value={colaboradorId}
@@ -340,16 +399,16 @@ function DialogoEfetivar({
           </option>
         ))}
       </select>
-      <label className={estilos.rotuloCampo} htmlFor="efetivar-beneficio">
+      <label className={estilos.rotuloCampo} htmlFor="conceder-beneficio">
         Benefício
       </label>
       <select
         className={estilos.campo}
-        id="efetivar-beneficio"
+        id="conceder-beneficio"
         required
         disabled={veioDeSolicitacao && solicitacao.beneficio_id !== null}
         value={beneficioId}
-        onChange={(evento) => setBeneficioId(evento.target.value)}
+        onChange={(evento) => trocarBeneficio(evento.target.value)}
       >
         <option value="">Selecione…</option>
         {beneficios.map((item) => (
@@ -358,57 +417,54 @@ function DialogoEfetivar({
           </option>
         ))}
       </select>
-      <label className={estilos.rotuloCampo} htmlFor="efetivar-inicio">
+      <label className={estilos.rotuloCampo} htmlFor="conceder-inicio">
         Início da vigência
       </label>
       <input
         className={estilos.campo}
-        id="efetivar-inicio"
+        id="conceder-inicio"
         type="date"
         required
         value={inicio}
         onChange={(evento) => setInicio(evento.target.value)}
       />
       <div className={estilos.linhaCampos}>
-        <div>
-          <label className={estilos.rotuloCampo} htmlFor="efetivar-valor">
-            Valor (R$)
-          </label>
-          <input
-            className={estilos.campo}
-            id="efetivar-valor"
-            type="number"
-            min={0}
-            step="0.01"
-            placeholder={
-              beneficio ? formatarMoeda(beneficio.regra?.valor_padrao ?? null) : ""
-            }
-            value={valor}
-            onChange={(evento) => setValor(evento.target.value)}
-          />
-        </div>
-        <div>
-          <label className={estilos.rotuloCampo} htmlFor="efetivar-desconto">
-            Desconto (R$)
-          </label>
-          <input
-            className={estilos.campo}
-            id="efetivar-desconto"
-            type="number"
-            min={0}
-            step="0.01"
-            placeholder={
-              beneficio
-                ? formatarMoeda(beneficio.regra?.desconto_padrao ?? null)
-                : ""
-            }
-            value={desconto}
-            onChange={(evento) => setDesconto(evento.target.value)}
-          />
-        </div>
+        <CampoDinheiroSugerido
+          id="conceder-valor"
+          rotulo="Valor (R$)"
+          valor={valor}
+          sugestao={regra?.valor_padrao ?? null}
+          ehSugestao={valorSugerido}
+          origemSugestao={origemSugestao}
+          aoDigitar={(texto) => {
+            setValor(texto);
+            setValorSugerido(false);
+          }}
+          aoRestaurar={() => {
+            setValor(textoDeReais(regra?.valor_padrao));
+            setValorSugerido(regra?.valor_padrao != null);
+          }}
+        />
+        <CampoDinheiroSugerido
+          id="conceder-desconto"
+          rotulo="Desconto em folha (R$)"
+          valor={desconto}
+          sugestao={regra?.desconto_padrao ?? null}
+          ehSugestao={descontoSugerido}
+          origemSugestao={origemSugestao}
+          aoDigitar={(texto) => {
+            setDesconto(texto);
+            setDescontoSugerido(false);
+          }}
+          aoRestaurar={() => {
+            setDesconto(textoDeReais(regra?.desconto_padrao));
+            setDescontoSugerido(regra?.desconto_padrao != null);
+          }}
+        />
       </div>
       <p className={estilos.dica}>
-        Em branco, valor e desconto congelam o padrão da regra vigente.
+        Os dois são obrigatórios e valem só para esta pessoa: o VT de um pode ser
+        R$ 600 e o de outro R$ 720. Sem desconto em folha, informe 0.
       </p>
     </CascaDialogo>
   );
@@ -1019,9 +1075,9 @@ export function PainelBeneficios() {
               <button
                 className={estilos.botaoPrimario}
                 type="button"
-                onClick={() => setDialogo({ tipo: "efetivar", solicitacao: item })}
+                onClick={() => setDialogo({ tipo: "conceder", solicitacao: item })}
               >
-                Efetivar adesão
+                Conceder benefício
               </button>
             )}
             {item.natureza === "cancelamento" && adesaoAlvo && (
@@ -1149,15 +1205,16 @@ export function PainelBeneficios() {
             <button
               className={estilos.botaoPrimario}
               type="button"
-              onClick={() => setDialogo({ tipo: "efetivar" })}
+              onClick={() => setDialogo({ tipo: "conceder" })}
             >
-              + Efetivar adesão direta
+              + Conceder benefício
             </button>
           )}
         </div>
         <p className={estilos.subtitulo}>
-          Catálogo, elegibilidade e adesões — solicitações passam pelo motor de
-          demandas até a efetivação pelo DP.
+          Catálogo, regras de referência e adesões — conceder é ato do DP, com o
+          valor de cada pessoa; o pedido de cancelamento continua sendo do
+          titular.
         </p>
 
         {erro && <p className={estilos.erro}>{erro}</p>}
@@ -1207,8 +1264,8 @@ export function PainelBeneficios() {
               <>
                 {!visao.perfil && (
                   <p className={estilos.aviso}>
-                    Sua conta não tem ficha de colaborador — benefícios são
-                    solicitados pela ficha. Procure o DP.
+                    Sua conta não está ligada a uma ficha de colaborador —
+                    benefício é concedido a um vínculo, e esta conta não tem um.
                   </p>
                 )}
                 {visao.perfil && (
@@ -1221,11 +1278,15 @@ export function PainelBeneficios() {
 
                 <section className={estilos.area}>
                   <h2 className={estilos.tituloArea}>
-                    Catálogo elegível para você
+                    Benefícios da empresa
                   </h2>
+                  <p className={estilos.dica}>
+                    Quem concede é o DP, com o valor de cada pessoa — não há
+                    mais pedido de adesão. Falta algum? Procure o DP.
+                  </p>
                   {visao.catalogo.length === 0 ? (
                     <p className={estilos.vazio}>
-                      Nenhum benefício elegível no momento.
+                      Nenhum benefício ativo no catálogo.
                     </p>
                   ) : (
                     <div className={estilos.gradeCatalogo}>
@@ -1240,32 +1301,28 @@ export function PainelBeneficios() {
                             </span>
                           </div>
                           <div className={estilos.meta}>
-                            valor {formatarMoeda(item.valor_padrao)} · desconto{" "}
-                            {formatarMoeda(item.desconto_padrao)}
+                            {/* Valor de TABELA, não o desta pessoa: o dela está
+                                na adesão, em "Minhas adesões". */}
+                            tabela: valor {formatarMoeda(item.valor_padrao)} ·
+                            desconto {formatarMoeda(item.desconto_padrao)}
                           </div>
                           <div className={estilos.acoes}>
                             {item.ja_aderido ? (
                               <span
                                 className={`${estilos.badge} ${estilos.badgeSuccess}`}
                               >
-                                Você já aderiu
+                                Você tem
                               </span>
                             ) : item.solicitacao_pendente ? (
                               <span
                                 className={`${estilos.badge} ${estilos.badgeWarning}`}
                               >
-                                Solicitação em andamento
+                                Pedido antigo na fila do DP
                               </span>
                             ) : (
-                              <button
-                                className={estilos.botaoPrimario}
-                                type="button"
-                                onClick={() =>
-                                  setDialogo({ tipo: "solicitar", item })
-                                }
-                              >
-                                Solicitar adesão
-                              </button>
+                              <span className={estilos.meta}>
+                                Concedido pelo DP
+                              </span>
                             )}
                           </div>
                         </div>
@@ -1286,9 +1343,9 @@ export function PainelBeneficios() {
                 </section>
 
                 <section className={estilos.area}>
-                  <h2 className={estilos.tituloArea}>Minhas solicitações</h2>
+                  <h2 className={estilos.tituloArea}>Meus pedidos</h2>
                   {visao.minhas_solicitacoes.length === 0 ? (
-                    <p className={estilos.vazio}>Nenhuma solicitação.</p>
+                    <p className={estilos.vazio}>Nenhum pedido.</p>
                   ) : (
                     visao.minhas_solicitacoes.map((item) =>
                       cartaoSolicitacao(item, false)
@@ -1327,9 +1384,12 @@ export function PainelBeneficios() {
             {abaPrincipal === "gerir" && visao.gestao && (
               <>
                 <section className={estilos.area}>
-                  <h2 className={estilos.tituloArea}>
-                    Solicitações pendentes
-                  </h2>
+                  <h2 className={estilos.tituloArea}>Pedidos pendentes</h2>
+                  <p className={estilos.dica}>
+                    Cancelamentos pedidos pelo titular e as adesões que ficaram
+                    na fila do tempo em que se pedia adesão — conceda ou negue;
+                    pedido novo de adesão não entra mais.
+                  </p>
                   {visao.gestao.solicitacoes_pendentes.length === 0 ? (
                     <p className={estilos.vazio}>Nada pendente.</p>
                   ) : (
@@ -1552,13 +1612,6 @@ export function PainelBeneficios() {
       </main>
 
       {/* ---------------------------------------------- diálogos */}
-      {dialogo?.tipo === "solicitar" && (
-        <DialogoSolicitarAdesao
-          item={dialogo.item}
-          aoFechar={() => setDialogo(null)}
-          aoConcluir={recarregar}
-        />
-      )}
       {dialogo?.tipo === "cancelamento_titular" && (
         <DialogoCancelamentoTitular
           adesao={dialogo.adesao}
@@ -1566,8 +1619,8 @@ export function PainelBeneficios() {
           aoConcluir={recarregar}
         />
       )}
-      {dialogo?.tipo === "efetivar" && visao && (
-        <DialogoEfetivar
+      {dialogo?.tipo === "conceder" && visao && (
+        <DialogoConceder
           solicitacao={dialogo.solicitacao}
           visao={visao}
           aoFechar={() => setDialogo(null)}
