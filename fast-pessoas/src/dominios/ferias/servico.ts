@@ -1,6 +1,7 @@
 import { PoolClient } from "pg";
 import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
+import { mensagemSemFicha } from "../../lib/ficha-de-colaborador";
 import { ErroHttpCampo } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { inserirEvento } from "../colaboradores/repositorio";
@@ -486,10 +487,7 @@ export async function criarProgramacao(
 ): Promise<ProgramacaoResumo> {
   const colaboradorId = await colaboradorDoUsuario(sessao.usuario_id);
   if (colaboradorId === null) {
-    throw new ErroHttp(
-      409,
-      "Sua conta não está vinculada a uma ficha de colaborador — procure o DP."
-    );
+    throw new ErroHttp(409, await mensagemSemFicha(sessao.usuario_id));
   }
   const colaborador = await buscarColaborador(colaboradorId);
   if (!colaborador) {

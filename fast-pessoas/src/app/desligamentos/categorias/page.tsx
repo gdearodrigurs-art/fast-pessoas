@@ -29,5 +29,13 @@ export default async function PaginaCategoriasDevolucao() {
   if (!pode?.pode_administrar && !pode?.pode_ver) {
     redirect("/");
   }
-  return <PainelCategorias podeAdministrar={Boolean(pode?.pode_administrar)} />;
+  // `pode_ver` já era calculado e não era usado: a diretoria administra o
+  // catálogo (0054) mas NÃO tem desligamento.ver (0008), então o "←
+  // Desligamentos" a mandava para uma tela que a recusa e devolve à home.
+  return (
+    <PainelCategorias
+      podeAdministrar={Boolean(pode?.pode_administrar)}
+      podeVerDesligamentos={Boolean(pode?.pode_ver)}
+    />
+  );
 }

@@ -462,9 +462,12 @@ export function PainelFerias({
 
         {!carregando && visao && visao.colaborador_id === null && (
           <section className={estilos.cartao}>
+            {/* A tela não sabe se é conta administrativa (que nunca vai ter
+                ficha) ou vínculo encerrado (que o DP resolve), então diz o que
+                é verdade nos dois casos, sem prometer ação de ninguém. */}
             <p className={estilos.subtitulo}>
-              Sua conta não está vinculada a uma ficha de colaborador — os seus
-              períodos aquisitivos aparecem aqui quando o DP fizer o vínculo.
+              Sua conta não está vinculada a uma ficha de colaborador — sem
+              vínculo não há períodos aquisitivos para mostrar.
             </p>
           </section>
         )}

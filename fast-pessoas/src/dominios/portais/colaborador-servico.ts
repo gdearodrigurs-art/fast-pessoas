@@ -29,6 +29,7 @@
  * SALÁRIO: ausente. Ver o comentário de `MeusDados` em colaborador-esquemas.ts.
  */
 
+import { mensagemSemFicha } from "../../lib/ficha-de-colaborador";
 import { ROTULOS_TIPO_CICLO } from "../avaliacao/esquemas";
 import {
   atendeCriterio,
@@ -404,10 +405,7 @@ export async function montarPortal(
   // ÚNICA origem do alvo: a sessão. Nunca um parâmetro da requisição.
   const colaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
   if (colaboradorId === null) {
-    throw new ErroHttp(
-      409,
-      "Sua conta não está vinculada a uma ficha de colaborador — procure o DP."
-    );
+    throw new ErroHttp(409, await mensagemSemFicha(sessao.usuario_id));
   }
 
   // Oito chaves numa consulta só — ver `chavesConcedidas`.

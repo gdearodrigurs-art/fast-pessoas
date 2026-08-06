@@ -10,8 +10,11 @@ import estilos from "./page.module.css";
 
 export function PainelCategorias({
   podeAdministrar,
+  podeVerDesligamentos,
 }: {
   podeAdministrar: boolean;
+  /** Quem administra o catálogo nem sempre enxerga a fila de desligamentos. */
+  podeVerDesligamentos: boolean;
 }) {
   const [categorias, setCategorias] = useState<CategoriaDevolucao[] | null>(
     null
@@ -93,8 +96,11 @@ export function PainelCategorias({
       <Cabecalho />
 
       <main className={estilos.conteudo}>
-        <Link className={estilos.voltar} href="/desligamentos">
-          ← Desligamentos
+        <Link
+          className={estilos.voltar}
+          href={podeVerDesligamentos ? "/desligamentos" : "/"}
+        >
+          ← {podeVerDesligamentos ? "Desligamentos" : "Início"}
         </Link>
 
         <h1>Categorias de devolução</h1>
