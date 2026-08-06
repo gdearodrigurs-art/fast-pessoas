@@ -126,6 +126,37 @@
   color: #b58500;
 }
 
+/* Acrescentar item ao checklist — separado da lista por uma linha, para ler
+   como "e além disso", não como mais um item. */
+.novoItem {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed #e3e0dc;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.linhaNovoItem {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.linhaNovoItem input {
+  flex: 1 1 320px;
+}
+
+.marcaObrigatorio {
+  font-size: 12.5px;
+  color: #6b6763;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
 .vazio {
   color: #6b6763;
   font-style: italic;

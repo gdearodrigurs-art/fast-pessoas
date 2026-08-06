@@ -33,6 +33,12 @@ export function DetalheAdmissao({ id }: { id: number }) {
   const [cancelando, setCancelando] = useState(false);
   const [erroCancelamento, setErroCancelamento] = useState<string | null>(null);
 
+  // Nasce vazio de propósito — o texto do item é escolha de quem acrescenta.
+  const [descricaoNova, setDescricaoNova] = useState("");
+  const [obrigatorioNovo, setObrigatorioNovo] = useState(false);
+  const [adicionando, setAdicionando] = useState(false);
+  const [erroNovoItem, setErroNovoItem] = useState<string | null>(null);
+
   useEffect(() => {
     let ativo = true;
     (async () => {
@@ -76,6 +82,34 @@ export function DetalheAdmissao({ id }: { id: number }) {
       setErroAcao("Falha de conexão. Tente novamente.");
     } finally {
       setItemOcupado(null);
+    }
+  }
+
+  async function adicionarItem(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setAdicionando(true);
+    setErroNovoItem(null);
+    try {
+      const resposta = await fetch(`/api/admissoes/${id}/itens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          descricao: descricaoNova,
+          obrigatorio: obrigatorioNovo,
+        }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        setDetalhe(dados as Detalhe);
+        setDescricaoNova("");
+        setObrigatorioNovo(false);
+      } else {
+        setErroNovoItem(dados.erro ?? "Não foi possível acrescentar o item.");
+      }
+    } catch {
+      setErroNovoItem("Falha de conexão. Tente novamente.");
+    } finally {
+      setAdicionando(false);
     }
   }
 
@@ -125,6 +159,13 @@ export function DetalheAdmissao({ id }: { id: number }) {
     }
   }
 
+  // O servidor já conta os obrigatórios pendentes (é o que barra a conclusão);
+  // os opcionais pendentes só servem para avisar, então saem da lista que a
+  // tela já tem em mãos.
+  const opcionaisPendentes = (detalhe?.itens ?? []).filter(
+    (item) => item.status === "pendente" && !item.obrigatorio
+  ).length;
+
   return (
     <div className={estilos.pagina}>
       <Cabecalho />
@@ -170,6 +211,14 @@ export function DetalheAdmissao({ id }: { id: number }) {
                         item(ns) obrigatório(s) para liberar a conclusão.
                       </span>
                     )}
+                  {/* Item opcional pendente NÃO trava — mas quem conclui tem de
+                      saber que deixou algo para trás. Avisar, não bloquear. */}
+                  {detalhe.acoes.concluir && opcionaisPendentes > 0 && (
+                    <span className={estilos.dicaConcluir}>
+                      Dá para concluir, mas há {opcionaisPendentes} item(ns) não
+                      obrigatório(s) ainda pendente(s).
+                    </span>
+                  )}
                 </div>
               )}
               {erroAcao && <p className={comum.erroAcao}>{erroAcao}</p>}
@@ -251,6 +300,55 @@ export function DetalheAdmissao({ id }: { id: number }) {
                   )}
                 </div>
               ))}
+
+              {/* Acrescentar item ao processo já aberto. Não substitui checklist
+                  por cargo — é a válvula de escape para o que o template não
+                  previu, e nasce OPCIONAL: o obrigatório é o que a empresa
+                  firmou; o extra é lembrete, não portão. */}
+              {detalhe.acoes.tratar_itens && (
+                <form className={estilos.novoItem} onSubmit={adicionarItem}>
+                  <label
+                    className={comum.rotuloCampo}
+                    htmlFor="descricao-item-novo"
+                  >
+                    Adicionar documento ou item extra
+                  </label>
+                  <div className={estilos.linhaNovoItem}>
+                    <input
+                      className={comum.campo}
+                      id="descricao-item-novo"
+                      type="text"
+                      required
+                      minLength={3}
+                      maxLength={300}
+                      placeholder="ex.: comprovante de residência atualizado"
+                      value={descricaoNova}
+                      onChange={(e) => setDescricaoNova(e.target.value)}
+                      disabled={adicionando}
+                    />
+                    <button
+                      className={comum.botaoSecundario}
+                      type="submit"
+                      disabled={adicionando}
+                    >
+                      {adicionando ? "Adicionando…" : "Adicionar"}
+                    </button>
+                  </div>
+                  <label className={estilos.marcaObrigatorio}>
+                    <input
+                      type="checkbox"
+                      checked={obrigatorioNovo}
+                      onChange={(e) => setObrigatorioNovo(e.target.checked)}
+                      disabled={adicionando}
+                    />{" "}
+                    Marcar como obrigatório —{" "}
+                    <b>impede concluir o processo</b> enquanto estiver pendente
+                  </label>
+                  {erroNovoItem && (
+                    <p className={comum.erroAcao}>{erroNovoItem}</p>
+                  )}
+                </form>
+              )}
             </section>
           </>
         )}

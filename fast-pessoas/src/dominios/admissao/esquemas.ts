@@ -52,6 +52,25 @@ export const esquemaAtualizacaoItem = z.object({
 
 export type AtualizacaoItem = z.infer<typeof esquemaAtualizacaoItem>;
 
+/**
+ * Item acrescentado à mão a um processo já aberto.
+ *
+ * `obrigatorio` nasce FALSO por decisão do dono: o obrigatório é o que a empresa
+ * firmou no checklist; o extra é lembrete, não portão. Consequência assumida —
+ * ele não trava o "Concluir processo", que recusa por obrigatório pendente. Em
+ * troca, a tela avisa na hora de concluir que há item pendente.
+ */
+export const esquemaItemAvulso = z.object({
+  descricao: z
+    .string()
+    .trim()
+    .min(3, "Descreva o que falta em pelo menos 3 caracteres")
+    .max(300, "Descrição longa demais"),
+  obrigatorio: z.boolean().default(false),
+});
+
+export type ItemAvulso = z.infer<typeof esquemaItemAvulso>;
+
 export const esquemaCancelamento = z.object({
   motivo: z
     .string()

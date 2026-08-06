@@ -319,6 +319,34 @@ export async function inserirItens(
   );
 }
 
+/**
+ * Acrescenta UM item ao processo já aberto — o "adicionar documento extra".
+ *
+ * A ordem sai do maior que já existe + 1, calculada no próprio INSERT para não
+ * abrir espaço entre ler e gravar (`UNIQUE (processo_id, ordem)` recusaria).
+ * `item_admissao` não tem FK para o template: os itens são copiados na abertura
+ * e viram linhas comuns, então um a mais não viola nada.
+ */
+export async function inserirItemAvulso(
+  cliente: PoolClient,
+  processoId: number,
+  descricao: string,
+  obrigatorio: boolean
+): Promise<{ id: number; ordem: number }> {
+  const { rows } = await cliente.query<{ id: string; ordem: number }>(
+    `INSERT INTO rh.item_admissao (processo_id, ordem, descricao, obrigatorio)
+     SELECT $1,
+            COALESCE(MAX(ordem), 0) + 1,
+            $2,
+            $3
+       FROM rh.item_admissao
+      WHERE processo_id = $1
+     RETURNING id, ordem`,
+    [processoId, descricao, obrigatorio]
+  );
+  return { id: Number(rows[0].id), ordem: rows[0].ordem };
+}
+
 export async function buscarProcessoParaMutacao(
   cliente: PoolClient,
   id: number

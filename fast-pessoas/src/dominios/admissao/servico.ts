@@ -9,6 +9,7 @@ import {
   AberturaProcesso,
   calcularPrazosExperiencia,
   EstadoProcesso,
+  ItemAvulso,
   percentualConclusao,
   ROTULOS_ESTADO_PROCESSO,
   ROTULOS_STATUS_ITEM,
@@ -26,6 +27,7 @@ import {
   contarObrigatoriosPendentes,
   criarProcesso,
   ehGestorDoColaborador,
+  inserirItemAvulso,
   inserirItens,
   ItemProcesso,
   listarCandidatos,
@@ -292,6 +294,46 @@ export async function atualizarItem(
           de: ROTULOS_STATUS_ITEM[item.status],
           para: ROTULOS_STATUS_ITEM[status],
         },
+      },
+    });
+  });
+  return obterProcesso(sessao, processoId);
+}
+
+/**
+ * Acrescenta um item ao checklist de um processo já aberto.
+ *
+ * Só enquanto o processo está EM PREPARAÇÃO (`exigirProcessoEmPreparacao`):
+ * acrescentar item a processo concluído reabriria coisa fechada. Engano se
+ * corrige marcando "não aplicável", nunca apagando — é o que preserva o rastro,
+ * como no resto do projeto.
+ */
+export async function acrescentarItem(
+  sessao: PayloadSessao,
+  processoId: number,
+  dados: ItemAvulso
+): Promise<DetalheProcesso> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const processo = await exigirProcessoEmPreparacao(cliente, processoId);
+    const criado = await inserirItemAvulso(
+      cliente,
+      processoId,
+      dados.descricao,
+      dados.obrigatorio
+    );
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_ITEM,
+      registroId: String(criado.id),
+      diff: {
+        Processo: {
+          de: null,
+          para: `Admissão de ${processo.colaborador_nome} (matrícula ${processo.matricula})`,
+        },
+        Item: { de: null, para: dados.descricao },
+        Obrigatório: { de: null, para: dados.obrigatorio ? "sim" : "não" },
       },
     });
   });
