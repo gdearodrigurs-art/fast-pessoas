@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/12-esocial-obrigacoes.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "eSocial e obrigações digitais (domínio fiscal/) — transmissor próprio",
+  "summary": "Especificação funcional do canal fiscal próprio: gera, assina, transmite e monitora eventos eSocial, FGTS Digital, DCTFWeb e painel de obrigações por competência.",
+  "scope": ["eSocial", "fiscal/", "FGTS Digital", "DCTFWeb", "SST", "transmissor XML", "certificado digital", "painel de obrigações"],
+  "cross_refs": ["docs/02-arquitetura.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Self-labeled 'especificação funcional'. Dominant signals: event-to-origin mapping tables, state machine, XSD/XML contracts, SLAs de prazo, protocol/receipt schemas -> SPEC. Contains embedded closed decisions (folha própria, fronteira de domínio) but they are cited context, not the doc's primary form; recorded here without ADR reclassification."
+}

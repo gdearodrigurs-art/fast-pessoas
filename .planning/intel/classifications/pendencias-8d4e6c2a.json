@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/pendencias.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Pendências — o que está travado esperando alguém",
+  "summary": "Tracker of seven open blockers awaiting decisions from accounting, legal, or third parties, each with a recommended decision, rationale, and trade-offs.",
+  "scope": ["transferência entre CNPJs", "banco de horas", "limite concessivo de férias", "folha 5º dia útil", "rubricas e importadores", "balde anônimo de pesquisas", "benefícios na transferência"],
+  "cross_refs": ["db/migrations/0048_transferencia_entre_empresas.sql", "src/dominios/ferias/servico.ts", "src/dominios/folha/repositorio.ts", "db/migrations/0022_pesquisas.sql", "fast-pessoas/src/dominios/beneficios/servico.ts", "db/migrations/0051_beneficio_atravessa_a_transferencia.sql"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy blocker/decision tracker. Contains recommended decisions with pros/cons but these are open pending-approval items, not accepted ADRs (no Status:Accepted, no per-doc ADR structure, multiple unrelated topics). No user stories/acceptance criteria (not PRD) and no API/schema contracts (not SPEC). Classified DOC — context only."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/10-plano-pos-reuniao-diretoria.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Plano de execução — reunião com a Diretora de Pessoas",
+  "summary": "Plano consolidado pós-reunião: correções de premissa verificadas, decisões tomadas e ordem de execução em ondas (ponto, estrutura, benefícios, folha, recrutamento).",
+  "scope": ["controle de ponto", "banco de horas", "centro de custo", "lotação", "vínculos", "benefícios", "folha", "OLAC", "recrutamento", "portal do colaborador"],
+  "cross_refs": ["docs/11-achados-da-transcricao.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Roadmap/plan document consolidating meeting notes, verified premises, decisions, and execution waves. Contains a '## Decisões tomadas' section and many requirement-like items, but dominant structure is prose+tables planning narrative organized by execution ondas, not a single ADR, formal user-story PRD, or API/schema SPEC. Classified DOC (context/roadmap). Decisions embedded here (e.g. DP approves benefit revisions, three independent fields, OLAC file-first then API) may warrant separate ADR extraction by the synthesizer."
+}

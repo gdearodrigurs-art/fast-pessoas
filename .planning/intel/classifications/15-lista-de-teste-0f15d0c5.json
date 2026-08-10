@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/15-lista-de-teste.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Lista de teste — o sistema inteiro, caso a caso",
+  "summary": "Manual QA test checklist of 973 cases across 6 fronts, derived from each domain's code, plus admin/environment notes and 81 non-administrable findings.",
+  "scope": ["testes manuais", "núcleo", "benefícios", "SST", "folha de pagamento", "ponto", "avaliação 360", "recrutamento", "portais", "auditoria"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

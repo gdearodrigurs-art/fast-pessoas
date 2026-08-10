@@ -1,0 +1,26 @@
+{
+  "source_path": "C:/sistema RH/docs/11-achados-da-transcricao.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Achados da transcrição da reunião de 2026-07-30",
+  "summary": "Findings from cross-referencing a directors' meeting transcript against 18 prior notes, surfacing new requirements and open scope decisions.",
+  "scope": [
+    "ficha pública de colaborador",
+    "ciência do Código de Conduta",
+    "integração OLAC/Castor",
+    "correção de intercorrências de ponto",
+    "rubricas de folha",
+    "check-in de clima",
+    "importadores de carga inicial",
+    "diversidade IBGE",
+    "NR-1/avaliação psicossocial",
+    "checklist de admissão"
+  ],
+  "cross_refs": [
+    "docs/10-plano-pos-reuniao-diretoria.md"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy meeting-findings document. Surfaces requirements and open decisions but is not itself a formal PRD/SPEC/ADR (no user-story/acceptance structure, no decision/consequences sections, no API/schema contracts). Classified DOC (context)."
+}

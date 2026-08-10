@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/17-lista-de-execucao.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Lista de execução — reavaliada depois que o dono usou o sistema",
+  "summary": "Reordered execution roadmap for the Fast Pessoas HR system, reprioritizing waves after a hands-on user test session.",
+  "scope": ["execution ordering", "roadmap", "benefícios", "modelo/catálogo pattern", "folha", "disciplinar", "posse", "visibilidade", "painel executivo"],
+  "cross_refs": ["10-plano-pos-reuniao-diretoria.md", "16-caderno-do-teste.md", "pendencias.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy planning/roadmap doc. No frontmatter, no Decision/Consequences, no user stories, no API/schema tables. Dominant signal is narrative reprioritization of work waves -> DOC."
+}

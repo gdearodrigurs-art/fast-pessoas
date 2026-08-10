@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/02-ponto.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Controle de Ponto (domínio rh_ponto) — marcação via REP-P contratado, jornadas, escalas/turnos, tratamento de marcações, espelho, banco de horas e fechamento mensal de ponto",
+  "summary": "Especificação funcional do módulo de ponto: importa marcações do REP-P e gerencia jornadas, espelho, tratamento, banco de horas e fechamento em horas.",
+  "scope": ["rh_ponto", "REP-P/Pontomais", "jornadas versionadas", "escalas e calendário", "importação de marcações", "espelho de ponto", "tratamento de marcações", "fechamento mensal", "banco de horas", "rh_folha", "entidades de dados (jornada_versao, escala_colaborador, feriado, acordo_banco_horas_versao)"],
+  "cross_refs": ["docs/02-arquitetura.md", "Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

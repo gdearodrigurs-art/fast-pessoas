@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/08-ferias-afastamentos.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Férias e Afastamentos (módulo 08 — domínio rh)",
+  "summary": "Especificação técnica do módulo de férias e afastamentos: entidades, esquemas, papéis/permissões e integrações com ponto, folha própria e eSocial.",
+  "scope": ["ferias", "afastamentos", "periodo_aquisitivo", "programacao_ferias", "tipo_afastamento", "atestado/dado de saúde cifrado", "eSocial S-2230", "folha própria (módulo 03)", "espelho de ponto (módulo 02)", "motor de demandas (módulo 07)"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de módulo com forte carga técnica: entidades/esquemas de dados, tabela de papéis×recursos e contratos de integração → dominante SPEC. Contém também seções tipo-PRD (Objetivo, Funcionalidades/MVP), mas prevalece a maior precedência (SPEC>PRD). Status 'PROPOSTA' — não é ADR e não está locked. Path fora de pasta spec/prd/adr, sem frontmatter, por isso confiança medium. cross_refs vazio: referências a outros módulos são citadas por número, sem links/paths."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/04-critica-e-pendencias.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Crítica de completude e pendências",
+  "summary": "Análise crítica multi-agente das fontes de conhecimento, listando lacunas e pendências (alta/média/baixa) da arquitetura consolidada, com ações sugeridas.",
+  "scope": ["desligamento", "conector Nasajon", "identidade/usuários", "13º e folhas especiais", "REP-P/ponto", "canal externo de admissão", "entidade feriado", "direitos LGPD", "anonimização/temporalidade", "chave pgcrypto", "ciclos 45/90 da 360", "GED", "clima", "treinamentos"],
+  "cross_refs": ["Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

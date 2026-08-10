@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/06-clima.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Clima (rh_clima) — check-in diário simples: 5 emojis + texto opcional, tendências por equipe e alertas de queda",
+  "summary": "Especificação funcional do módulo de clima: check-in diário por emojis, modelo confidencial com acesso restrito, entidades de dados, papéis e permissões.",
+  "scope": ["módulo clima", "rh_clima", "check-in diário", "dashboard de tendência", "alertas de queda", "modelo de anonimato", "entidades de dados", "papéis e permissões", "lembrete n8n"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de módulo com forte carga de especificação técnica (schema rh_clima, tabelas checkin_resposta/agenda_checkin/alerta_clima, chave de permissão clima.resposta.individual.ver, matriz papel x recurso, fronteiras de dados) → SPEC dominante. Contém também requisitos de produto (Funcionalidades MVP) e uma decisão definitiva de anonimato (2026-07-27), mas o Status geral é PROPOSTA e o formato é especificação de módulo, não ADR. Confiança media pela mistura SPEC/PRD/decisão."
+}

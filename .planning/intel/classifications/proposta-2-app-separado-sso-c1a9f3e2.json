@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/anexos/proposta-2-app-separado-sso.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Fast RH — App separado com identidade compartilhada (SSO do Portal)",
+  "summary": "Proposta de arquitetura para um app Fast RH separado que reusa a identidade do Portal via SSO, replicando padrões de plataforma validados.",
+  "scope": ["Fast RH", "SSO", "PostgreSQL dedicado", "RLS", "RBAC", "auditoria", "integração Nasajon", "ponto REP-P", "avaliação 360", "clima", "folha", "LGPD"],
+  "cross_refs": ["Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md", "fast_kb_valores_fast.md", "docs/integracoes/", "docs/banco/"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Explicit 'Status: PROPOSTA — nada aqui é definitivo até validação expressa do usuário. Fase sem código.' Content mixes decision-rationale, domain model (SPEC-like tables/schemas), and phased roadmap, but is framed as a non-binding proposal, not an accepted ADR (not locked) nor a formal requirements/spec contract. Strong prose+rationale structure → DOC. Contains architectural decision language and domain schemas that a synthesizer may want to mine, but overall it is context/proposal, not a ratified artifact."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/01-avaliacao-fontes.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Avaliação das fontes de conhecimento",
+  "summary": "Multi-agent proposal comparing two knowledge sources, mapping convergences, conflicts and recommendations for a DP/RH system architecture.",
+  "scope": ["PostgreSQL", "auditoria imutável", "RBAC/RLS", "stack backend", "folha e ponto (Nasajon)", "avaliação 360", "LGPD", "DW SAP", "plataforma do portal"],
+  "cross_refs": ["Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md", "fast_kb_valores_fast.md", "schema.sql", "docs/banco/"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy multi-agent analysis explicitly marked 'PROPOSTA — nada definitivo'. Discusses decisions/convergences but is design rationale, not a single locked ADR, requirements list, or technical contract. Highest-precedence signal is contextual analysis -> DOC."
+}

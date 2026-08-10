@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/anexos/auditoria-btime-360.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Fast Pessoas — Auditoria crítica do mockup btime · Avaliação 360",
+  "summary": "Critical audit evaluating the btime 360-evaluation mockup against the module spec, ruling each component reuse/fix/discard.",
+  "scope": ["avaliação 360", "mockup btime", "motor de cálculo", "ciclos de experiência", "PDI", "card do colaborador", "ciência digital", "modelos de avaliação"],
+  "cross_refs": ["docs/03-modulos/05-avaliacao-360.md", "referencias/btime-avaliacao-360.html", "Ficha-Conhecimento-Portal-para-RH.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

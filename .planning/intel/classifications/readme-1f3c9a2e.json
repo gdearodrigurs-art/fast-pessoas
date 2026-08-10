@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/README.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Documentação de arquitetura — Sistema de RH/DP (Fast Pessoas)",
+  "summary": "Índice da documentação de arquitetura v2 do sistema de RH/DP Fast Pessoas, listando documentos centrais, módulos e históricos.",
+  "scope": ["arquitetura", "Fast Pessoas", "documentação", "módulos", "folha eSocial", "PostgreSQL"],
+  "cross_refs": ["02-arquitetura.md", "03-modulos/", "05-pesquisa-mercado.md", "01-avaliacao-fontes.md", "04-critica-e-pendencias.md", "anexos/", "../00_contexto/decisoes_arquiteturais.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

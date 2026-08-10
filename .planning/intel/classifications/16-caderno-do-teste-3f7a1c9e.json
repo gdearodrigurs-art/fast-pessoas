@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/16-caderno-do-teste.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Caderno do teste — o que o dono foi encontrando",
+  "summary": "Chronological live-testing logbook capturing what the owner found while walking the system, mixing findings, decisions, and requirements.",
+  "scope": ["estrutura", "perfis", "organograma", "vínculos", "configuração vs regra de negócio", "navegação da árvore"],
+  "cross_refs": ["src/dominios/identidade/esquemas.ts", "migration 0019"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy chronological test notebook. Contains '## Decisão' and '## Requisito' sections, but structured as running observational notes rather than a single locked ADR or a formal PRD/SPEC. Dominant form is a logbook of findings → DOC. Individual decisions/requirements embedded here may warrant separate extraction by the synthesizer."
+}

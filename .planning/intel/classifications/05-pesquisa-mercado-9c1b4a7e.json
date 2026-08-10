@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/05-pesquisa-mercado.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Pesquisa de mercado — ferramentas para incorporar ao sistema",
+  "summary": "Pesquisa verificada de ferramentas de RH/DP (ponto, folha, assinatura, clima, benefícios, admissão, SST) com vereditos de incorporação por integração.",
+  "scope": ["Pontomais", "Nasajon", "Clicksign", "ZapSign", "TeamCulture", "Caju", "Gupy", "SOC", "WhatsApp Cloud API", "integração de ferramentas RH/DP"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

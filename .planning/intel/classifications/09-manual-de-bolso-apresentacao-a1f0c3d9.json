@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/09-manual-de-bolso-apresentacao.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Manual de bolso — apresentação do Fast Pessoas",
+  "summary": "One-page presenter cheat sheet with a timed 24-minute demo script and setup steps for demoing the Fast Pessoas HR system.",
+  "scope": ["Fast Pessoas", "demo apresentação", "folha", "portais", "2FA", "personas de demonstração"],
+  "cross_refs": ["07-roteiro-demonstracao.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

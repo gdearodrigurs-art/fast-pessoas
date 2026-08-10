@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/anexos/proposta-3-modulo-portal.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Fast Pessoas — RH/DP como módulo do Portal (monorepo)",
+  "summary": "Proposta de arquitetura para construir o RH/DP Fast Pessoas como módulo do monorepo do Portal, herdando identidade, RBAC, auditoria e stack.",
+  "scope": ["Fast Pessoas", "Portal de Vendas", "monorepo", "RBAC", "auditoria", "isolamento de schema PostgreSQL", "folha (Nasajon)", "ponto (REP-P)", "avaliação 360", "clima"],
+  "cross_refs": ["Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md", "fast_kb_valores_fast.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Status explícito 'PROPOSTA — nada aqui é definitivo até validação'. Prose-heavy design/rationale cobrindo múltiplos domínios; contém tabelas de stack (sinal SPEC fraco) e decisões arquiteturais (sinal ADR fraco) mas nenhum status Accepted e nenhuma decisão única — dominante é documentação de proposta/racional → DOC. Ambiguidade ADR/SPEC/DOC resolvida por precedência de sinal e status não-aceito."
+}

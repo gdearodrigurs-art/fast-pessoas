@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/07-roteiro-demonstracao.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Roteiro de demonstração — Fast Pessoas (≈25 minutos)",
+  "summary": "Demonstration walkthrough script for presenting the Fast Pessoas DP/RH system, with setup steps and a suggested tour order.",
+  "scope": ["demonstração", "Fast Pessoas", "sistema DP/RH", "reset de dados", "build de produção"],
+  "cross_refs": ["fast-pessoas/db/semear/CREDENCIAIS-DEMO.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

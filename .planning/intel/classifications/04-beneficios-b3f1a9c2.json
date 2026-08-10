@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/04-beneficios.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Benefícios (rh_beneficios) — VT, VR/VA, plano de saúde/odonto, convênios, elegibilidade, adesão/cancelamento, desconto em folha e faturas de operadoras",
+  "summary": "Especificação técnica do módulo de benefícios: catálogo, elegibilidade versionada, adesão/cancelamento, modelo de dados, papéis, integrações e enquadramento regulatório.",
+  "scope": ["rh_beneficios", "vale-transporte", "VR/VA", "plano de saúde/odonto", "elegibilidade versionada", "adesão/cancelamento", "variáveis de folha", "faturas de operadoras", "modelo de dados", "papéis e permissões", "integrações"],
+  "cross_refs": ["docs/05-pesquisa-mercado.md", "docs/integracoes/"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Path docs/03-modulos suggests general module doc, but dominant structure is technical: data-model tables (entidades com campos/relações), permission keys, integration contracts and regulatory mapping → SPEC. Status 'PROPOSTA' means not authoritative but SPEC is not locked regardless. Some PRD-like functionality lists present (secondary signal)."
+}

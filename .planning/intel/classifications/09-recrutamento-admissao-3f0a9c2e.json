@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/09-recrutamento-admissao.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Admissão Digital (domínio rh_admissao)",
+  "summary": "Especificação do módulo de admissão digital: coleta de documentos, exame, contrato, efetivação transacional em colaborador e eventos eSocial.",
+  "scope": ["admissão digital", "rh_admissao", "processo_admissao", "ficha cadastral", "eSocial S-2200", "GED", "checklist", "efetivação de colaborador"],
+  "cross_refs": ["13-recrutamento-selecao.md", "docs/05-pesquisa-mercado.md", "12-fiscal"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Dominant signals are technical contracts: data entities/schemas (processo_admissao, ficha_cadastral_admissao, link_admissao, etc.), state machines, permission matrix, integration contracts and regulatory constraints → SPEC. Also carries PRD-like numbered functionalities and one open architectural decision ('construir × contratar', explicitly unresolved) — not an Accepted ADR, so not locked. Status header reads 'PROPOSTA — nada definitivo'. Chose SPEC over PRD because entity/contract detail dominates over user-story framing."
+}

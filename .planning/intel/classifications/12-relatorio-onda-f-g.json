@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/12-relatorio-onda-f-g.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Relatório da onda F/G — ponto, banco de horas e correções",
+  "summary": "Relatório de progresso das ondas F/G: módulo de ponto e banco de horas, correções pós-verificação, números, pendências e próximos passos.",
+  "scope": ["ponto e banco de horas", "apuração de folha", "correções de conformidade", "verificação independente", "portal do colaborador"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

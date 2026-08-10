@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/05-avaliacao-360.md",
+  "type": "PRD",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Avaliação 360 (domínio rh_avaliacao)",
+  "summary": "Módulo de avaliação 360 da Fast: ciclos de experiência/desempenho, modelo versionado com vigência, flag de recomendação com decisão humana obrigatória.",
+  "scope": ["avaliação 360", "rh_avaliacao", "ciclos de experiência/desempenho", "modelo versionado", "flag de recomendação", "Fit Cultural / 9 Valores Fast", "pilar CHA", "pilar Dever"],
+  "cross_refs": ["Fast-RH — Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md", "fast_kb_valores_fast.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Dominant signals are product requirements: Objetivo, Funcionalidades numeradas, roadmap por fase, escopo de módulo → PRD. Contains a substantial technical data-model section ('Entidades de dados' with schemas) that reads as SPEC; requirements framing dominates, so classified PRD with SPEC overlap noted. Status is 'PROPOSTA — nada definitivo', so not locked."
+}

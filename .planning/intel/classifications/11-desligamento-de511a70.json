@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/11-desligamento.md",
+  "type": "PRD",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Desligamento (rh_admissao_desligamento — processo de desligamento) — estabilidades, aviso prévio, prazo do art. 477, devoluções, rescisão na folha própria e encerramento auditado",
+  "summary": "Requisitos do módulo de desligamento como máquina de estados auditada: estabilidades, aviso prévio, prazo do art. 477, devoluções, rescisão e encerramento.",
+  "scope": ["desligamento", "máquina de estados", "estabilidades", "aviso prévio", "prazo art. 477", "devolução de EPIs e ativos", "cancelamento de benefícios", "rescisão folha própria", "eSocial S-2299/S-2298", "GED"],
+  "cross_refs": ["02-arquitetura.md", "10-sst-saude-ocupacional.md", "04-beneficios.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de módulo em prosa densa listando Objetivo + Funcionalidades (MVP), user/process requirements → PRD. Status PROPOSTA (não Accepted), sem seções Decision/Consequences → não é ADR e não locked. Contém detalhes técnicos (máquina de estados, tabelas versionadas) que aproximam de SPEC, mas o dominante é escopo/requisitos de processo → PRD (medium)."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/13-arnes-do-projeto.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "O arnês do projeto — os sete componentes",
+  "summary": "Design rationale for a seven-part agent tooling/process harness, recording engineering decisions to make verification cheaper and cumulative.",
+  "scope": ["arnês do projeto", "ferramentas de linha de comando (db/)", "bancadas por frente", "logar-como.js", "comparar-personas", "smoke/e2e", "migrations", ".gitignore de lixo de agente"],
+  "cross_refs": ["db/README.md", "AGENTS.md", "db/consultar.js", "db/logar-como.js", "db/snapshot.js", "db/migracoes.js", "db/comparar-personas.js", "db/bancada.js", "db/mapa.js", "db/trilha.js", ".env.local-db"],
+  "locked": true,
+  "precedence": 0,
+  "notes": "Manual override (orchestrator, ingest gate): retyped DOC->ADR, locked:true. The classifier correctly noted it lacks formal ADR frontmatter, but this IS the project's governing process contract — the owner declared 'isso sera nossa base para tudo', it carries closed ('FECHADO') decisions, and the harness rules bind every agent (hooks enforce golden rules). Treating it as low-precedence DOC would drop the binding constraints from synthesis."
+}

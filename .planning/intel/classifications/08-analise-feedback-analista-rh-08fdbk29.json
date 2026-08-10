@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/08-analise-feedback-analista-rh.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Análise do feedback da analista de RH",
+  "summary": "Análise de feedback da analista de RH separando o que já existe, lacunas reais e decisões a tomar sobre módulos, permissões e campos cadastrais.",
+  "scope": ["RBAC/papéis", "segregação de acesso R&S", "data de nascimento", "gênero", "promoção e transferência", "relatórios de diversidade"],
+  "cross_refs": ["docs/07-roteiro-demonstracao.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Prose-heavy analysis/feedback document. No ADR status/decision-consequences structure, no user stories/acceptance criteria, no API/schema contracts. Contains proposals and 'decisão a tomar' framing but is context/diagnosis, not a formal decision or requirement doc -> DOC."
+}

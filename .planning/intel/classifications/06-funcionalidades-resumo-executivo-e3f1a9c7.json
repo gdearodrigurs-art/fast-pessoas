@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/06-funcionalidades-resumo-executivo.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Fast Pessoas — Funcionalidades previstas (resumo para a Diretoria de Pessoas)",
+  "summary": "Executive summary of the 15 planned modules of Fast's in-house DP/RH system and its delivery order.",
+  "scope": ["ficha e histórico", "solicitações e aprovações", "check-in de clima", "documentos e assinatura digital", "controle de ponto", "férias e afastamentos", "recrutamento e seleção", "admissão digital", "folha de pagamento", "obrigações digitais", "benefícios", "avaliação 360", "desligamento", "SST", "relatórios e indicadores"],
+  "cross_refs": ["docs/03-modulos/"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

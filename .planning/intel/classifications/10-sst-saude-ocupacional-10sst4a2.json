@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/10-sst-saude-ocupacional.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "SST / Saúde Ocupacional (rh_sst) — ASO, PCMSO, PGR, CAT, EPIs e eventos eSocial de SST",
+  "summary": "Documento de desenho do módulo SST: painel de conformidade, GED, EPI com ciência digital, CAT e status de transmissão eSocial, em estado de proposta.",
+  "scope": ["SST", "saúde ocupacional", "ASO", "PCMSO", "PGR", "CAT", "EPI", "eSocial S-2210/S-2220/S-2240", "rh_sst"],
+  "cross_refs": ["docs/02-arquitetura.md", "Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de desenho de módulo (prose-heavy) que mistura sinais: contém decisões do usuário ('Decisao de destino'), requisitos (funcionalidades MVP) e restricoes tecnicas (rotas de transmissao, filas eSocial). Nenhum frontmatter formal; Status: PROPOSTA (nao locked). Sem convencao de nome ADR/PRD/SPEC (path docs/03-modulos/). Classificado como DOC por ser documentacao de modulo abrangente sem um unico tipo dominante; decisoes marcadas como PROPOSTA impedem tratamento como ADR locked. NOTA: hash do nome de arquivo nao pôde ser computado por SHA-256 (sem ferramenta de execucao disponivel); usado sufixo derivado do slug — o nome-base ja e unico entre os irmaos."
+}

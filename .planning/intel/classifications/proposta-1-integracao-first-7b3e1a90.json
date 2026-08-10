@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/anexos/proposta-1-integracao-first.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Fast RH Hub — Integração Primeiro (orquestração sobre Nasajon)",
+  "summary": "Proposta de arquitetura: app RH separado que orquestra sobre Nasajon/ponto homologado, herda SSO/RBAC do Portal de Vendas, com stack e modelo de domínio definidos.",
+  "scope": ["arquitetura Fast RH Hub", "integração Nasajon", "ponto REP-P", "stack FastAPI/Next.js", "PostgreSQL dedicado", "SSO/RBAC do Portal", "modelo de domínio RH", "360", "clima", "camada de integrações"],
+  "cross_refs": ["Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md", "fast_kb_valores_fast.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Status explícito 'PROPOSTA — nada definitivo até validação'; portanto locked:false apesar de decisões de plataforma/stack marcadas 'posição fechada'. Documento amplo cobrindo múltiplas decisões arquiteturais + modelo de domínio, não uma única decisão ADR canônica; resolvida ambiguidade ADR/DOC pela precedência (ADR>DOC) dado o forte conteúdo de trade-off e decisão. Sem Bash disponível para SHA-256; sufixo do arquivo derivado do path (slug já único)."
+}

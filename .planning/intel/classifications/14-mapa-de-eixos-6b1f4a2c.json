@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/14-mapa-de-eixos.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "14 · O mapa de eixos",
+  "summary": "Explains the 'eixos' concept: system-wide rules already violated once, with verdicts (violation/suspect/legitimate) mapped across the codebase.",
+  "scope": ["eixos", "pessoa x vínculo", "vigência", "dinheiro", "tempo civil", "decisão de acesso", "mapa-eixos.json"],
+  "cross_refs": ["fast-pessoas/db/mapa-eixos.json", "db/mapa.js", "colaboradores/repositorio.ts"],
+  "locked": true,
+  "precedence": 1,
+  "notes": "Manual override (orchestrator, ingest gate): retyped DOC->ADR, locked:true. The ten axes ARE the binding invariants of this codebase — money in integer centavos, access by permission key never role name, filter on the server, nothing hardcoded, vigência windows, etc. Three are enforced by custom ESLint rules; each axis was paid for by a real defect. These are locked constraints, not context."
+}

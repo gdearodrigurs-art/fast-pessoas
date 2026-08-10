@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/01-nucleo-colaborador-historico.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Núcleo: ficha do colaborador e histórico/linha do tempo (rh_colaboradores)",
+  "summary": "Especificação técnica do módulo núcleo: ficha 1:1 do colaborador, linha do tempo append-only, entidades de dados, papéis e permissões.",
+  "scope": ["rh_colaboradores", "ficha do colaborador", "linha do tempo (evento_colaborador)", "matrícula eSocial", "cargo e remuneração", "relacao_gestor", "papéis e permissões", "carga inicial Nasajon"],
+  "cross_refs": ["Fast-RH - Conhecimento a Migrar.md", "Ficha-Conhecimento-Portal-para-RH.md", "fast_kb_valores_fast.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de módulo com forte conteúdo SPEC (entidades/schemas Postgres, contratos append-only, matriz papel×recurso, contratos eSocial) predominando sobre a seção de funcionalidades/MVP (sinais PRD). SPEC > PRD na precedência. Status: PROPOSTA — não é ADR e não é locked."
+}

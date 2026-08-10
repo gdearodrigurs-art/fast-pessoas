@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/03-folha-fechamento.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Folha de pagamento e fechamento (rh_folha) — motor de cálculo próprio, competência como máquina de estados e transição paralelo-até-paridade",
+  "summary": "Especificação técnica do módulo de folha própria: catálogo de rubricas versionado, motor de cálculo, competência como máquina de estados, modelos de dados e transição em sombra.",
+  "scope": ["folha de pagamento", "rh_folha", "motor de cálculo", "rubrica_versao", "tabela_legal_versao", "máquina de estados de competência", "snapshot imutável", "sombra Nasajon", "holerite"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de módulo com sinais mistos: seção 'Funcionalidades/MVP' (PRD) e forte conteúdo de contratos técnicos — entidades de dados/schemas, máquina de estados, pipeline de cálculo (SPEC). Sinal SPEC dominante → SPEC. Status 'PROPOSTA revisada — nada definitivo', portanto não locked. Referencia módulos 01 e 12 por menção (sem links de arquivo)."
+}

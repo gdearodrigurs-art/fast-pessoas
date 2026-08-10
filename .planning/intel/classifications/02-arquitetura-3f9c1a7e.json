@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/02-arquitetura.md",
+  "type": "ADR",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Arquitetura do Sistema de RH/DP — Fast Pessoas",
+  "summary": "Decisoes de arquitetura fechadas: app proprio em 2 fases, stack Next.js/TypeScript/Node, PostgreSQL dedicado, motor de folha proprio sem Nasajon.",
+  "scope": ["plataforma", "stack tecnologico", "PostgreSQL", "motor de folha", "eSocial", "dominios do codigo", "autenticacao", "ponto REP-P"],
+  "cross_refs": ["docs/05-pesquisa-mercado.md"],
+  "locked": true,
+  "precedence": null,
+  "notes": "Documento de arquitetura amplo cobrindo multiplas decisoes (plataforma, stack, banco, folha), nao uma unica decisao ADR canonica. Porem os sinais de decisao travada sao explicitos e fortes: 'Status: ARQUITETURA v2', decisoes 'FECHADAS pelo usuario' que 'supersedem' a v1, estrutura Decisao/Consequencias. Por precedencia ADR>SPEC>PRD>DOC e pelo status Accepted-equivalente (fechado/superseded), classificado como ADR com locked:true. Confianca medium pela natureza multi-decisao vs ADR de escopo unico."
+}

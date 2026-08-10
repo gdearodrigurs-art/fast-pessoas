@@ -1,0 +1,13 @@
+{
+  "source_path": "C:/sistema RH/docs/03-modulos/13-recrutamento-selecao.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Recrutamento e Seleção (domínio rh_recrutamento — módulo próprio)",
+  "summary": "Design técnico do módulo de recrutamento e seleção: requisição, vaga, pipeline, oferta e fronteira com a admissão; entidades, status e permissões.",
+  "scope": ["recrutamento e seleção", "requisicao_vaga", "vaga", "candidato", "candidatura", "pipeline kanban", "oferta", "banco de talentos", "quadro autorizado", "LGPD titular externo"],
+  "cross_refs": ["docs/05-pesquisa-mercado.md", "anexos/pesquisa-mercado-complementar-detalhe.md", "02-arquitetura.md", "09-recrutamento-admissao.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Documento de desenho de módulo com sinais mistos: entidades de dados detalhadas com máquinas de estado, tabela de permissões e contratos de integração (SPEC dominante) + lista de funcionalidades (PRD) + uma seção 'Decisão registrada' construir×comprar. A decisão está marcada 'Status: PROPOSTA — nada é definitivo até validação do usuário', portanto não é ADR travado (locked=false). Regra de precedência ADR>SPEC>PRD>DOC aplicada: profundidade de modelos/contratos técnicos define SPEC."
+}
