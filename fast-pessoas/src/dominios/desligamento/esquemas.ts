@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // ------------------------------------------------------------------ máquina de estados do processo
 
@@ -252,9 +253,12 @@ export function validarRespostas(
 
 // ------------------------------------------------------------------ esquemas de entrada
 
-const dataIso = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida (use AAAA-MM-DD)");
+// Data civil numa fonte só: recusa 30/02, mês 13 e afins ANTES de tocar o
+// banco — senão o Postgres estoura ('date/time field value out of range') e
+// vira 500 onde cabia 400. Era um regex-only local: a mesma fraqueza da
+// pendência #7, mas nesta cópia do módulo, que a correção do compartilhado não
+// alcançava. Cobre encerrar, iniciar, agendar e realizar entrevista.
+const dataIso = esquemaData;
 
 const esquemaDeclaracao = z
   .object({

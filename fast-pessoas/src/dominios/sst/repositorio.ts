@@ -232,7 +232,7 @@ export async function contarAtivosComAsoValido(): Promise<{
     `SELECT count(*)::int AS ativos,
             count(*) FILTER (WHERE EXISTS (
               SELECT 1 FROM rh.aso a
-               WHERE a.colaborador_id = c.id AND a.validade >= CURRENT_DATE
+               WHERE a.colaborador_id = c.id AND a.validade >= rh.hoje()
             ))::int AS com_aso_valido
        FROM rh.colaborador c
       WHERE c.status = 'ativo'`
@@ -402,7 +402,7 @@ export async function contarAtivosComPsicossocialValida(): Promise<{
     `SELECT count(*)::int AS ativos,
             count(*) FILTER (WHERE EXISTS (
               SELECT 1 FROM rh.avaliacao_psicossocial p
-               WHERE p.colaborador_id = c.id AND p.validade >= CURRENT_DATE
+               WHERE p.colaborador_id = c.id AND p.validade >= rh.hoje()
             ))::int AS com_avaliacao_valida
        FROM rh.colaborador c
       WHERE c.status = 'ativo'`

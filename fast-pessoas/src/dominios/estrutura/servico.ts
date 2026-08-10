@@ -78,6 +78,12 @@ export async function criarEmpresa(
 ): Promise<void> {
   try {
     await comTransacao(sessao.usuario_id, async (cliente) => {
+      // A versão nasce 'ativa' e o seletor lê por status: sem esta trava a
+      // empresa com início futuro aparecia HOJE (status-lido vs data-lida). E
+      // pior, ficava travada contra renomeação até a data chegar (o guard da
+      // nova versão exige início > o da ativa E <= hoje, impossível). A edição
+      // já chama isto; a criação também precisa.
+      await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
       const empresaId = await inserirEmpresa(cliente, dados.cnpj ?? null);
       const versaoId = await inserirVersaoEmpresa(cliente, {
         empresa_id: empresaId,
@@ -233,6 +239,9 @@ export async function criarCentroCusto(
           "empresa_id"
         );
       }
+      // Mesma regra da empresa e da nova versão: a versão nasce 'ativa' e o
+      // seletor lê por status, então início no futuro não pode passar na criação.
+      await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
       const centroId = await inserirCentroCusto(cliente, {
         empresa_id: dados.empresa_id,
         codigo: dados.codigo,

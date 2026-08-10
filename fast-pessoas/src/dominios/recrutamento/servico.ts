@@ -653,6 +653,17 @@ export async function movimentarCandidatura(
         "motivo_catalogo"
       );
     }
+    // "Desistência" é desfecho do CANDIDATO, não da empresa: reprovar dizendo
+    // que ele desistiu é um registro contraditório e frágil como defesa (Lei
+    // 9.029). A tela já esconde a opção; o servidor tem que recusar também,
+    // senão um POST direto grava a incoerência.
+    if (motivo === "desistencia") {
+      throw new ErroHttpCampo(
+        400,
+        "Desistência não é motivo de reprovação — a empresa reprova, o candidato desiste.",
+        "motivo_catalogo"
+      );
+    }
     await atualizarCandidatura(cliente, candidaturaId, { status: "reprovada" });
     await inserirMovimentacao(cliente, {
       candidatura_id: candidaturaId,
