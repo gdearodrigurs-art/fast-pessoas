@@ -16,6 +16,8 @@
 | 5 | Lista de rubricas e layout dos importadores | Diego | 29/07/2026 | folha completa, importação |
 | 6 | Balde anônimo já gravado com corte errado | Guilherme | 01/08/2026 | nada hoje; conta na implantação |
 | 7 | Benefício na transferência entre CNPJs: o critério ainda barra | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
+| 9 | Folha: quem conta como dependente para o IRRF | Guilherme | 10/08/2026 | base do IRRF retido |
+| 10 | Contato do candidato: leitura entra na trilha? | Guilherme | 10/08/2026 | rastro LGPD de dado de terceiro |
 
 ---
 
@@ -83,6 +85,11 @@ sem mexer no limite legal.
 
 **O que eu preciso de você:** confirmar que o alerta do DP deve ser em 11 meses. O 12 do limite legal
 eu trato como lei, não como escolha.
+
+**Reconfirmado pela varredura geral (10/08/2026):** a revisão adversarial do módulo de férias
+reapontou exatamente este `MESES_LIMITE_CONCESSIVO = 11` (`ferias/servico.ts:92`, materializado em
+`rh.periodo_aquisitivo.limite_concessivo`), com o detalhe de que, colado à premissa de gozo de 30
+dias, ele acusa "dobro" cedo demais para quem tira férias parciais. Segue aqui como #3 — não dupliquei.
 
 ---
 
@@ -228,3 +235,68 @@ do 4xx amigável que já existe algumas linhas acima. **Fails-safe** (nenhuma
 linha ruim entra), então é UX/observabilidade, não perda de dado. Conserto:
 dar um SQLSTATE-sentinela ao trigger (migration nova) e mapear no serviço. Não
 fiz sozinho por exigir migration para um 500→400 cosmético.
+
+---
+
+## 9 · Folha: quem conta como dependente para o IRRF?
+
+**Onde está:** `src/dominios/folha/repositorio.ts:452` — a dedução de dependente do IRRF conta TODA
+linha de `rh.dependente` do colaborador, sem filtro de elegibilidade (qualquer parentesco — filho,
+cônjuge, outro — e qualquer idade) e sem teto. O motor aplica `dependentes_irrf *
+deducao_dependente_centavos` (`calculo.ts`) e baixa a base do imposto.
+
+**Por que virou pergunta agora:** a migration 0056 abriu o autoatendimento de dependente
+(`dependente.proprio.manter`) — o próprio funcionário/gestor insere os dependentes dele, alvo pela
+sessão, sem conferência do DP e sem limite de quantidade. Como `rh.dependente` é a tabela de
+dependente de BENEFÍCIO (não tem coluna de idade nem flag `deduz_irrf`), um "filho" de 30 anos ou um
+"outro" (um pai, p.ex.) cadastrado só para o plano de saúde entra como dependente de IRRF cheio — uma
+redução de imposto auto-servida.
+
+**Minha recomendação: separar elegibilidade de IRRF do vínculo de benefício.** O que a Receita admite
+como dependente de IRRF (art. 35 da Lei 9.250) é lista fechada com regra de idade (filho até 21, ou 24
+se universitário; etc.) — diferente de "quem eu ponho no meu plano". Sugiro uma coluna `deduz_irrf`
+(+ regra de idade) em `rh.dependente`, a folha contando só os elegíveis, e o autoatendimento passando
+por conferência do DP antes de tocar a base do imposto.
+
+**A favor:** a base do IRRF para de ser auto-servida e passa a refletir a regra legal.
+
+**Contra:** dá uma migration, uma regra de idade e um passo de conferência — e enquanto não existir, o
+mais seguro é NÃO deixar a linha auto-cadastrada fluir para a retenção.
+
+**O que trava:** a exatidão do IRRF retido. Vira sério na primeira folha real com dependente cadastrado
+pela própria pessoa. É decisão de negócio (o que a Fast trata como dependente fiscal) somada a risco
+fiscal, por isso não decidi sozinho.
+
+**Eixo:** dinheiro / nada chumbado — contagem que muda o resultado afirmado (imposto retido) saindo de
+uma fonte que não é a regra fiscal.
+
+---
+
+## 10 · Contato do candidato: a leitura entra na trilha de dado sensível?
+
+**Onde está:** `src/dominios/recrutamento/servico.ts:428` (`obterKanban`) e `repositorio.ts:497`
+(`listarCandidatos`) — o kanban e o painel de R&S devolvem `candidato_email` e `candidato_telefone`
+(dado pessoal de um titular EXTERNO à empresa) a quem tem `rs.ver`/`rs.gerir`. Diferente do salário da
+oferta e do parecer — que gravam `audit.leitura_sensivel` — o contato do candidato é lido sem rastro.
+
+**A pergunta que é sua:** o contato do candidato conta como recurso SENSÍVEL na taxonomia de
+privacidade (0044)? Se sim, a leitura devia deixar trilha (art. 18 da LGPD: o titular pode perguntar
+quem acessou os dados dele e quando). Se a decisão foi deliberada de não auditar (reservar "sensível" a
+salário/parecer), então está certo — mas vale registrar a escolha para não parecer omissão.
+
+**Minha recomendação: auditar a leitura do contato.** É dado de terceiro que a empresa ainda não
+contratou; o custo de gravar uma linha por leitura é baixo e o mesmo padrão já existe para salário e
+parecer no mesmo arquivo.
+
+**A favor:** fecha o mesmo eixo (rastro de leitura) de forma consistente com o resto do módulo, e
+responde a uma eventual requisição do titular.
+
+**Contra:** mais linhas em `audit.leitura_sensivel` a cada abertura de kanban/painel; e se o projeto
+decidiu que contato de candidato não é "sensível" no mesmo nível de saúde/salário, auditar seria escopo
+a mais.
+
+**O que trava:** nada hoje. Vira relevante quando houver candidato real e uma eventual requisição LGPD.
+É decisão de classificação de privacidade, por isso subiu.
+
+**Eixo:** rastro de leitura (8) — dado sensível de terceiro devolvido sem registro em
+`audit.leitura_sensivel`.
