@@ -23,9 +23,19 @@ const esquemaDecisao = z.object({
     .max(1_000_000, "Desconto fora de faixa"),
   // Nasce vazia na tela: a data decide de quando a folha usa o valor novo, e
   // o serviço recusa data dentro de competência já fechada.
+  //
+  // A regex sozinha aceita 2026-02-30, que o Postgres depois rejeita com um 500
+  // feio (`$1::date` estoura). E `Date.parse` NÃO ajuda: ele ROLA 30/02 para
+  // 02/03 em vez de recusar. A trava honesta é o ida-e-volta: a data só é real
+  // se, convertida e formatada de novo, volta idêntica.
   inicio: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Informe a data em que o valor novo passa a valer"),
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Informe a data em que o valor novo passa a valer")
+    .refine(
+      (valor) =>
+        new Date(`${valor}T00:00:00Z`).toISOString().slice(0, 10) === valor,
+      "Data inexistente no calendário"
+    ),
 });
 
 export async function PATCH(

@@ -170,3 +170,30 @@ critério do destino diz "só CLT". Nada na tela avisa que a regra tem esse segu
 
 **O que trava:** nada hoje — o comportamento continua o de antes. Vira sério na primeira
 transferência real entre CNPJs depois de o DP começar a conceder fora do critério.
+
+---
+
+## 7 · `esquemaData` aceita data inexistente (30/02) em todo o projeto — descoberto 2026-08-10
+
+**O quê:** o `esquemaData` que quase todo módulo usa (`beneficios`, `admissao`,
+`afastamentos`, `avaliacao`, `clima`, …) valida a data com
+`!Number.isNaN(Date.parse(...))`. Mas `Date.parse("2026-02-30")` **não é NaN** —
+o JS ROLA 30/02 para 02/03. Então `2026-02-30` passa pela borda e, se a data for
+para um `::date` no Postgres, estoura com 500 feio em vez de 400 limpo.
+
+**Provado:** `Date.parse("2026-02-30T00:00:00Z")` → número válido, não NaN.
+`2026-13-01` esse sim é NaN (mês fora de faixa), mas o dia fora de faixa rola.
+
+**Onde já foi tapado:** só a rota de revisão de valor de benefício
+(`api/beneficios/adesoes/revisao/[id]/route.ts`) ganhou a trava honesta — o
+ida-e-volta: a data só é real se, convertida e formatada de novo, volta
+idêntica.
+
+**Recomendação:** trocar o `refine` do `esquemaData` compartilhado pelo teste de
+ida-e-volta, num lugar só, e todos os módulos herdam. É mudança em arquivo que
+vários módulos importam — não fiz sozinho porque toca superfície ampla e o dono
+estava fora. Baixo risco (só aperta o que já devia recusar), mas merece rodar os
+portões de cada módulo tocado.
+
+**Eixo:** tempo civil / vigência — data inexistente é a borda que a validação
+por `Date.parse` deixa passar.

@@ -999,6 +999,28 @@ export async function aprovarRevisaoValor(
         "A adesão que este pedido queria rever já foi encerrada — nada a fazer."
       );
     }
+    // WR-03: revisar valor de adesão SUSPENSA reabriria ela como 'ativa' sem
+    // querer (a nova nasce ativa). Suspenso não tem valor a rever — reative
+    // primeiro. Preserva o gesto explícito, como a transferência faz.
+    if (pedido.adesao_status !== "ativa") {
+      throw new ErroHttpCampo(
+        409,
+        "A adesão está suspensa — reative antes de rever o valor.",
+        "inicio"
+      );
+    }
+    // WR-01: data anterior ao início da adesão vigente cria vigências que se
+    // sobrepõem (a velha fecha no próprio início pelo GREATEST, a nova começa
+    // antes) — risco de contar o benefício duas vezes na mesma competência. O
+    // valor novo só pode valer DEPOIS de a adesão ter começado.
+    if (dados.inicio <= pedido.adesao_inicio) {
+      throw new ErroHttpCampo(
+        409,
+        `O valor novo tem de começar depois do início da adesão atual ` +
+          `(${formatarData(pedido.adesao_inicio)}).`,
+        "inicio"
+      );
+    }
     const fechada = await competenciaFechadaNaData(cliente, dados.inicio);
     if (fechada) {
       throw new ErroHttpCampo(
@@ -1010,7 +1032,20 @@ export async function aprovarRevisaoValor(
       );
     }
 
-    await encerrarAdesaoPorRevisao(cliente, pedido.adesao_id, dados.inicio);
+    // BL-01: o encerramento TEM de fechar exatamente 1 linha. Se um cancelamento
+    // concorrente (agora bloqueado pela trava de linha, mas cinto e suspensório)
+    // já a fechou, aborta em vez de abrir adesão órfã.
+    const fechou = await encerrarAdesaoPorRevisao(
+      cliente,
+      pedido.adesao_id,
+      dados.inicio
+    );
+    if (fechou !== 1) {
+      throw new ErroHttp(
+        409,
+        "A adesão mudou de estado durante a aprovação — recarregue e tente de novo."
+      );
+    }
     const criada = await inserirAdesao(cliente, {
       colaborador_id: pedido.colaborador_id,
       beneficio_id: pedido.beneficio_id,

@@ -583,13 +583,20 @@ export async function encerrarAdesaoPorRevisao(
   cliente: PoolClient,
   id: number,
   inicioDoValorNovo: string
-): Promise<void> {
-  await cliente.query(
+): Promise<number> {
+  // Devolve o rowCount: quem chama TEM de conferir que fechou 1 linha. Sem
+  // isso, um cancelamento concorrente que ganhou a corrida (setou `fim` entre a
+  // leitura do pedido e este UPDATE) deixaria este WHERE casar 0 linhas em
+  // silêncio, e a adesão nova nasceria para um benefício que a pessoa acabou de
+  // cancelar. A trava de linha em buscarPedidoRevisaoPorDemanda evita a corrida;
+  // esta conferência é o cinto por cima do suspensório.
+  const { rowCount } = await cliente.query(
     `UPDATE rh.adesao
         SET fim = GREATEST(inicio, $2::date - 1), atualizado_em = now()
       WHERE id = $1 AND fim IS NULL`,
     [id, inicioDoValorNovo]
   );
+  return rowCount ?? 0;
 }
 
 export async function inserirPedidoRevisao(
@@ -643,9 +650,23 @@ export interface PedidoRevisao {
   valor_atual: number;
   desconto_atual: number;
   adesao_encerrada: boolean;
+  /** Início da adesão vigente — o novo valor não pode começar antes dele. */
+  adesao_inicio: string;
+  /** 'ativa' | 'suspensa' — revisão só cabe em adesão ativa. */
+  adesao_status: StatusAdesao;
 }
 
-/** O pedido de uma demanda, com a adesão que ele quer mudar. */
+/**
+ * O pedido de uma demanda, com a adesão que ele quer mudar — COM A ADESÃO
+ * TRAVADA (`FOR UPDATE OF a`).
+ *
+ * A trava é o que fecha a corrida do BL-01: sem ela, entre esta leitura e o
+ * `encerrarAdesaoPorRevisao`, um `cancelarAdesao` concorrente (que pega
+ * `FOR UPDATE OF a`) podia setar `fim` e commitar, o encerramento casava 0
+ * linhas, e a revisão abria adesão nova para um benefício já cancelado. Com a
+ * trava, o cancelamento concorrente espera esta transação terminar, e aí o
+ * `adesao_encerrada` volta true e a aprovação recusa.
+ */
 export async function buscarPedidoRevisaoPorDemanda(
   cliente: PoolClient,
   demandaId: number
@@ -662,15 +683,20 @@ export async function buscarPedidoRevisaoPorDemanda(
     valor_atual: string;
     desconto_atual: string;
     adesao_encerrada: boolean;
+    adesao_inicio: string;
+    adesao_status: StatusAdesao;
   }>(
     `SELECT p.id, p.adesao_id, p.demanda_id, p.valor_pedido, p.motivo,
             a.colaborador_id, a.beneficio_id, b.nome AS beneficio_nome,
             a.valor AS valor_atual, a.desconto AS desconto_atual,
-            a.fim IS NOT NULL AS adesao_encerrada
+            a.fim IS NOT NULL AS adesao_encerrada,
+            a.inicio::text AS adesao_inicio,
+            a.status AS adesao_status
        FROM rh.pedido_revisao_beneficio p
        JOIN rh.adesao a ON a.id = p.adesao_id
        JOIN rh.beneficio b ON b.id = a.beneficio_id
-      WHERE p.demanda_id = $1`,
+      WHERE p.demanda_id = $1
+      FOR UPDATE OF a`,
     [demandaId]
   );
   if (rows.length === 0) return null;
@@ -687,6 +713,8 @@ export async function buscarPedidoRevisaoPorDemanda(
     valor_atual: Number(linha.valor_atual),
     desconto_atual: Number(linha.desconto_atual),
     adesao_encerrada: linha.adesao_encerrada,
+    adesao_inicio: linha.adesao_inicio,
+    adesao_status: linha.adesao_status,
   };
 }
 
