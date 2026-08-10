@@ -34,6 +34,8 @@ type AbaPrincipal = "meus" | "gerir" | "catalogo";
 // Não há `{ tipo: "solicitar" }`: o colaborador não pede mais adesão (onda H1).
 type Dialogo =
   | { tipo: "cancelamento_titular"; adesao: Adesao }
+  | { tipo: "revisao_titular"; adesao: Adesao }
+  | { tipo: "decidir_revisao"; solicitacao: Solicitacao; adesao: Adesao | null }
   | { tipo: "conceder"; solicitacao?: Solicitacao }
   | { tipo: "negar"; solicitacao: Solicitacao }
   | { tipo: "cancelar_adesao"; adesao: Adesao; solicitacao?: Solicitacao }
@@ -214,6 +216,72 @@ function DialogoCancelamentoTitular({
         id="motivo-cancelamento"
         required
         maxLength={2000}
+        value={motivo}
+        onChange={(evento) => setMotivo(evento.target.value)}
+      />
+    </CascaDialogo>
+  );
+}
+
+/**
+ * O titular pede que o VALOR seja revisto (H3) — o caso do dono: mudou de casa,
+ * a passagem subiu. O valor aqui é PROPOSTA; quem decide é o DP, que pode
+ * conceder outro. Nasce vazio: quem propõe é a pessoa, não o sistema.
+ */
+function DialogoRevisaoTitular({
+  adesao,
+  aoFechar,
+  aoConcluir,
+}: {
+  adesao: Adesao;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  const [valorPedido, setValorPedido] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [enviando, erro, executar] = useEnvio(aoConcluir);
+  return (
+    <CascaDialogo
+      titulo={`Pedir revisão de valor — ${adesao.beneficio_nome}`}
+      sub={`Hoje: valor ${formatarMoeda(adesao.valor)} · desconto ${formatarMoeda(adesao.desconto)}. O pedido vira demanda; o DP decide o valor final.`}
+      textoEnviar="Pedir revisão"
+      enviando={enviando}
+      erro={erro}
+      aoFechar={aoFechar}
+      aoEnviar={(evento) => {
+        evento.preventDefault();
+        executar(() =>
+          requisitar("/api/beneficios/adesoes/revisao", "POST", {
+            adesao_id: adesao.id,
+            valor_pedido: Number(valorPedido),
+            motivo,
+          })
+        );
+      }}
+    >
+      <label className={estilos.rotuloCampo} htmlFor="valor-pedido-revisao">
+        Valor que você está pedindo (R$)
+      </label>
+      <input
+        className={estilos.campo}
+        id="valor-pedido-revisao"
+        type="number"
+        min={0}
+        step="0.01"
+        required
+        value={valorPedido}
+        onChange={(evento) => setValorPedido(evento.target.value)}
+      />
+      <label className={estilos.rotuloCampo} htmlFor="motivo-revisao">
+        Motivo
+      </label>
+      <textarea
+        className={`${estilos.campo} ${estilos.campoTexto}`}
+        id="motivo-revisao"
+        required
+        minLength={10}
+        maxLength={2000}
+        placeholder="ex.: mudei de endereço e a passagem subiu"
         value={motivo}
         onChange={(evento) => setMotivo(evento.target.value)}
       />
@@ -466,6 +534,98 @@ function DialogoConceder({
         Os dois são obrigatórios e valem só para esta pessoa: o VT de um pode ser
         R$ 600 e o de outro R$ 720. Sem desconto em folha, informe 0.
       </p>
+    </CascaDialogo>
+  );
+}
+
+/**
+ * O DP decide a revisão de valor (H4). O concedido pode ser OUTRO valor — o
+ * pedido fica à vista, mas os campos nascem vazios: a decisão é de quem decide.
+ * Aprovar encerra a adesão vigente e abre outra; a data diz de quando a folha
+ * usa o valor novo, e o servidor recusa data em competência fechada.
+ */
+function DialogoDecidirRevisao({
+  solicitacao,
+  adesao,
+  aoFechar,
+  aoConcluir,
+}: {
+  solicitacao: Solicitacao;
+  adesao: Adesao | null;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  const [valor, setValor] = useState("");
+  const [desconto, setDesconto] = useState("");
+  const [inicio, setInicio] = useState("");
+  const [enviando, erro, executar] = useEnvio(aoConcluir);
+  const atual = adesao
+    ? `valor ${formatarMoeda(adesao.valor)} · desconto ${formatarMoeda(adesao.desconto)}`
+    : "adesão vigente não localizada";
+  const pedido =
+    solicitacao.valor_pedido !== null
+      ? formatarMoeda(solicitacao.valor_pedido)
+      : "—";
+  return (
+    <CascaDialogo
+      titulo={`Decidir revisão — ${solicitacao.beneficio_nome ?? "benefício"}`}
+      sub={`Hoje: ${atual}. A pessoa pediu ${pedido}. O valor que vale é o que você conceder aqui.`}
+      textoEnviar="Aprovar revisão"
+      enviando={enviando}
+      erro={erro}
+      aoFechar={aoFechar}
+      aoEnviar={(evento) => {
+        evento.preventDefault();
+        executar(() =>
+          requisitar(
+            `/api/beneficios/adesoes/revisao/${solicitacao.demanda_id}`,
+            "PATCH",
+            {
+              valor: Number(valor),
+              desconto: Number(desconto),
+              inicio,
+            }
+          )
+        );
+      }}
+    >
+      <label className={estilos.rotuloCampo} htmlFor="valor-decidir-revisao">
+        Valor concedido (R$)
+      </label>
+      <input
+        className={estilos.campo}
+        id="valor-decidir-revisao"
+        type="number"
+        min={0}
+        step="0.01"
+        required
+        value={valor}
+        onChange={(evento) => setValor(evento.target.value)}
+      />
+      <label className={estilos.rotuloCampo} htmlFor="desconto-decidir-revisao">
+        Desconto (R$)
+      </label>
+      <input
+        className={estilos.campo}
+        id="desconto-decidir-revisao"
+        type="number"
+        min={0}
+        step="0.01"
+        required
+        value={desconto}
+        onChange={(evento) => setDesconto(evento.target.value)}
+      />
+      <label className={estilos.rotuloCampo} htmlFor="inicio-decidir-revisao">
+        Vale a partir de
+      </label>
+      <input
+        className={estilos.campo}
+        id="inicio-decidir-revisao"
+        type="date"
+        required
+        value={inicio}
+        onChange={(evento) => setInicio(evento.target.value)}
+      />
     </CascaDialogo>
   );
 }
@@ -1100,6 +1260,21 @@ export function PainelBeneficios() {
                 Sem adesão vigente correspondente — negue com o motivo.
               </span>
             )}
+            {item.natureza === "revisao" && (
+              <button
+                className={estilos.botaoPrimario}
+                type="button"
+                onClick={() =>
+                  setDialogo({
+                    tipo: "decidir_revisao",
+                    solicitacao: item,
+                    adesao: adesaoAlvo,
+                  })
+                }
+              >
+                Decidir revisão
+              </button>
+            )}
             <button
               className={estilos.botaoSecundario}
               type="button"
@@ -1133,15 +1308,26 @@ export function PainelBeneficios() {
         </div>
         <div className={estilos.acoes}>
           {ehTitular && adesao.fim === null && (
-            <button
-              className={estilos.botaoSecundario}
-              type="button"
-              onClick={() =>
-                setDialogo({ tipo: "cancelamento_titular", adesao })
-              }
-            >
-              Solicitar cancelamento
-            </button>
+            <>
+              {/* H3 — o pedido que o dono cobrou: "mudou de casa, a passagem
+                  subiu". Só sobre adesão vigente. */}
+              <button
+                className={estilos.botaoSecundario}
+                type="button"
+                onClick={() => setDialogo({ tipo: "revisao_titular", adesao })}
+              >
+                Pedir revisão de valor
+              </button>
+              <button
+                className={estilos.botaoSecundario}
+                type="button"
+                onClick={() =>
+                  setDialogo({ tipo: "cancelamento_titular", adesao })
+                }
+              >
+                Solicitar cancelamento
+              </button>
+            </>
           )}
           {!ehTitular && podeGerir && adesao.fim === null && (
             <>
@@ -1614,6 +1800,21 @@ export function PainelBeneficios() {
       {/* ---------------------------------------------- diálogos */}
       {dialogo?.tipo === "cancelamento_titular" && (
         <DialogoCancelamentoTitular
+          adesao={dialogo.adesao}
+          aoFechar={() => setDialogo(null)}
+          aoConcluir={recarregar}
+        />
+      )}
+      {dialogo?.tipo === "revisao_titular" && (
+        <DialogoRevisaoTitular
+          adesao={dialogo.adesao}
+          aoFechar={() => setDialogo(null)}
+          aoConcluir={recarregar}
+        />
+      )}
+      {dialogo?.tipo === "decidir_revisao" && (
+        <DialogoDecidirRevisao
+          solicitacao={dialogo.solicitacao}
           adesao={dialogo.adesao}
           aoFechar={() => setDialogo(null)}
           aoConcluir={recarregar}

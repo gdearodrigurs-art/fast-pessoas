@@ -287,16 +287,18 @@ export const CHAVE_TIPO_DEMANDA_BENEFICIO = "adesao_beneficio";
 /** Onda H3 — pedido de revisão de valor, migration 0057. */
 export const CHAVE_TIPO_DEMANDA_REVISAO = "revisao_valor_beneficio";
 
-export type NaturezaSolicitacao = "adesao" | "cancelamento";
+export type NaturezaSolicitacao = "adesao" | "cancelamento" | "revisao";
 
 export const ROTULOS_NATUREZA: Record<NaturezaSolicitacao, string> = {
   adesao: "Adesão",
   cancelamento: "Cancelamento",
+  revisao: "Revisão de valor",
 };
 
 const PREFIXOS: Record<NaturezaSolicitacao, string> = {
   adesao: "Adesão ao benefício",
   cancelamento: "Cancelamento do benefício",
+  revisao: "Revisão de valor do benefício",
 };
 
 /**
@@ -318,7 +320,7 @@ export function montarDescricaoSolicitacao(
 }
 
 const PADRAO_SOLICITACAO =
-  /^(Adesão ao benefício|Cancelamento do benefício) ".*" \(chave: ([a-z][a-z0-9_]{1,39})\)\./;
+  /^(Adesão ao benefício|Cancelamento do benefício|Revisão de valor do benefício) ".*" \(chave: ([a-z][a-z0-9_]{1,39})\)\./;
 
 /** Lê natureza e chave do benefício de uma descrição gerada por este domínio. */
 export function interpretarDescricaoSolicitacao(
@@ -326,10 +328,14 @@ export function interpretarDescricaoSolicitacao(
 ): { natureza: NaturezaSolicitacao; chave: string } | null {
   const resultado = PADRAO_SOLICITACAO.exec(descricao);
   if (!resultado) return null;
-  return {
-    natureza: resultado[1] === PREFIXOS.adesao ? "adesao" : "cancelamento",
-    chave: resultado[2],
-  };
+  // Lookup pelos três prefixos — o ternário binário de antes rotularia a
+  // revisão de "cancelamento", e o DP confirmaria um cancelamento que ninguém
+  // pediu.
+  const natureza = (
+    Object.keys(PREFIXOS) as NaturezaSolicitacao[]
+  ).find((chave) => PREFIXOS[chave] === resultado[1]);
+  if (!natureza) return null;
+  return { natureza, chave: resultado[2] };
 }
 
 export function formatarMoeda(valor: number | null): string {

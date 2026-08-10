@@ -81,6 +81,8 @@ export interface Solicitacao {
   beneficio_id: number | null;
   beneficio_nome: string | null;
   adesao_id: number | null;
+  /** O que a pessoa propôs numa revisão de valor (H3); null nas demais. */
+  valor_pedido: number | null;
 }
 
 export interface Dependente {

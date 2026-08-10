@@ -44,6 +44,7 @@ import {
   NaturezaSolicitacao,
   NovaRegra,
   ROTULOS_CATEGORIA,
+  ROTULOS_NATUREZA,
   ROTULOS_STATUS_ADESAO,
 } from "./esquemas";
 import {
@@ -56,6 +57,7 @@ import {
   encerrarAdesaoPorRevisao,
   inserirPedidoRevisao,
   buscarPedidoRevisaoPorDemanda,
+  valoresPedidosPorDemandas,
   buscarAdesaoParaAtualizar,
   buscarAdesaoResumo,
   buscarBeneficio,
@@ -165,8 +167,10 @@ export interface SolicitacaoInterpretada extends SolicitacaoBeneficio {
   natureza: NaturezaSolicitacao | null;
   beneficio_id: number | null;
   beneficio_nome: string | null;
-  /** Adesão vigente do solicitante no benefício (alvo de um cancelamento). */
+  /** Adesão vigente do solicitante no benefício (alvo de cancelamento/revisão). */
   adesao_id: number | null;
+  /** O que a pessoa propôs numa revisão de valor (H3); null nas demais. */
+  valor_pedido: number | null;
 }
 
 export interface VisaoBeneficios {
@@ -198,14 +202,18 @@ export interface VisaoBeneficios {
 function interpretarSolicitacoes(
   solicitacoes: SolicitacaoBeneficio[],
   beneficios: BeneficioComRegra[],
-  adesoesVigentes: AdesaoResumo[]
+  adesoesVigentes: AdesaoResumo[],
+  /** demanda_id → valor pedido, das revisões de valor (H3). */
+  valoresPedidos: Map<number, number> = new Map()
 ): SolicitacaoInterpretada[] {
   const porChave = new Map(beneficios.map((item) => [item.chave, item]));
   return solicitacoes.map((solicitacao) => {
     const lido = interpretarDescricaoSolicitacao(solicitacao.descricao);
     const beneficio = lido ? (porChave.get(lido.chave) ?? null) : null;
+    // Cancelamento e revisão apontam para a adesão vigente do par — é dela que
+    // a tela tira o valor ATUAL para pôr ao lado do pedido.
     const adesao =
-      lido?.natureza === "cancelamento" &&
+      (lido?.natureza === "cancelamento" || lido?.natureza === "revisao") &&
       beneficio &&
       solicitacao.solicitante_colaborador_id !== null
         ? (adesoesVigentes.find(
@@ -220,6 +228,7 @@ function interpretarSolicitacoes(
       beneficio_id: beneficio?.id ?? null,
       beneficio_nome: beneficio?.nome ?? null,
       adesao_id: adesao?.id ?? null,
+      valor_pedido: valoresPedidos.get(solicitacao.demanda_id) ?? null,
     };
   });
 }
@@ -266,7 +275,10 @@ export async function montarVisao(
     minhasSolicitacoes = interpretarSolicitacoes(
       solicitacoes,
       todosBeneficios,
-      vigentes
+      vigentes,
+      await valoresPedidosPorDemandas(
+        solicitacoes.map((item) => item.demanda_id)
+      )
     );
     const pendentesAdesao = new Set(
       minhasSolicitacoes
@@ -304,7 +316,10 @@ export async function montarVisao(
       solicitacoes_pendentes: interpretarSolicitacoes(
         pendentes,
         todosBeneficios,
-        adesoes
+        adesoes,
+        await valoresPedidosPorDemandas(
+          pendentes.map((item) => item.demanda_id)
+        )
       ),
       adesoes,
       colaboradores,
@@ -693,9 +708,12 @@ export async function solicitarRevisaoValor(
       "Você já tem um pedido de revisão em andamento para este benefício."
     );
   }
-  const descricao =
-    `${PREFIXO_REVISAO} "${adesao.beneficio_nome}" ` +
-    `(chave: ${adesao.beneficio_chave}).\n\nMotivo: ${motivo}`;
+  const descricao = montarDescricaoSolicitacao(
+    "revisao",
+    adesao.beneficio_nome,
+    adesao.beneficio_chave,
+    motivo
+  );
   return abrirDemandaBeneficio(
     sessao,
     perfil.colaborador_id,
@@ -782,11 +800,12 @@ async function exigirDemandaAberta(
   if (natureza) {
     const lido = interpretarDescricaoSolicitacao(demanda.descricao);
     if (lido && lido.natureza !== natureza) {
+      // Com três naturezas o texto binário de antes mentia: revisão chegando
+      // num fluxo de adesão seria anunciada como "cancelamento".
       throw new ErroHttpCampo(
         409,
-        natureza === "adesao"
-          ? "A solicitação vinculada é de cancelamento, não de adesão."
-          : "A solicitação vinculada é de adesão, não de cancelamento.",
+        `A solicitação vinculada é de ${ROTULOS_NATUREZA[lido.natureza].toLowerCase()}, ` +
+          `não de ${ROTULOS_NATUREZA[natureza].toLowerCase()}.`,
         "demanda_id"
       );
     }

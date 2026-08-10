@@ -611,6 +611,26 @@ export async function inserirPedidoRevisao(
   return Number(rows[0].id);
 }
 
+/**
+ * demanda_id → valor pedido, em lote — alimenta a listagem de solicitações sem
+ * uma consulta por linha. Só o valor: o motivo já viaja na descrição da
+ * demanda, e o valor ATUAL a tela tira da adesão vigente que ela já tem.
+ */
+export async function valoresPedidosPorDemandas(
+  demandaIds: number[]
+): Promise<Map<number, number>> {
+  if (demandaIds.length === 0) return new Map();
+  const linhas = await consultar<{ demanda_id: string; valor_pedido: string }>(
+    `SELECT demanda_id, valor_pedido
+       FROM rh.pedido_revisao_beneficio
+      WHERE demanda_id = ANY($1)`,
+    [demandaIds]
+  );
+  return new Map(
+    linhas.map((linha) => [Number(linha.demanda_id), Number(linha.valor_pedido)])
+  );
+}
+
 export interface PedidoRevisao {
   id: number;
   adesao_id: number;

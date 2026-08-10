@@ -389,10 +389,9 @@ function CartaoBeneficios({ bloco }: { bloco: BlocoBeneficios }) {
       <div className={estilos.cabecalhoCartao}>
         <h2>Meus benefícios</h2>
         <Link className={estilos.ligacao} href="/beneficios">
-          {/* Aderir saiu na H1 — quem concede é o DP. Cancelar continua sendo
-              do titular: a diretora tirou a candidatura, não a voz de quem
-              quer sair. */}
-          Pedir cancelamento →
+          {/* Aderir saiu na H1 — quem concede é o DP. O que o titular ainda
+              pede: revisão de valor (H3) e cancelamento. */}
+          Pedir revisão de valor ou cancelamento →
         </Link>
       </div>
       {bloco.ativos.length === 0 ? (
