@@ -1110,13 +1110,14 @@ export async function iniciarAdmissao(
         },
       });
 
-      // 2) Processo de admissão com o checklist vigente congelado
-      //    (mesmo arranjo de admissao.abrirProcesso).
-      const checklist = await buscarChecklistAtivo(cliente);
+      // 2) Processo de admissão com o checklist vigente congelado, escolhido
+      //    pelo TIPO DE VÍNCULO do admitido (fallback no geral, 0058) — mesmo
+      //    arranjo de admissao.abrirProcesso.
+      const checklist = await buscarChecklistAtivo(cliente, dados.tipo_vinculo);
       if (!checklist) {
         throw new ErroHttp(
           409,
-          "Não há versão ativa do checklist de admissão. Ative uma versão antes de iniciar admissões."
+          "Não há checklist de admissão ativo (nem para este vínculo, nem geral). Ative um modelo antes de iniciar admissões."
         );
       }
       const prazos = dados.contrato_experiencia

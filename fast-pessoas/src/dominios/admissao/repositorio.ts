@@ -143,8 +143,17 @@ function paraResumo(linha: LinhaResumo): ProcessoResumo {
  * Versão ativa do checklist — buscada DENTRO da transação de abertura para
  * congelar (pinar) a versão no processo.
  */
+/**
+ * O checklist ativo PARA AQUELE VÍNCULO, com fallback no geral (0058).
+ *
+ * Prefere o modelo do `tipoVinculo`; se não houver um ativo, cai no geral
+ * (`tipo_vinculo IS NULL`). O `ORDER BY tipo_vinculo NULLS LAST` põe o
+ * específico antes do geral, e o `LIMIT 1` escolhe o específico quando existe.
+ * Assim a admissão nunca fica sem checklist: na pior das hipóteses, o geral.
+ */
 export async function buscarChecklistAtivo(
-  cliente: PoolClient
+  cliente: PoolClient,
+  tipoVinculo: string
 ): Promise<ChecklistAtivo | null> {
   const { rows } = await cliente.query<{
     id: string;
@@ -153,7 +162,11 @@ export async function buscarChecklistAtivo(
   }>(
     `SELECT id, versao, itens
        FROM rh.checklist_admissao_versao
-      WHERE status = 'ativa'`
+      WHERE status = 'ativa'
+        AND (tipo_vinculo = $1 OR tipo_vinculo IS NULL)
+      ORDER BY tipo_vinculo NULLS LAST
+      LIMIT 1`,
+    [tipoVinculo]
   );
   return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
 }
@@ -185,6 +198,7 @@ export async function buscarColaborador(id: number): Promise<{
   matricula: string;
   data_admissao: string;
   status: string;
+  tipo_vinculo: string;
 } | null> {
   const linhas = await consultar<{
     id: string;
@@ -192,9 +206,10 @@ export async function buscarColaborador(id: number): Promise<{
     matricula: string;
     data_admissao: string;
     status: string;
+    tipo_vinculo: string;
   }>(
     `SELECT id, nome_completo, matricula,
-            data_admissao::text AS data_admissao, status
+            data_admissao::text AS data_admissao, status, tipo_vinculo
        FROM rh.colaborador
       WHERE id = $1`,
     [id]

@@ -132,12 +132,17 @@ export async function abrirProcesso(
   let processoId: number;
   try {
     processoId = await comTransacao(sessao.usuario_id, async (cliente) => {
-      // Congela a versão vigente do checklist e materializa os itens.
-      const checklist = await buscarChecklistAtivo(cliente);
+      // Congela a versão vigente do checklist DO VÍNCULO (com fallback no
+      // geral, 0058) e materializa os itens. O modelo escolhido é o do
+      // tipo de vínculo do admitido; na falta dele, o geral.
+      const checklist = await buscarChecklistAtivo(
+        cliente,
+        colaborador.tipo_vinculo
+      );
       if (!checklist) {
         throw new ErroHttp(
           409,
-          "Não há versão ativa do checklist de admissão. Ative uma versão antes de abrir processos."
+          "Não há checklist de admissão ativo (nem para este vínculo, nem geral). Ative um modelo antes de abrir processos."
         );
       }
       const id = await criarProcesso(cliente, {

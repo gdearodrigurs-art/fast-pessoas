@@ -755,6 +755,11 @@ motorista ganha a CNH na mão; se a combinação se repetir, alguém cria o mode
 Empilhar base + acréscimo por cargo é mais elegante e bem mais caro, e a válvula de escape já cobre
 o caso raro.
 
+**DECIDIDO com o dono (2026-08-10): o TIPO DE VÍNCULO escolhe o modelo.** Aprendiz, estagiário, CLT
+e PJ diferem por LEI antes de diferirem por função — é o corte mais forte. O doc raro por cargo (CNH
+de motorista) entra pela linha de item extra, que já existe. Um modelo por processo, não base +
+acréscimo. Isto destrava a fatia de admissão da Fase 1 (Padrão Modelo) do GSD.
+
 ---
 
 ## 💡 Registro de posse — o que cada pessoa tem, e o que a empresa tem na rua
