@@ -20,6 +20,14 @@ import {
   buscarEmpresa as buscarEmpresaDaEstrutura,
   listarOpcoesDeFiltroEstrutura,
 } from "../estrutura/repositorio";
+// Fechamento da liderança nos DOIS papéis — a mesma função que o domínio de
+// desligamento usa (0050), reusada aqui para que o desligamento pela edição
+// cadastral não deixe relação de gestor pendurada. (desligamento/repositorio
+// só importa de lib/banco e do próprio esquemas: sem ciclo.)
+import {
+  encerrarLiderancaNoDesligamento,
+  relacoesLiderancaAbertas,
+} from "../desligamento/repositorio";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
@@ -855,6 +863,16 @@ export async function atualizarColaborador(
         dados.data_desligamento !== undefined &&
         dados.data_desligamento !== atual.data_desligamento
       ) {
+        // Desligar antes de admitir inverte a janela do vínculo e envenena
+        // qualquer contagem de tempo de casa. O banco não cobre esta borda
+        // (o CHECK só exige data quando o status é desligado).
+        if (dados.data_desligamento < atual.data_admissao) {
+          throw new ErroHttpCampo(
+            400,
+            "Data de desligamento deve ser posterior ou igual à admissão.",
+            "data_desligamento"
+          );
+        }
         campos.data_desligamento = dados.data_desligamento;
         diff["Data de desligamento"] = {
           de: atual.data_desligamento
@@ -911,6 +929,50 @@ export async function atualizarColaborador(
         payload: { data_desligamento: dados.data_desligamento },
         registrado_por: sessao.usuario_id,
       });
+      // LIDERANÇA — encerrada no mesmo ato, nos DOIS papéis, como o domínio de
+      // desligamento faz (0050). Sem isto o desligado seguia GESTOR VIGENTE de
+      // um time pendurado numa conta desativada (aprovação de demanda caindo no
+      // vazio) e LIDERADO VIGENTE de quem ficou — porque o sistema inteiro lê
+      // "vigente" como rg.fim_vigencia IS NULL. Reintroduzia o exato estado que
+      // a 0050 consertou.
+      const liderancas = await relacoesLiderancaAbertas(cliente, id);
+      for (const relacao of liderancas) {
+        await encerrarLiderancaNoDesligamento(
+          cliente,
+          relacao.id,
+          dados.data_desligamento
+        );
+      }
+      if (liderancas.length > 0) {
+        // "papel" aqui é o LADO da relação de liderança ("gestor"/"liderado"),
+        // não papel de ACESSO — mas o lint acesso-por-chave não distingue e
+        // acusaria `=== "gestor"`. Como o tipo é fechado em dois valores,
+        // pergunto pelo complemento (`!== "liderado"`), que não colide com nome
+        // de papel e mantém a regra estrita nesta função ampla.
+        const gestorDele = liderancas.find((r) => r.papel === "liderado");
+        const orfaos = liderancas.filter((r) => r.papel !== "liderado");
+        const diffLideranca: Diff = {};
+        if (gestorDele) {
+          diffLideranca["Liderado por"] = {
+            de: gestorDele.contraparte_nome,
+            para: `Encerrado em ${formatarData(dados.data_desligamento)}`,
+          };
+        }
+        if (orfaos.length > 0) {
+          diffLideranca["Equipe que liderava (ficou sem gestor)"] = {
+            de: orfaos.map((r) => r.contraparte_nome).join("; "),
+            para: `${orfaos.length} pessoa(s) aguardando novo gestor — designar em Colaboradores`,
+          };
+        }
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "desligamento.lideranca",
+          tabela: "rh.relacao_gestor",
+          registroId: `colaborador:${id}`,
+          diff: diffLideranca,
+        });
+      }
     } else if (campos.status !== undefined) {
       await inserirEvento(cliente, {
         colaborador_id: id,
@@ -921,6 +983,27 @@ export async function atualizarColaborador(
         resumo: `Status de ${atual.nome_completo} alterado de ${ROTULOS_STATUS[atual.status]} para ${ROTULOS_STATUS[campos.status]}`,
         payload: { de: atual.status, para: campos.status },
         registrado_por: sessao.usuario_id,
+      });
+    }
+    // Simétrico ao desligamento: desfazer o "desligado" reativa o login. O
+    // desligamento desativa a conta; sem reativar aqui, a pessoa voltava a
+    // aparecer ATIVA em todo lugar mas continuava SEM conseguir entrar, e sem
+    // rastro do porquê. reativarUsuario só toca conta que estava inativa
+    // (WHERE ativo = FALSE), então quem nunca perdeu o login não gera trilha
+    // falsa.
+    const reativando =
+      campos.status !== undefined &&
+      atual.status === "desligado" &&
+      dados.status !== undefined &&
+      dados.status !== "desligado";
+    if (reativando && (await reativarUsuario(cliente, atual.usuario_id))) {
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "atualizacao",
+        tabela: "sistema.usuario",
+        registroId: String(atual.usuario_id),
+        diff: { Ativo: { de: "Não", para: "Sim" } },
       });
     }
     if (campos.tipo_vinculo !== undefined) {
@@ -1400,6 +1483,24 @@ export async function definirGestor(
         400,
         "Gestor informado não existe.",
         "gestor_colaborador_id"
+      );
+    }
+    // Não se abre janela de liderança sobre vínculo desligado (em nenhuma das
+    // pontas): a 0050 fecha as relações no desligamento, e criar uma nova
+    // apontando para um desligado recria o estado "vigente com vínculo
+    // desligado" que ela existe para impedir. (Só barra ao ABRIR — encerrar
+    // com gestor nulo segue livre.)
+    if (novoGestor && novoGestor.status === "desligado") {
+      throw new ErroHttpCampo(
+        400,
+        "Gestor informado está desligado.",
+        "gestor_colaborador_id"
+      );
+    }
+    if (novoGestor && colaborador.status === "desligado") {
+      throw new ErroHttp(
+        400,
+        "Não se abre relação de liderança sobre um vínculo desligado."
       );
     }
     const vigente = await buscarRelacaoGestorVigenteParaAtualizar(

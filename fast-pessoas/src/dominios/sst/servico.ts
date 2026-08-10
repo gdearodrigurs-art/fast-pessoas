@@ -188,13 +188,15 @@ export async function listarAsosParaSessao(
     };
   });
 
-  // Trilha de leitura: um registro por ASO cuja restrição foi decifrada.
-  const idsComRestricao = linhas
-    .filter((linha) => linha.restricoes_cifradas !== null)
-    .map((linha) => String(linha.id));
-  if (idsComRestricao.length > 0) {
+  // Trilha de leitura: um registro por ASO DEVOLVIDO — não só os que têm
+  // restrição cifrada. O payload entrega a CONCLUSÃO clínica (resultado:
+  // apto/inapto/apto_com_restrições) de toda linha, e ler "inapto" já é ler
+  // saúde de terceiro. A trilha se amarra ao dado devolvido, não à existência
+  // de um campo cifrado (mesmo critério da CAT).
+  const idsLidos = linhas.map((linha) => String(linha.id));
+  if (idsLidos.length > 0) {
     await comTransacao(sessao.usuario_id, async (cliente) => {
-      for (const registroId of idsComRestricao) {
+      for (const registroId of idsLidos) {
         await registrarLeituraSensivel(cliente, {
           usuarioId: sessao.usuario_id,
           chavePermissao: CHAVE_SAUDE_VER,
@@ -498,13 +500,14 @@ export async function listarPsicossociaisParaSessao(
     };
   });
 
-  // Trilha de leitura: um registro por avaliação cuja observação foi decifrada.
-  const idsComObservacao = linhas
-    .filter((linha) => linha.observacoes_cifradas !== null)
-    .map((linha) => String(linha.id));
-  if (idsComObservacao.length > 0) {
+  // Trilha de leitura: um registro por avaliação DEVOLVIDA — não só as com
+  // observação cifrada. classificacao_risco (baixo/médio/alto/crítico) é
+  // conclusão de saúde e sai em toda linha, então a trilha cobre a leitura do
+  // resultado, não a existência de um campo cifrado.
+  const idsLidos = linhas.map((linha) => String(linha.id));
+  if (idsLidos.length > 0) {
     await comTransacao(sessao.usuario_id, async (cliente) => {
-      for (const registroId of idsComObservacao) {
+      for (const registroId of idsLidos) {
         await registrarLeituraSensivel(cliente, {
           usuarioId: sessao.usuario_id,
           chavePermissao: CHAVE_SAUDE_VER,

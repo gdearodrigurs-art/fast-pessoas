@@ -859,6 +859,24 @@ export async function responderOferta(
     if (!candidatura) {
       throw new ErroHttp(404, "Candidatura não encontrada.");
     }
+    // As mesmas guardas dos irmãos (movimentar/criarOferta): responder oferta
+    // também exige candidatura ATIVA e vaga ABERTA. Sem isto, dois candidatos
+    // com oferta 'enviada' na mesma vaga podiam ambos aceitar (over-hire: a
+    // segunda passava porque o fechamento da vaga só roda quando ela ainda está
+    // 'aberta'), e uma candidatura já reprovada podia "ressuscitar" para
+    // aprovada num 'aceita' tardio.
+    if (candidatura.status !== "ativa") {
+      throw new ErroHttp(
+        409,
+        `Candidatura ${ROTULOS_STATUS_CANDIDATURA[candidatura.status].toLowerCase()} não responde oferta — o histórico é definitivo.`
+      );
+    }
+    if (candidatura.vaga_status !== "aberta") {
+      throw new ErroHttp(
+        409,
+        `Vaga ${ROTULOS_STATUS_VAGA[candidatura.vaga_status].toLowerCase()} não recebe resposta de oferta.`
+      );
+    }
     const oferta = await buscarOfertaParaMutacao(cliente, candidaturaId);
     if (!oferta) {
       throw new ErroHttp(404, "Esta candidatura não tem oferta.");

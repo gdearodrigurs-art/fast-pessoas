@@ -181,9 +181,12 @@ export async function agregadoGeral(
   fim: string
 ): Promise<AgregadoGeral> {
   const linhas = await consultar<AgregadoGeral & Record<string, unknown>>(
+    // Conta PESSOA (pessoa_id, NOT NULL desde a 0052), não contrato: quem foi
+    // transferido entre CNPJs do grupo na janela responde por dois vínculos e
+    // contaria em dobro num COUNT por colaborador_id.
     `SELECT AVG(nota)::float8 AS media,
             COUNT(*)::int AS respostas,
-            COUNT(DISTINCT colaborador_id)::int AS respondentes
+            COUNT(DISTINCT pessoa_id)::int AS respondentes
        FROM rh_clima.checkin_resposta
       WHERE data_referencia BETWEEN $1 AND $2`,
     [inicio, fim]
@@ -248,7 +251,7 @@ export async function agregadoPorUnidade(
               WHERE r.data_referencia <= $2::date - $3::int
             )::float8 AS media_anterior,
             COUNT(*)::int AS respostas,
-            COUNT(DISTINCT r.colaborador_id)::int AS respondentes
+            COUNT(DISTINCT r.pessoa_id)::int AS respondentes
        FROM rh_clima.checkin_resposta r
        JOIN LATERAL rh.estrutura_em(r.colaborador_id, r.data_referencia) est
          ON TRUE
@@ -256,7 +259,10 @@ export async function agregadoPorUnidade(
          ON ev.id = rh.estabelecimento_versao_em(est.estabelecimento_id, $2::date)
       WHERE r.data_referencia BETWEEN $1 AND $2
       GROUP BY est.estabelecimento_id, ev.unidade
-     HAVING COUNT(DISTINCT r.colaborador_id) >= $4::int
+     -- PISO DE ANONIMATO por PESSOA, não por contrato: quem foi transferido de
+     -- CNPJ na janela tem dois colaborador_id no mesmo estabelecimento; contar
+     -- vínculo deixava a unidade cruzar o k com menos gente real do que o piso.
+     HAVING COUNT(DISTINCT r.pessoa_id) >= $4::int
       ORDER BY ev.unidade`,
     [inicio, fim, diasRecentes, minimoRespondentes]
   );
@@ -277,14 +283,17 @@ export async function adesaoCheckinPorDia(
 ): Promise<{ respondentes_por_dia: number[]; ativos: number }> {
   const [dias, ativos] = await Promise.all([
     consultar<{ respondentes: number }>(
-      `SELECT COUNT(DISTINCT colaborador_id)::int AS respondentes
+      // Numerador por PESSOA (pessoa_id): o denominador também é por pessoa, e
+      // adesão é gente que respondeu ÷ gente ativa, não contrato ÷ contrato.
+      `SELECT COUNT(DISTINCT pessoa_id)::int AS respondentes
          FROM rh_clima.checkin_resposta
         WHERE data_referencia BETWEEN $1 AND $2
         GROUP BY data_referencia`,
       [inicio, fim]
     ),
     consultar<{ total: number }>(
-      `SELECT COUNT(*)::int AS total FROM rh.colaborador WHERE status = 'ativo'`
+      // Denominador por PESSOA: quem tem dois vínculos ativos é uma pessoa só.
+      `SELECT COUNT(DISTINCT pessoa_id)::int AS total FROM rh.colaborador WHERE status = 'ativo'`
     ),
   ]);
   return {

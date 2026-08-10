@@ -430,7 +430,7 @@ export async function listarAbertasParaColaborador(
             END AS respondida
        FROM rh_clima.pesquisa p
       WHERE p.status = 'aberta'
-        AND CURRENT_DATE BETWEEN p.inicio AND p.fim
+        AND rh.hoje() BETWEEN p.inicio AND p.fim
       ORDER BY p.fim, p.id`,
     [colaboradorId]
   );

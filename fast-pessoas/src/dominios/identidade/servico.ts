@@ -97,22 +97,26 @@ export async function autenticar(
   }
 
   let precisaConfigurar2fa = false;
-  if (await usuarioExige2fa(usuario.id)) {
-    if (usuario.totp_secret) {
-      if (!credenciais.codigo_totp) {
-        return { ok: false, motivo: "totp_obrigatorio" };
-      }
-      if (!validarCodigoTotp(usuario.totp_secret, credenciais.codigo_totp)) {
-        await registrarAcao(
-          "login_falha",
-          { id: usuario.id, papel: usuario.papel },
-          { email: credenciais.email, motivo: "totp_invalido" }
-        );
-        return { ok: false, motivo: "totp_invalido" };
-      }
-    } else {
-      precisaConfigurar2fa = true;
+  if (usuario.totp_secret) {
+    // Quem tem segredo cadastrado SEMPRE valida o código — inclusive quem
+    // ativou o 2FA por conta própria sem ser obrigado. Antes o código só era
+    // cobrado quando a chave tornava o 2FA obrigatório, então o segundo fator
+    // VOLUNTÁRIO do gestor/funcionário era ignorado no login: com a senha
+    // vazada, entrava-se sem o TOTP que a pessoa tinha justamente ativado.
+    if (!credenciais.codigo_totp) {
+      return { ok: false, motivo: "totp_obrigatorio" };
     }
+    if (!validarCodigoTotp(usuario.totp_secret, credenciais.codigo_totp)) {
+      await registrarAcao(
+        "login_falha",
+        { id: usuario.id, papel: usuario.papel },
+        { email: credenciais.email, motivo: "totp_invalido" }
+      );
+      return { ok: false, motivo: "totp_invalido" };
+    }
+  } else if (await usuarioExige2fa(usuario.id)) {
+    // Obrigado por chave, mas ainda sem segredo: manda configurar.
+    precisaConfigurar2fa = true;
   }
 
   await registrarAcao("login_sucesso", {
