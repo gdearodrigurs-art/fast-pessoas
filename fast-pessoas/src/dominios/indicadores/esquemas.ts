@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 export const UNIDADES_MEDIDA = ["%", "qtd", "dias"] as const;
 
@@ -20,13 +21,6 @@ export const ROTULOS_DIRECAO: Record<Direcao, string> = {
   maior: "Quanto maior, melhor",
   menor: "Quanto menor, melhor",
 };
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 export const esquemaCriacaoIndicador = z.object({
   nome: z.string().trim().min(3, "Informe o nome do indicador").max(200),

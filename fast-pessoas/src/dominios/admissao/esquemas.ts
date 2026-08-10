@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // ------------------------------------------------------------------ estados do processo
 
@@ -29,13 +30,6 @@ export const ROTULOS_STATUS_ITEM: Record<StatusItem, string> = {
 };
 
 // ------------------------------------------------------------------ validação de entrada
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 export const esquemaAberturaProcesso = z.object({
   colaborador_id: z.number().int().positive(),

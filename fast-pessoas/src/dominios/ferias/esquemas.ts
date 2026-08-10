@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // ------------------------------------------------------------------ período aquisitivo
 
@@ -39,13 +40,6 @@ export const ROTULOS_STATUS_PROGRAMACAO: Record<StatusProgramacao, string> = {
   concluida: "Concluída",
   cancelada: "Cancelada",
 };
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 /**
  * LIMITES LEGAIS DO GOZO, em dias — e por que estes NÃO são cadastro.

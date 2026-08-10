@@ -173,7 +173,7 @@ transferência real entre CNPJs depois de o DP começar a conceder fora do crit�
 
 ---
 
-## 7 · `esquemaData` aceita data inexistente (30/02) em todo o projeto — descoberto 2026-08-10
+## 7 · `esquemaData` aceita data inexistente (30/02) — RESOLVIDO 2026-08-10
 
 **O quê:** o `esquemaData` que quase todo módulo usa (`beneficios`, `admissao`,
 `afastamentos`, `avaliacao`, `clima`, …) valida a data com
@@ -189,7 +189,9 @@ para um `::date` no Postgres, estoura com 500 feio em vez de 400 limpo.
 ida-e-volta: a data só é real se, convertida e formatada de novo, volta
 idêntica.
 
-**Recomendação:** trocar o `refine` do `esquemaData` compartilhado pelo teste de
+**RESOLVIDO:** feito — `src/lib/data-civil.ts` é a fonte única com o ida-e-volta (mais a guarda contra `Invalid Date` que estoura no mês fora de faixa), e os 15 módulos + a rota de revisão de benefício importam dela. 174 testes, um deles travando 30/02 e o mês 13. O texto abaixo era a recomendação original.
+
+**Recomendação original:** trocar o `refine` do `esquemaData` compartilhado pelo teste de
 ida-e-volta, num lugar só, e todos os módulos herdam. É mudança em arquivo que
 vários módulos importam — não fiz sozinho porque toca superfície ampla e o dono
 estava fora. Baixo risco (só aperta o que já devia recusar), mas merece rodar os

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // ------------------------------------------------------------------ ASO
 
@@ -33,13 +34,6 @@ export const ROTULOS_RESULTADO_ASO: Record<ResultadoAso, string> = {
   inapto: "Inapto",
   apto_com_restricoes: "Apto com restrições",
 };
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 // ------------------------------------------------------------------ NR-1 / avaliação psicossocial
 // Fica ANTES do ASO no arquivo porque o esquema do ASO embute a avaliação

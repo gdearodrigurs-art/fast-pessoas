@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // ------------------------------------------------------------------ tipos de ciclo
 
@@ -101,13 +102,6 @@ export const NOTA_MAXIMA = 5;
 export const DIAS_ALERTA_PRAZO = 10;
 
 // ------------------------------------------------------------------ validação de entrada
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 /**
  * Uma resposta é nota 1–5 OU não observado — nunca os dois, nunca nenhum

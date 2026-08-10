@@ -7,6 +7,7 @@ import {
   montarDescricaoSolicitacao,
 } from "../src/dominios/beneficios/esquemas";
 import { hojeNaOperacao } from "../src/dominios/colaboradores/esquemas";
+import { esquemaData } from "../src/lib/data-civil";
 
 // ===========================================================================
 // A borda da regra de elegibilidade de benefício.
@@ -143,4 +144,29 @@ test("texto fora do contrato não vira natureza nenhuma", () => {
   // Demanda de outro domínio, ou texto livre, devolve null — nunca um palpite.
   assert.equal(interpretarDescricaoSolicitacao("Ajuste de ponto do dia 05."), null);
   assert.equal(interpretarDescricaoSolicitacao(""), null);
+});
+
+// ===========================================================================
+// A data civil compartilhada (src/lib/data-civil) — o ida-e-volta.
+//
+// Catorze módulos tinham a mesma validação por `Date.parse`, que ACEITA
+// 2026-02-30 (o JS rola 30/02 para 02/03 e devolve número válido). A fonte
+// única troca isso pelo ida-e-volta. Este teste é o que impede a versão fraca
+// de voltar sorrateira em qualquer módulo que importe daqui.
+// ===========================================================================
+
+test("data civil recusa o dia que não existe (30/02) — o defeito do Date.parse", () => {
+  assert.equal(esquemaData.safeParse("2026-02-30").success, false);
+  assert.equal(esquemaData.safeParse("2026-04-31").success, false);
+  assert.equal(esquemaData.safeParse("2026-13-01").success, false);
+});
+
+test("data civil aceita datas reais, inclusive 29/02 de ano bissexto", () => {
+  assert.equal(esquemaData.safeParse("2026-09-01").success, true);
+  assert.equal(esquemaData.safeParse("2024-02-29").success, true); // bissexto
+  assert.equal(esquemaData.safeParse("2026-02-28").success, true);
+});
+
+test("data civil recusa 29/02 fora de ano bissexto", () => {
+  assert.equal(esquemaData.safeParse("2026-02-29").success, false);
 });

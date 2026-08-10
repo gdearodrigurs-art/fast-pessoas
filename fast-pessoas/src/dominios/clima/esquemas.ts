@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 export const NOTAS = [1, 2, 3, 4, 5] as const;
 
@@ -26,13 +27,6 @@ export const ROTULOS_NOTA: Record<Nota, string> = {
 export const AVISO_TRANSPARENCIA =
   "Suas respostas individuais são visíveis apenas à Diretoria de Pessoas; " +
   "seu gestor vê somente médias agregadas.";
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 export const esquemaRespostaCheckin = z.object({
   pergunta_versao_id: z.number().int().positive(),

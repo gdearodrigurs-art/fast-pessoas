@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // ------------------------------------------------------------------ competência
 
@@ -177,13 +178,6 @@ export const CODIGOS_DO_MOTOR: readonly string[] = [
   CODIGO_FALTAS,
   CODIGO_DESCONTO_BENEFICIO,
 ];
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 const esquemaDinheiro = z
   .number()

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 
 // Estrutura do grupo: os catálogos administráveis por trás dos TRÊS campos que
 // o dono separou (migration 0047).
@@ -11,10 +12,6 @@ import { z } from "zod";
 // e se inativam pela tela. Renomear é VERSÃO NOVA com vigência — o nome de
 // fevereiro continua sendo o nome de fevereiro. Inativar tira dos seletores e
 // não apaga nada: quem esteve registrado ali continua tendo passado.
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data deve estar no formato AAAA-MM-DD");
 
 /** CNPJ é opcional: a diretoria nomeia a empresa antes de o DP passar o número. */
 const esquemaCnpjOpcional = z

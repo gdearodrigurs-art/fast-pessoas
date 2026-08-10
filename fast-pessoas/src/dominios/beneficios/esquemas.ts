@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 import {
   cpfValido,
   hojeNaOperacao,
@@ -47,13 +48,6 @@ export const ROTULOS_PARENTESCO: Record<Parentesco, string> = {
   conjuge: "Cônjuge",
   outro: "Outro",
 };
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 /**
  * Dinheiro na borda. A frase entra por parâmetro porque a mensagem que importa

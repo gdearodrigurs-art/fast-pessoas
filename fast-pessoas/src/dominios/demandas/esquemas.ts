@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { esquemaData } from "../../lib/data-civil";
 // O tipo de vínculo é do domínio de colaboradores; a transferência entre
 // empresas do grupo escolhe um deles para o contrato que nasce (0048).
 import { TIPOS_VINCULO } from "../colaboradores/esquemas";
@@ -171,13 +172,6 @@ export const ROTULOS_STATUS_ETAPA: Record<StatusEtapa, string> = {
   aprovada: "Aprovada",
   reprovada: "Reprovada",
 };
-
-const esquemaData = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Data no formato AAAA-MM-DD")
-  .refine((valor) => !Number.isNaN(Date.parse(`${valor}T00:00:00Z`)), {
-    message: "Data inválida",
-  });
 
 export const esquemaCriacaoMovimentacao = z
   .object({
