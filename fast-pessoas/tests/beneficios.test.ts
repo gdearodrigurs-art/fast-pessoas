@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { esquemaNovaRegra } from "../src/dominios/beneficios/esquemas";
+import {
+  esquemaNovaRegra,
+  interpretarDescricaoSolicitacao,
+  montarDescricaoSolicitacao,
+} from "../src/dominios/beneficios/esquemas";
 import { hojeNaOperacao } from "../src/dominios/colaboradores/esquemas";
 
 // ===========================================================================
@@ -75,4 +79,68 @@ test("regra retroativa continua passando pela borda", () => {
   // versão vigente. Travar aqui esconderia a mensagem útil.
   const analise = esquemaNovaRegra.safeParse(regra("2020-01-01"));
   assert.equal(analise.success, true);
+});
+
+// ===========================================================================
+// O parser da descrição da demanda — três naturezas depois da onda H3.
+//
+// A chave do benefício viaja DENTRO do texto da demanda, e a natureza é lida
+// pelo prefixo. Enquanto eram duas (adesão/cancelamento), o interpretador usava
+// um ternário binário: "se é o prefixo de adesão, é adesão; senão, cancelamento".
+// A onda H3 acrescentou a terceira (revisão de valor), e aquele ternário
+// rotularia a revisão de "cancelamento" — o DP confirmaria um cancelamento que
+// ninguém pediu, sobre a adesão errada. A correção foi lookup pelos três
+// prefixos; estes testes travam isso.
+//
+// O eixo por trás: "nada chumbado" na leitura. O prefixo e a chave são o
+// contrato entre montar e interpretar — se um lado muda e o outro não, a
+// demanda vira ação silenciosamente errada.
+// ===========================================================================
+
+test("cada natureza volta com a sua etiqueta, ida e volta", () => {
+  for (const natureza of ["adesao", "cancelamento", "revisao"] as const) {
+    const descricao = montarDescricaoSolicitacao(
+      natureza,
+      "Convênio Farmácia",
+      "farmacia",
+      "um motivo qualquer"
+    );
+    const lido = interpretarDescricaoSolicitacao(descricao);
+    assert.equal(lido?.natureza, natureza);
+    assert.equal(lido?.chave, "farmacia");
+  }
+});
+
+test("revisão não é confundida com cancelamento (o defeito do ternário)", () => {
+  // O caso exato que a correção da H3 evita: a descrição de revisão NÃO pode
+  // voltar como 'cancelamento'.
+  const descricao = montarDescricaoSolicitacao(
+    "revisao",
+    "Vale-Transporte",
+    "vt",
+    "mudei de casa"
+  );
+  const lido = interpretarDescricaoSolicitacao(descricao);
+  assert.equal(lido?.natureza, "revisao");
+  assert.notEqual(lido?.natureza, "cancelamento");
+});
+
+test("nome de benefício que CONTÉM outro prefixo não engana o parser", () => {
+  // O prefixo é ancorado em ^ e o nome vai entre aspas; um benefício chamado
+  // como um prefixo não deve sequestrar a leitura. A natureza sai do prefixo
+  // inicial, não do nome.
+  const descricao = montarDescricaoSolicitacao(
+    "revisao",
+    "Adesão ao benefício especial", // o nome contém o prefixo de adesão
+    "especial"
+  );
+  const lido = interpretarDescricaoSolicitacao(descricao);
+  assert.equal(lido?.natureza, "revisao");
+  assert.equal(lido?.chave, "especial");
+});
+
+test("texto fora do contrato não vira natureza nenhuma", () => {
+  // Demanda de outro domínio, ou texto livre, devolve null — nunca um palpite.
+  assert.equal(interpretarDescricaoSolicitacao("Ajuste de ponto do dia 05."), null);
+  assert.equal(interpretarDescricaoSolicitacao(""), null);
 });
