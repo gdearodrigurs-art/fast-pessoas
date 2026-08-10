@@ -199,3 +199,32 @@ portões de cada módulo tocado.
 
 **Eixo:** tempo civil / vigência — data inexistente é a borda que a validação
 por `Date.parse` deixa passar.
+
+---
+
+## 8 · Achados das revisões de código da onda 0/H (2026-08-10) — nenhum bloqueador
+
+Duas revisões adversariais (gsd-code-reviewer) varreram a onda 0/0b, a onda H
+(H1/H2/H5/H6) e a H3/H4. **Zero bloqueadores** — os pontos de risco (IDOR nos
+dependentes e no `/api/ponto/dia`, bypass de MIME no multipart, backfill da
+0055, corrida do encerramento na revisão de valor) estão todos fechados e
+provados. O que sobrou, para o dono decidir:
+
+**8a — CPF de dependente não tem campo no autoatendimento** (portal). O backend
+e o esquema aceitam CPF opcional, mas a tela `portal-colaborador.tsx` não tem o
+input. Então o colaborador cadastra dependente sem CPF, e o passo do CPF (que o
+eSocial/IRRF pede) volta para o DP. **DECISÃO:** expor o CPF do dependente
+(possível menor) no autoatendimento é escolha de PRIVACIDADE/LGPD, não bug —
+por isso não fiz sozinho. Antes era o DP quem digitava; agora seria a pessoa.
+
+**8b — data de nascimento de dependente não tem teto (não-futuro).** Baixo
+impacto (data futura só não conta no IRRF), e hoje é *consistente* com o caminho
+do DP, que também não trava. Consertar só o portal criaria inconsistência entre
+os dois. Guardar nos dois (ou em nenhum) é decisão de escopo.
+
+**8c — TOCTOU na categoria de devolução:** se a categoria for inativada entre a
+checagem `ativa` e o INSERT, o `RAISE EXCEPTION` cru do trigger vira 500 em vez
+do 4xx amigável que já existe algumas linhas acima. **Fails-safe** (nenhuma
+linha ruim entra), então é UX/observabilidade, não perda de dado. Conserto:
+dar um SQLSTATE-sentinela ao trigger (migration nova) e mapear no serviço. Não
+fiz sozinho por exigir migration para um 500→400 cosmético.
