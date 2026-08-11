@@ -103,14 +103,16 @@ export async function registrarAcao(
 export async function atualizarTotpSecret(
   cliente: PoolClient,
   usuarioId: number,
-  totpSecret: string | null
+  totpSecret: string | null,
+  ultimoPasso: number | null = null
 ): Promise<void> {
-  // Zera o último passo consumido junto com a troca do secret: sem isso, quem
-  // reativa o 2FA no MESMO período de 30s em que desativou teria o primeiro
-  // código novo recusado como replay (o passo bateria com o já consumido).
+  // O último passo troca junto com o secret. Na DESATIVAÇÃO (secret null) volta a
+  // NULL. Na ATIVAÇÃO grava o passo do código de confirmação, para esse mesmo
+  // código não ser replayável num login. Reativar no mesmo período segue OK: o
+  // passo do código novo é sempre >= o do secret anterior.
   await cliente.query(
-    "UPDATE sistema.usuario SET totp_secret = $2, totp_ultimo_passo = NULL WHERE id = $1",
-    [usuarioId, totpSecret]
+    "UPDATE sistema.usuario SET totp_secret = $2, totp_ultimo_passo = $3 WHERE id = $1",
+    [usuarioId, totpSecret, ultimoPasso]
   );
 }
 

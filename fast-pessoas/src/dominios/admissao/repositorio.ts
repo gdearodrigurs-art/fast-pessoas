@@ -236,8 +236,13 @@ export async function encerrarModeloAtivoDaFamilia(
   tipoVinculo: TipoVinculoModelo | null
 ): Promise<number | null> {
   const { rows } = await cliente.query<{ id: string }>(
+    // GREATEST protege o CHECK fim_vigencia >= inicio_vigencia: se a versão ativa
+    // nasceu com início no futuro (o seed da 0010 grava CURRENT_DATE, que perto
+    // da meia-noite de SP pode ser amanhã), fim=hoje seria < início e estouraria
+    // 23514 -> 500. Com GREATEST, o pior caso é uma janela de duração zero.
     `UPDATE rh.checklist_admissao_versao
-        SET status = 'encerrada', fim_vigencia = rh.hoje()
+        SET status = 'encerrada',
+            fim_vigencia = GREATEST(inicio_vigencia, rh.hoje())
       WHERE status = 'ativa'
         AND COALESCE(tipo_vinculo, 'geral') = COALESCE($1, 'geral')
       RETURNING id`,

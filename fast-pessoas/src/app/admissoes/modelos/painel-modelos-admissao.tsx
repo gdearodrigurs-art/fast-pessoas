@@ -34,7 +34,9 @@ interface FamiliaView {
   historico: VersaoView[];
 }
 interface Painel {
-  pode: boolean;
+  // O gate real é servidor: page.tsx redireciona quem não pode e a rota POST
+  // revalida. Aqui só listamos famílias — sem campo `pode`, para não sugerir uma
+  // trava de cliente que não existe.
   familias: FamiliaView[];
 }
 

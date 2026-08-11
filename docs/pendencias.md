@@ -19,6 +19,7 @@
 | 9 | Folha: quem conta como dependente para o IRRF | Guilherme | 10/08/2026 | base do IRRF retido |
 | 10 | Contato do candidato: leitura entra na trilha? | Guilherme | 10/08/2026 | rastro LGPD de dado de terceiro |
 | 11 | Replay de TOTP: código válido reutilizável na janela | Guilherme | 10/08/2026 | endurecimento do 2FA |
+| 12 | Vínculo "temporário" não tem família de modelo de admissão | Guilherme | 10/08/2026 | checklist próprio de temporário |
 
 ---
 
@@ -314,6 +315,20 @@ em transação revertida). **O que FALTA antes de mergear na main:** a bateria d
 persona (login das 7 personas com código fresco da `db/codigo-2fa.js`, mais um teste manual
 de reativar 2FA logo após desativar) — é a rede que o arnês pede para mudança de auth, e eu
 não consigo rodá-la headless sem as personas. Enquanto isso não rodar, não empurre a `main`.
+
+**Revisão adversarial do próprio TOTP (10/08/2026) achou e eu consertei:** (1) BLOCKER — o
+"último passo" era compartilhado entre login, aprovação de folha e desativação; como
+login→aprovar-folha pede DOIS TOTP em segundos (o mesmo código do período de 30s), o
+segundo era recusado. Corrigido: **anti-replay só no LOGIN** (a ameaça real); folha e
+desativação — que já exigem sessão + senha — voltam a validar sem consumir. (2) O
+enrolamento não gravava o passo (código de ativação era replayável 1× no login); corrigido:
+`confirmarAtivacao2fa` grava o passo do código de confirmação. **Limitação residual conhecida
+(delta +1):** aceitar um código do próximo período (folga de relógio, janela 1) adianta o
+"último passo"; um código genuinamente fresco de passo MENOR (segundo autenticador atrasado,
+ou salto NTP para trás) seria recusado. Cenário raro (dois dispositivos dessincronizados no
+mesmo minuto); não mexi na lógica de consumo para não quebrar a detecção de replay. Vale
+monitorar recusas após aceite de delta +1.
+
 O texto abaixo era o registro original.
 
 ---
@@ -351,3 +366,38 @@ merge.)
 captura ativa de credenciais. Severidade avaliada como PLAUSIBLE (janela estreita).
 
 **Eixo:** auth / enrolamento TOTP sem bypass.
+
+---
+
+## 12 · O vínculo "temporário" não tem família de modelo de admissão
+
+**Onde está:** `src/dominios/admissao/esquemas.ts` — `TIPOS_VINCULO_MODELO` = clt/estagiario/
+aprendiz/pj, e o CHECK da `0058` (`tipo_vinculo IN ('clt','estagiario','aprendiz','pj')`) faz o
+mesmo. Mas `rh.colaborador.tipo_vinculo` (0001_fundacao.sql:66-67) admite um sexto:
+**`temporario`**.
+
+**A consequência:** ao admitir alguém `tipo_vinculo='temporario'`, `buscarChecklistAtivo` procura
+`tipo_vinculo='temporario' OR IS NULL` — como nenhum modelo pode ser 'temporario' (o CHECK proíbe
+e a tela não oferece a família), só casa o GERAL. O trabalhador temporário (Lei 6.019, com
+documentação legalmente distinta — contrato de trabalho temporário, etc.) usa em silêncio o
+checklist geral, e o DP não consegue criar um modelo específico pela tela.
+
+**Minha recomendação: incluir 'temporario' como família** — é o que alinha o domínio do MODELO ao
+domínio real de `rh.colaborador.tipo_vinculo`, e é a mesma razão de existir da Fase 1 (o checklist
+varia por vínculo porque a documentação varia). Custo: uma migration para estender o CHECK da
+`checklist_admissao_versao` (a 0058 está aplicada, então é uma migration nova que faz
+`DROP CONSTRAINT ... ADD CONSTRAINT ...` com os cinco valores), mais 'temporario' em
+`TIPOS_VINCULO_MODELO`, `ROTULOS_FAMILIA_MODELO` e `FAMILIAS_NA_ORDEM`.
+
+**A favor:** nada chumbado (eixo 9) — a lista de famílias passa a cobrir todos os vínculos que
+existem, e o DP administra o checklist do temporário como administra os outros.
+
+**Contra / por que subo em vez de decidir:** se a Fast **não contrata por vínculo temporário** (ou
+trata temporário como CLT para fins de admissão), incluir a família é ruído. É decisão de negócio
+(a Fast usa esse vínculo?) somada a uma migration — por isso não fiz sozinho. Se a resposta for
+"não usamos", basta documentar a omissão no COMMENT da coluna e fechar esta pendência.
+
+**O que trava:** nada hoje — temporário cai no geral. Vira relevante na primeira admissão real de
+temporário que precise de um checklist diferente do geral.
+
+**Eixo:** nada chumbado (9) — o domínio do modelo omite um valor que o cadastro admite.

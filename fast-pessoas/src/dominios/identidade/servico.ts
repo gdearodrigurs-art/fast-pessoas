@@ -59,18 +59,23 @@ export type ResultadoAutenticacao =
       motivo: "credenciais_invalidas" | "totp_obrigatorio" | "totp_invalido";
     };
 
-// Enrolamento (secret PENDENTE, ainda sem usuário para consumir passo) usa só a
-// validação. Login e revalidações críticas usam validarEConsumirTotp, que torna
-// o código de USO ÚNICO.
+// Validação simples (sem consumir o passo). É o que usam:
+//  - o ENROLAMENTO (secret pendente, sem usuário para consumir);
+//  - as revalidações DENTRO da sessão (aprovar folha, desativar 2FA): reapresentar
+//    ali um código já usado no login exige estar autenticado, então o replay não
+//    é ameaça e o uso único colidiria com o login->aprovar-folha, que pede DOIS
+//    TOTP em segundos (o mesmo código do período de 30s).
 function validarCodigoTotp(secret: string, codigo: string): boolean {
   return validarTotpComPasso(secret, codigo) !== null;
 }
 
 /**
- * Valida E CONSOME o código: verdadeiro só se o código bate E o passo dele ainda
- * não foi usado por este usuário (anti-replay). Reapresentar o MESMO código
- * dentro da janela devolve falso — o passo já foi consumido. Um código fresco
- * tem sempre passo maior, então login legítimo nunca é barrado.
+ * Valida E CONSOME o código — SÓ no LOGIN, onde a ameaça de replay é real (código
+ * + senha capturados para reentrar). Verdadeiro só se o código bate E o passo
+ * dele ainda não foi consumido por este usuário; reapresentar o MESMO código
+ * devolve falso. Um código fresco tem sempre passo maior, então login legítimo
+ * não é barrado (salvo reenvio do mesmo código após resposta perdida — raro, e é
+ * o comportamento correto de uso único).
  */
 async function validarEConsumirTotp(
   usuarioId: number,
@@ -207,9 +212,7 @@ export async function validarTotpDoUsuario(
   if (!usuario || !usuario.ativo || !usuario.totp_secret) {
     return "sem_2fa";
   }
-  return (await validarEConsumirTotp(usuario.id, usuario.totp_secret, codigo))
-    ? "ok"
-    : "invalido";
+  return validarCodigoTotp(usuario.totp_secret, codigo) ? "ok" : "invalido";
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +289,8 @@ export async function confirmarAtivacao2fa(
   if (usuario.totp_secret) {
     throw new ErroHttp(409, "A autenticação em duas etapas já está ativa.");
   }
-  if (!validarCodigoTotp(secretPendente, codigo)) {
+  const passoAtivacao = validarTotpComPasso(secretPendente, codigo);
+  if (passoAtivacao === null) {
     await registrarAcao("ativacao_2fa_falha", {
       id: usuario.id,
       papel: usuario.papel,
@@ -298,7 +302,10 @@ export async function confirmarAtivacao2fa(
     );
   }
   await comTransacao(sessao.usuario_id, async (cliente) => {
-    await atualizarTotpSecret(cliente, usuario.id, secretPendente);
+    // Grava o PASSO do código de confirmação junto com o secret: sem isso, esse
+    // mesmo código (ainda na janela de aceitação) seria reapresentável UMA vez
+    // num login. Com o passo gravado, o login exige passo maior.
+    await atualizarTotpSecret(cliente, usuario.id, secretPendente, passoAtivacao);
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
@@ -343,9 +350,7 @@ export async function desativar2fa(
     throw new ErroHttpCampo(400, "Senha atual incorreta.", "senha");
   }
 
-  if (
-    !(await validarEConsumirTotp(usuario.id, usuario.totp_secret, dados.codigo))
-  ) {
+  if (!validarCodigoTotp(usuario.totp_secret, dados.codigo)) {
     await registrarAcao("desativacao_2fa_falha", {
       id: usuario.id,
       papel: usuario.papel,
