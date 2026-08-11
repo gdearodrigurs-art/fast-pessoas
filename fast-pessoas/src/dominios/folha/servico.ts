@@ -359,9 +359,12 @@ export async function montarVisaoCompetencia(
     resumoEstruturaDaCompetencia(competenciaId),
   ]);
 
-  if (folhas.length > 0) {
+  if (folhas.length > 0 || variaveis.length > 0) {
     // Salário e resultado de folha são o dado mais sensível do sistema:
-    // toda leitura autorizada deixa trilha.
+    // toda leitura autorizada deixa trilha. As VARIÁVEIS (lançamentos manuais e
+    // benefícios) também carregam valor por pessoa nominada, e aparecem antes de
+    // qualquer folha ser calculada (competência ainda 'aberta') — ler esses
+    // valores sem trilha era o furo: a trilha se prende ao dado devolvido.
     await registrarLeituraSensivel({
       usuarioId: sessao.usuario_id,
       chavePermissao: "folha.ver",

@@ -511,7 +511,14 @@ async function criarAvaliacoes(
   );
 }
 
-// Gestor vigente (um só por liderado: relação mais recente).
+// Gestor vigente NÃO-EU (um só por liderado: relação mais recente que não seja
+// a pessoa liderando a si mesma). O filtro `<> liderado` mora DENTRO da
+// subconsulta, antes do LIMIT 1 — não no ON. No ON, se a relação MAIS recente
+// fosse self, a subconsulta trazia essa e o JOIN a descartava, deixando o
+// colaborador sem ciclo; mas listarAtivosSemGestor (que nomeia "quem ficou de
+// fora") usa NOT EXISTS(<> self), então quem tinha uma relação self recente E
+// uma não-self antiga não entrava no lote NEM aparecia como excluído. Com o
+// filtro dentro, pega a mais recente NÃO-self — as duas consultas concordam.
 const JOIN_GESTOR_VIGENTE = (aliasLiderado: string) => `
   JOIN LATERAL (
     SELECT rg.gestor_colaborador_id
@@ -519,9 +526,10 @@ const JOIN_GESTOR_VIGENTE = (aliasLiderado: string) => `
      WHERE rg.liderado_colaborador_id = ${aliasLiderado}
        AND rg.fim_vigencia IS NULL
        AND rg.inicio_vigencia <= ${HOJE_SP}
+       AND rg.gestor_colaborador_id <> ${aliasLiderado}
      ORDER BY rg.inicio_vigencia DESC, rg.id DESC
      LIMIT 1
-  ) gv ON gv.gestor_colaborador_id <> ${aliasLiderado}`;
+  ) gv ON TRUE`;
 
 /**
  * Geração LAZY dos ciclos de experiência a partir de rh.processo_admissao

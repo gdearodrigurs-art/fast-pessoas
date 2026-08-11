@@ -60,9 +60,15 @@ export interface RespostaIndividual {
 
 export async function listarPerguntasAtivas(): Promise<PerguntaAtiva[]> {
   const linhas = await consultar<{ id: string; texto: string; ordem: number }>(
+    // Janela civil, não só o status: o CHECK da 0004 permite uma linha 'ativa'
+    // com início futuro ou fim já preenchido, então programar entrada/saída sem
+    // passar por 'encerrada' deixava a pergunta ser servida fora da vigência. É
+    // o anti-padrão do eixo 10 (janela lida por status). rh.hoje() = São Paulo.
     `SELECT id, texto, ordem
        FROM rh_clima.pergunta_versao
       WHERE status = 'ativa'
+        AND inicio_vigencia <= rh.hoje()
+        AND (fim_vigencia IS NULL OR fim_vigencia >= rh.hoje())
       ORDER BY ordem`
   );
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
