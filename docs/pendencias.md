@@ -273,6 +273,10 @@ transferência real entre CNPJs depois de o DP começar a conceder fora do crit�
 - numa **rescisão** ele é reavaliado no destino (o comportamento atual — critério do destino decide).
 Resolve-se junto do passo continuidade × rescisão do #1, não isolado.
 
+**RESOLVIDO via #1 (11/08/2026).** A continuidade não toca `rh.adesao` — as adesões seguem no mesmo
+vínculo. Provado: o vínculo 168, após a continuidade DCS→Supply, manteve as **5 adesões vigentes**
+intactas. Na rescisão, `transferirAdesoesEntreVinculos` reavalia pelo critério do destino (o de antes).
+
 ---
 
 ## 7 · `esquemaData` aceita data inexistente (30/02) — RESOLVIDO 2026-08-10
