@@ -851,6 +851,11 @@ export async function ajustarMarcacao(
   await exigirColaboradorExistente(dados.colaborador_id);
   return comTransacao(sessao.usuario_id, async (cliente) => {
     if (dados.substitui_marcacao_id) {
+      // Trava a original ANTES de ler: serializa dois ajustes concorrentes sobre
+      // a MESMA batida. Sem isto ambos liam superada=false e o dia ficava com
+      // duas substitutas 'registro' — trabalhado/HE fantasma na reapuração (o
+      // UNIQUE marcacao_sem_repeticao só cobre substitui_marcacao_id IS NULL).
+      await repo.travarMarcacao(cliente, dados.substitui_marcacao_id);
       const original = await repo.buscarMarcacao(
         cliente,
         dados.substitui_marcacao_id
@@ -2226,6 +2231,40 @@ export async function listarIntercorrencias(
 }
 
 /**
+ * Fila de intercorrências JÁ recortada a um time no servidor: o LIMIT da
+ * consulta se aplica aos liderados, não à empresa inteira. Usada pelo portal do
+ * gestor, onde o DP/diretoria navega o time de um gestor (?gestor_id). Filtrar
+ * no cliente depois de o servidor cortar as 500 mais recentes da EMPRESA fazia
+ * as intercorrências antigas do time (as que estão vencendo) sumirem atrás das
+ * recentes de outros times. A autorização do time já foi resolvida na rota por
+ * resumoPontoDaEquipeComAlcance (gateia por ponto.ver.equipe e pelo alcance).
+ */
+export async function listarIntercorrenciasDaEquipe(
+  sessao: PayloadSessao,
+  gestorId: number,
+  colaboradorIds: number[],
+  filtros: {
+    status?: StatusIntercorrencia | null;
+    de?: string | null;
+    ate?: string | null;
+  }
+): Promise<repo.FilaIntercorrencias> {
+  const fila = await repo.listarIntercorrencias({
+    ...filtros,
+    colaboradoresPermitidos: colaboradorIds,
+  });
+  if (fila.itens.length > 0) {
+    await registrarLeituraDePonto(
+      sessao,
+      "ponto.ver.equipe",
+      "ponto.intercorrencias",
+      `equipe:${gestorId}`
+    );
+  }
+  return fila;
+}
+
+/**
  * Conferência do FATO em UM dia: roda o MESMO motor da apuração sobre o dia da
  * intercorrência e devolve o que ele ainda enxerga ali, com a sequência de
  * marcações que sustenta a leitura. É o que separa "corrigida" (o fato sumiu
@@ -2601,47 +2640,53 @@ export async function lancarMovimentoBanco(
   // banco de horas resolvido para pessoa nenhuma não é erro de servidor.
   await exigirColaboradorExistente(dados.colaborador_id);
   const regra = await repo.resolverRegraBanco(dados.colaborador_id, dados.data);
-  const saldoAtual = await repo.saldoBanco(dados.colaborador_id);
-  const novoSaldo = saldoAtual + dados.minutos;
-  if (regra) {
-    // O limite barra quem AFASTA o saldo do teto, não quem o aproxima. Testar
-    // só o estado final trancava o DP na armadilha: a apuração credita sem
-    // conferir teto nenhum (é fato do mundo, não pedido de autorização), e quem
-    // amanhecia estourado não conseguia mais lançar a compensação, a expiração
-    // nem o acerto de rescisão que baixariam o saldo — cada um deles voltava 422
-    // dizendo que o saldo "passaria" de um teto que já estava passado.
-    if (
-      novoSaldo > regra.limite_positivo_minutos &&
-      novoSaldo > saldoAtual
-    ) {
-      throw new ErroHttpCampo(
-        422,
-        `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite positivo da regra ` +
-          `(${regra.escopo}) é ${formatarMinutos(regra.limite_positivo_minutos)}` +
-          (saldoAtual > regra.limite_positivo_minutos
-            ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está acima do ` +
-              `limite, então só passa movimento que o reduza`
-            : ""),
-        "minutos"
-      );
-    }
-    if (
-      novoSaldo < -regra.limite_negativo_minutos &&
-      novoSaldo < saldoAtual
-    ) {
-      throw new ErroHttpCampo(
-        422,
-        `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite negativo da regra ` +
-          `(${regra.escopo}) é ${formatarMinutos(-regra.limite_negativo_minutos)}` +
-          (saldoAtual < -regra.limite_negativo_minutos
-            ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está abaixo do ` +
-              `limite, então só passa movimento que o eleve`
-            : ""),
-        "minutos"
-      );
-    }
-  }
   return comTransacao(sessao.usuario_id, async (cliente) => {
+    // Trava por colaborador ANTES de somar o saldo: sem ela, dois lançamentos
+    // simultâneos liam o mesmo saldo (leitura fora da transação, sem trava), os
+    // dois passavam na guarda de teto/piso e o saldo final furava o limite que a
+    // regra jurou. O saldo é a SOMA dos movimentos (não há CHECK no banco), então
+    // serializar é a única defesa — mesma técnica da apuração (advisory lock).
+    await repo.travarBancoDoColaborador(cliente, dados.colaborador_id);
+    const saldoAtual = await repo.saldoBanco(dados.colaborador_id, cliente);
+    const novoSaldo = saldoAtual + dados.minutos;
+    if (regra) {
+      // O limite barra quem AFASTA o saldo do teto, não quem o aproxima. Testar
+      // só o estado final trancava o DP na armadilha: a apuração credita sem
+      // conferir teto nenhum (é fato do mundo, não pedido de autorização), e quem
+      // amanhecia estourado não conseguia mais lançar a compensação, a expiração
+      // nem o acerto de rescisão que baixariam o saldo — cada um deles voltava 422
+      // dizendo que o saldo "passaria" de um teto que já estava passado.
+      if (
+        novoSaldo > regra.limite_positivo_minutos &&
+        novoSaldo > saldoAtual
+      ) {
+        throw new ErroHttpCampo(
+          422,
+          `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite positivo da regra ` +
+            `(${regra.escopo}) é ${formatarMinutos(regra.limite_positivo_minutos)}` +
+            (saldoAtual > regra.limite_positivo_minutos
+              ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está acima do ` +
+                `limite, então só passa movimento que o reduza`
+              : ""),
+          "minutos"
+        );
+      }
+      if (
+        novoSaldo < -regra.limite_negativo_minutos &&
+        novoSaldo < saldoAtual
+      ) {
+        throw new ErroHttpCampo(
+          422,
+          `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite negativo da regra ` +
+            `(${regra.escopo}) é ${formatarMinutos(-regra.limite_negativo_minutos)}` +
+            (saldoAtual < -regra.limite_negativo_minutos
+              ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está abaixo do ` +
+                `limite, então só passa movimento que o eleve`
+              : ""),
+          "minutos"
+        );
+      }
+    }
     const id = await repo.inserirMovimentoBanco(cliente, {
       colaborador_id: dados.colaborador_id,
       data: dados.data,

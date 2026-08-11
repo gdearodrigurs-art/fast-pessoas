@@ -864,6 +864,21 @@ export async function buscarMarcacao(
   return rows[0] ? paraMarcacao(rows[0]) : null;
 }
 
+/**
+ * Trava a linha da marcação na transação (FOR UPDATE). O ajuste toma esta trava
+ * ANTES de conferir se a batida já foi superada por outra correção — assim dois
+ * ajustes concorrentes sobre a MESMA batida original serializam, em vez de os
+ * dois lerem superada=false e inserirem duas substitutas 'registro'.
+ */
+export async function travarMarcacao(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(`SELECT id FROM rh.marcacao WHERE id = $1 FOR UPDATE`, [
+    id,
+  ]);
+}
+
 // ================================================================ lote de importação
 
 export interface LoteImportacao {
@@ -1967,13 +1982,38 @@ export async function inserirMovimentosBancoEmLote(
   );
 }
 
-export async function saldoBanco(colaboradorId: number): Promise<number> {
-  const linhas = await consultar<{ saldo: string | null }>(
-    `SELECT COALESCE(SUM(minutos), 0)::bigint AS saldo
-       FROM rh.banco_horas_movimento WHERE colaborador_id = $1`,
+export async function saldoBanco(
+  colaboradorId: number,
+  cliente?: PoolClient
+): Promise<number> {
+  // Com cliente, a leitura mora na transação do lançamento (atrás do advisory
+  // lock, enxerga o saldo já commitado pela concorrência); sem cliente, é a
+  // leitura avulsa de sempre pelo pool.
+  const sql = `SELECT COALESCE(SUM(minutos), 0)::bigint AS saldo
+       FROM rh.banco_horas_movimento WHERE colaborador_id = $1`;
+  const linhas = cliente
+    ? (await cliente.query<{ saldo: string | null }>(sql, [colaboradorId])).rows
+    : await consultar<{ saldo: string | null }>(sql, [colaboradorId]);
+  return paraNumero(linhas[0]?.saldo ?? 0);
+}
+
+/**
+ * Trava o banco de horas de UM colaborador na transação (advisory lock por
+ * xact). Serializa lançamentos concorrentes do mesmo colaborador para que a
+ * conferência de teto/piso não seja furada por leitura-antes-de-gravar — o
+ * saldo é a SOMA dos movimentos, sem CHECK no banco. Mesma técnica de
+ * travarApuracoes: hashtext nos dois argumentos.
+ */
+export async function travarBancoDoColaborador(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<void> {
+  await cliente.query(
+    `SELECT pg_advisory_xact_lock(
+              hashtext('rh.banco_horas_movimento'),
+              hashtext($1::text))`,
     [colaboradorId]
   );
-  return paraNumero(linhas[0]?.saldo ?? 0);
 }
 
 export async function saldosBanco(
