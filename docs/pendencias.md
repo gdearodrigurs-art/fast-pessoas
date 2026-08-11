@@ -169,6 +169,15 @@ essa trava existe para impedir.
 séria no dia da implantação — se a correção não estiver feita **antes** da primeira pesquisa real,
 não haverá mais como escolher.
 
+**RESOLVIDO (11/08/2026) — migration 0063.** O DEFAULT passou a
+`(rh.hoje()::timestamp AT TIME ZONE 'America/Sao_Paulo')` — o instante da meia-noite de São Paulo,
+idêntico para toda resposta do mesmo dia civil independentemente do fuso da sessão. Só o DEFAULT mudou;
+as linhas já gravadas não foram tocadas (a tabela é imutável por trigger, e o dono decidiu não reescrever
+resposta anônima registrada). Provado no dev: às 22:30 BRT o balde antigo (sessão UTC) apontava o dia
+seguinte e o novo aponta o dia civil certo; às 13:00 os dois concordam (o defeito era só das 21h à
+meia-noite). Insert real (rollback) grava a meia-noite de SP e bate com o esperado; 374 linhas antigas
+intactas. Feito antes da primeira pesquisa real, como a decisão exigia.
+
 ---
 
 ## 7 · Na transferência entre CNPJs, o critério da regra ainda decide o que atravessa
