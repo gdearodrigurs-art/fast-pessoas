@@ -897,34 +897,47 @@ export async function criarRascunhoModelo(
       "Já existe uma versão em rascunho — edite ou ative a existente antes de criar outra."
     );
   }
-  return comTransacao(sessao.usuario_id, async (cliente) => {
-    const criado = await criarModeloRascunho(cliente, estrutura.nome);
-    await substituirEstrutura(cliente, criado.id, estrutura);
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "criacao",
-      tabela: TABELA_MODELO,
-      registroId: String(criado.id),
-      diff: {
-        Versão: { de: null, para: `v${criado.versao} (rascunho)` },
-        Nome: { de: null, para: estrutura.nome },
-        Pilares: {
-          de: null,
-          para: estrutura.pilares
-            .map((p) => `${p.nome} (${p.peso}%)`)
-            .join(" · "),
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const criado = await criarModeloRascunho(cliente, estrutura.nome);
+      await substituirEstrutura(cliente, criado.id, estrutura);
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_MODELO,
+        registroId: String(criado.id),
+        diff: {
+          Versão: { de: null, para: `v${criado.versao} (rascunho)` },
+          Nome: { de: null, para: estrutura.nome },
+          Pilares: {
+            de: null,
+            para: estrutura.pilares
+              .map((p) => `${p.nome} (${p.peso}%)`)
+              .join(" · "),
+          },
+          Faixas: {
+            de: null,
+            para: estrutura.faixas
+              .map((f) => `${f.minimo}–${f.maximo} ${f.rotulo}`)
+              .join(" · "),
+          },
         },
-        Faixas: {
-          de: null,
-          para: estrutura.faixas
-            .map((f) => `${f.minimo}–${f.maximo} ${f.rotulo}`)
-            .join(" · "),
-        },
-      },
+      });
+      return criado;
     });
-    return criado;
-  });
+  } catch (erro) {
+    // O índice parcial um_rascunho (0059) barra a segunda criação concorrente;
+    // sem este catch a violação crua da corrida virava 500 em vez do 409 que o
+    // pré-check dá no caso comum.
+    if (violacaoUnica(erro) === "modelo_avaliacao_versao_um_rascunho") {
+      throw new ErroHttp(
+        409,
+        "Já existe uma versão em rascunho — edite ou ative a existente antes de criar outra."
+      );
+    }
+    throw erro;
+  }
 }
 
 export async function atualizarRascunhoModelo(
