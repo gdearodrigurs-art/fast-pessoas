@@ -45,9 +45,14 @@ tempo de casa. As duas são corrigíveis com ajuste auditado — `rh.periodo_aqu
 **Esta pergunta não é minha para responder:** depende de como o contador e o jurídico do grupo tratam
 essas movimentações. Vale levar a eles com esta página aberta.
 
----
-
-## 2 · O saldo de banco de horas transfere para o vínculo novo?
+**DECISÃO DO DONO (11/08/2026): escolhida NA HORA da transferência, caso a caso.** Entre **matriz e
+filial** (mesmo empregador) pode ser **continuidade** — o vínculo segue, sem baixa; entre **CNPJs
+distintos** é **rescisão** — baixa na CTPS e acerto. Não é uma regra global chumbada: a operação
+pergunta qual dos dois na hora. **Invariante inegociável: a ficha/histórico do funcionário nunca se
+perde**, em nenhum dos dois caminhos (hoje já é assim — a pessoa mantém os dois vínculos e a ficha
+mostra a linha do tempo contínua; onda I). O que a continuidade acrescenta é o vínculo *seguir* em vez
+de encerrar-e-reabrir, carregando período aquisitivo, tempo de casa e benefício (ver #7). **A construir**
+(decisão-livre): o passo "continuidade × rescisão" no fluxo da transferência.
 
 **Onde está:** `db/migrations/0048_transferencia_entre_empresas.sql:142-145`
 
@@ -63,6 +68,10 @@ preferisse folgar depois; e para a empresa é desembolso de caixa na data da tra
 
 **É decisão contábil entre os CNPJs, não de software.** Se o grupo quiser transferir o saldo, é
 implementável — mas alguém precisa dizer como o crédito de uma empresa vira débito da outra.
+
+**DECISÃO DO DONO (11/08/2026): escolhida NA HORA da transferência.** Igual ao #1 — não é regra global.
+Numa **continuidade** (matriz/filial) o saldo segue com o vínculo; numa **rescisão** (CNPJ distinto)
+liquida no acerto e o novo começa zerado. **A construir** junto do passo continuidade × rescisão do #1.
 
 ---
 
@@ -118,6 +127,11 @@ do SQL, onde nenhuma busca por constante acha, e alimenta um indicador com meta 
 **A sub-pergunta que É sua, e vale levar ao contador:** **sábado conta como dia útil** para esta
 contagem? Para o art. 459 o entendimento majoritário é que sim (dia útil = dia de trabalho, não dia
 bancário), o que muda a data em vários meses do ano. É o único ponto aqui com resposta em disputa.
+
+**DECISÃO DO DONO (11/08/2026): 5º dia ÚTIL, e SÁBADO CONTA como dia útil.** Só domingo e feriado não
+contam. **A construir** (decisão-livre): tirar o `INTERVAL` chumbado do SQL e computar o 5º dia útil por
+uma régua administrável (calendário de feriados + sábado-conta), alimentando o indicador com o prazo
+legal, não com o corrido.
 
 ---
 
@@ -187,6 +201,12 @@ critério do destino diz "só CLT". Nada na tela avisa que a regra tem esse segu
 
 **O que trava:** nada hoje — o comportamento continua o de antes. Vira sério na primeira
 transferência real entre CNPJs depois de o DP começar a conceder fora do critério.
+
+**DECISÃO DO DONO (11/08/2026): atrelado ao #1.** Como o dono decidiu que a transferência pode ser
+**continuidade** (matriz/filial) ou **rescisão** (CNPJ distinto), o #7 deixa de ser pergunta solta:
+- numa **continuidade** o benefício **atravessa junto** (mesmo empregador, o contrato segue);
+- numa **rescisão** ele é reavaliado no destino (o comportamento atual — critério do destino decide).
+Resolve-se junto do passo continuidade × rescisão do #1, não isolado.
 
 ---
 
