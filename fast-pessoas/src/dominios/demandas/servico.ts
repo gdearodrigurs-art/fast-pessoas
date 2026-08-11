@@ -114,6 +114,7 @@ import {
   listarTransicoes,
   listarUnidadesAtivas,
   marcarMovimentacaoAplicada,
+  mesmaRaizCnpj,
   Movimentacao,
   indicadoresFila,
   temPermissao,
@@ -1305,6 +1306,21 @@ export async function criarMovimentacao(
           "empresa_destino_id"
         );
       }
+      // MODO (0065): continuidade só entre empresas do MESMO empregador — mesma
+      // raiz de CNPJ (matriz↔filial). O schema garante que o modo veio; aqui se
+      // prova a raiz. Rescisão vale sempre. A raiz é reconferida na aplicação.
+      const mesmaRaiz = await mesmaRaizCnpj(
+        cliente,
+        lotacao.empresa_id,
+        empresaId
+      );
+      if (dados.modo_transferencia === "continuidade" && !mesmaRaiz) {
+        throw new ErroHttpCampo(
+          400,
+          `${empresa.nome_fantasia} não é do mesmo empregador do vínculo atual (raiz de CNPJ diferente, ou CNPJ ausente num dos lados) — continuidade só vale entre matriz e filial. Use rescisão.`,
+          "modo_transferencia"
+        );
+      }
       // Posição vigente: o cargo e o SALÁRIO viajam congelados para o vínculo
       // novo (item (d) da 0048). Sem posição não há o que congelar.
       const posicao = await buscarPosicaoVigenteParaAtualizar(cliente, alvo.id);
@@ -1339,13 +1355,17 @@ export async function criarMovimentacao(
           "centro_custo_destino_id"
         );
       }
-      const matricula = dados.matricula_destino as string;
-      if (await matriculaEmUso(cliente, matricula)) {
-        throw new ErroHttpCampo(
-          409,
-          `A matrícula ${matricula} já está em uso no grupo. A matrícula é única entre as empresas.`,
-          "matricula_destino"
-        );
+      // Matrícula nova só existe na RESCISÃO (contrato novo). Na continuidade a
+      // matrícula é mantida — o schema já garante que ela não veio.
+      if (dados.modo_transferencia === "rescisao") {
+        const matricula = dados.matricula_destino as string;
+        if (await matriculaEmUso(cliente, matricula)) {
+          throw new ErroHttpCampo(
+            409,
+            `A matrícula ${matricula} já está em uso no grupo. A matrícula é única entre as empresas.`,
+            "matricula_destino"
+          );
+        }
       }
       if (dados.salario_proposto !== undefined) {
         throw new ErroHttpCampo(
@@ -1450,11 +1470,18 @@ export async function criarMovimentacao(
       `${rotuloTipo} de ${alvo.nome_completo}: ${origem} → ${destino}` +
       ` a partir de ${formatarData(dados.data_pretendida)}.` +
       (dados.tipo === "transferencia_empresa"
-        ? ` Matrícula na empresa destino: ${dados.matricula_destino}.` +
-          ` Trâmites do DP: acerto rescisório na empresa de origem` +
-          ` (inclui férias vencidas e proporcionais e o saldo do banco de horas),` +
-          ` registro e eSocial na empresa destino, ASO admissional e readesão` +
-          ` de benefícios.`
+        ? dados.modo_transferencia === "continuidade"
+          ? // Continuidade (mesmo empregador): sem acerto rescisório, sem nova
+            // matrícula. Muda o registro; o contrato e tudo que ele carrega segue.
+            ` Continuidade (mesmo empregador — matriz↔filial): o contrato segue no` +
+            ` mesmo vínculo. Muda só o registro/lotação; matrícula, cargo, salário,` +
+            ` férias, banco de horas e benefícios são mantidos. Trâmite do DP:` +
+            ` alteração cadastral no eSocial (S-2205/S-2206), sem rescisão.`
+          : ` Matrícula na empresa destino: ${dados.matricula_destino}.` +
+            ` Trâmites do DP: acerto rescisório na empresa de origem` +
+            ` (inclui férias vencidas e proporcionais e o saldo do banco de horas),` +
+            ` registro e eSocial na empresa destino, ASO admissional e readesão` +
+            ` de benefícios.`
         : "") +
       ` Justificativa: ${dados.justificativa}`;
 
@@ -1482,6 +1509,7 @@ export async function criarMovimentacao(
       tipo_vinculo_destino: dados.tipo_vinculo_destino ?? null,
       gestor_destino_colaborador_id:
         dados.gestor_destino_colaborador_id ?? null,
+      modo_transferencia: dados.modo_transferencia ?? null,
       salario_proposto: dados.salario_proposto ?? null,
       faixa_min: faixaMin,
       faixa_max: faixaMax,
@@ -2329,7 +2357,8 @@ function descreverBeneficiosNaTransferencia(
 interface EfeitoTransferencia {
   posicao_id: number;
   lotacao_id: number;
-  vinculo_destino_id: number;
+  // null na continuidade: nenhum vínculo novo nasce — o contrato segue no mesmo.
+  vinculo_destino_id: number | null;
   resumo: string;
   payload: Record<string, unknown>;
   diff: Diff;
@@ -2344,6 +2373,19 @@ async function aplicarTransferenciaEntreEmpresas(
 ): Promise<EfeitoTransferencia> {
   const data = movimentacao.data_pretendida;
   const origemId = movimentacao.colaborador_id;
+
+  // CONTINUIDADE (0065): mesmo empregador, o contrato SEGUE. Efeito próprio — não
+  // desliga, não abre vínculo novo, não liquida banco, não zera férias; muda só o
+  // registro/lotação, no mesmo vínculo. Tudo abaixo é o caminho da RESCISÃO.
+  if (movimentacao.modo_transferencia === "continuidade") {
+    return aplicarContinuidadeDeRegistro(
+      cliente,
+      sessao,
+      demanda,
+      movimentacao,
+      rotuloTipo
+    );
+  }
 
   const vinculo = await buscarVinculoParaTransferir(cliente, origemId);
   if (!vinculo) {
@@ -2683,6 +2725,180 @@ async function aplicarTransferenciaEntreEmpresas(
       ` Aprovada na demanda ${formatarNumeroDemanda(demanda.numero)}.` +
       ` Banco de horas: ${acertoBanco.resumo}.`,
     payload: { ...payloadComum, banco_horas: acertoBanco.resumo },
+    diff,
+  };
+}
+
+// ------------------------------------------------------------------ continuidade (0065)
+// Mesmo empregador (matriz↔filial, mesma raiz de CNPJ): o contrato SEGUE. Ao
+// contrário da rescisão, aqui NÃO se desliga o vínculo, NÃO se abre um novo, NÃO
+// se liquida o banco de horas e NÃO se recomeça o período aquisitivo de férias —
+// tudo isso está preso ao colaborador_id, que não muda. Muda só o REGISTRO: a
+// lotação vigente é encerrada e outra é aberta apontando para a empresa/
+// estabelecimento/centro de destino, no MESMO vínculo. Matrícula, cargo, salário,
+// gestor, benefícios e dependentes seguem intactos por não serem tocados.
+async function aplicarContinuidadeDeRegistro(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  demanda: DemandaParaTransicao,
+  movimentacao: Movimentacao,
+  rotuloTipo: string
+): Promise<EfeitoTransferencia> {
+  const data = movimentacao.data_pretendida;
+  const origemId = movimentacao.colaborador_id;
+
+  const vinculo = await buscarVinculoParaTransferir(cliente, origemId);
+  if (!vinculo) {
+    throw new ErroHttp(500, "Vínculo de origem sumiu no meio da aprovação.");
+  }
+  if (vinculo.status !== "ativo") {
+    throw new ErroHttp(
+      409,
+      `O vínculo de origem está ${vinculo.status} — só vínculo ativo pode ser transferido. Reabra o pedido com outra data.`
+    );
+  }
+  if (vinculo.ja_sucedido) {
+    throw new ErroHttp(
+      409,
+      "Este vínculo já foi transferido para outra empresa do grupo."
+    );
+  }
+
+  const posicao = await buscarPosicaoVigenteParaAtualizar(cliente, origemId);
+  if (!posicao) {
+    throw new ErroHttp(
+      409,
+      "O colaborador não tem posição vigente — o DP precisa regularizar antes."
+    );
+  }
+  const lotacao = await buscarLotacaoVigenteParaAtualizar(cliente, origemId);
+  if (!lotacao) {
+    throw new ErroHttp(
+      409,
+      "O colaborador não tem alocação vigente — o DP precisa regularizar antes."
+    );
+  }
+  // Nada retroativo: a data tem de ser posterior ao início da posição e da
+  // alocação vigentes (senão reabriria mês de folha fechado, imutável por trigger).
+  if (data <= posicao.inicio_vigencia || data <= lotacao.inicio_vigencia) {
+    const limite =
+      posicao.inicio_vigencia > lotacao.inicio_vigencia
+        ? posicao.inicio_vigencia
+        : lotacao.inicio_vigencia;
+    throw new ErroHttp(
+      409,
+      `A data pretendida (${formatarData(data)}) precisa ser posterior ao início da posição/alocação vigente (${formatarData(limite)}). Abra o pedido novamente com outra data.`
+    );
+  }
+
+  const empresa = await empresaAtiva(
+    cliente,
+    movimentacao.empresa_destino_id as number
+  );
+  if (!empresa) {
+    throw new ErroHttp(
+      409,
+      "A empresa destino foi inativada depois da abertura do pedido."
+    );
+  }
+  // Reconfere a raiz na aplicação: a régua não pode ser burlada por um CNPJ que
+  // mudou entre abrir e aplicar. Continuidade EXIGE o mesmo empregador.
+  const mesmaRaiz = await mesmaRaizCnpj(cliente, lotacao.empresa_id, empresa.id);
+  if (!mesmaRaiz) {
+    throw new ErroHttp(
+      409,
+      `${empresa.nome_fantasia} não é do mesmo empregador (raiz de CNPJ diferente ou ausente) — continuidade não se aplica. Reabra o pedido como rescisão.`
+    );
+  }
+  if (lotacao.empresa_id === empresa.id) {
+    throw new ErroHttp(
+      409,
+      `${empresa.nome_fantasia} já é a empresa de registro deste vínculo.`
+    );
+  }
+  const estabelecimento = await estabelecimentoAtivo(
+    cliente,
+    movimentacao.estabelecimento_destino_id as number
+  );
+  if (!estabelecimento) {
+    throw new ErroHttp(409, "A lotação destino não tem versão vigente.");
+  }
+  const centro = await centroCustoAtivo(
+    cliente,
+    movimentacao.centro_custo_destino_id as number
+  );
+  if (!centro) {
+    throw new ErroHttp(
+      409,
+      "O centro de custo destino deixou de estar disponível depois da abertura do pedido."
+    );
+  }
+
+  // O ÚNICO ato: troca o registro. Encerra a lotação vigente e abre outra no
+  // MESMO vínculo — o gestor (rh.relacao_gestor) não é tocado, decisão do dono:
+  // continuidade mexe só no registro/lotação.
+  await encerrarLotacao(cliente, lotacao.id, data);
+  const lotacaoId = await inserirLotacao(cliente, {
+    colaborador_id: origemId,
+    empresa_id: empresa.id,
+    estabelecimento_id: estabelecimento.id,
+    centro_custo_id: centro.id,
+    inicio_vigencia: data,
+  });
+
+  const empresaOrigem = lotacao.empresa_nome ?? "empresa anterior";
+  const payload = {
+    demanda: demanda.numero,
+    empresa_anterior: empresaOrigem,
+    empresa_nova: empresa.nome_fantasia,
+    vinculo_id: origemId,
+    matricula: vinculo.matricula,
+    vigencia: data,
+    modo: "continuidade",
+  };
+
+  await inserirEvento(cliente, {
+    colaborador_id: origemId,
+    tipo: "transferencia_continuidade",
+    ocorrido_em: `${data}T00:00:00Z`,
+    origem_tabela: TABELA_MOVIMENTACAO,
+    origem_id: movimentacao.id,
+    resumo:
+      `Mudança de registro dentro do grupo (continuidade): ${empresaOrigem} → ${empresa.nome_fantasia}` +
+      ` em ${formatarData(data)} — MESMO contrato (matrícula ${vinculo.matricula}), sem rescisão.` +
+      ` Cargo, salário, férias, banco de horas e benefícios mantidos.` +
+      ` Aprovada na demanda ${formatarNumeroDemanda(demanda.numero)}.`,
+    payload,
+    registrado_por: sessao.usuario_id,
+  });
+
+  const diff: Diff = {
+    "Registro (empresa)": { de: empresaOrigem, para: empresa.nome_fantasia },
+    Vínculo: {
+      de: null,
+      para: `MESMO contrato (matrícula ${vinculo.matricula}) — sem rescisão, sem novo vínculo`,
+    },
+    "Lotação": { de: lotacao.unidade, para: estabelecimento.unidade },
+    "Centro de custo": { de: lotacao.centro_custo, para: centro.codigo },
+    Cargo: { de: posicao.cargo_nome, para: `${posicao.cargo_nome} (mantido)` },
+    "Salário": { de: null, para: "mantido (continuidade não altera remuneração)" },
+    "Banco de horas": { de: null, para: "mantido — o contrato segue" },
+    "Férias (período aquisitivo)": {
+      de: null,
+      para: "mantido — não recomeça; o tempo de casa é contínuo",
+    },
+    "Gestor": { de: null, para: "mantido — continuidade mexe só no registro" },
+  };
+
+  return {
+    posicao_id: posicao.id,
+    lotacao_id: lotacaoId,
+    vinculo_destino_id: null,
+    resumo:
+      `${rotuloTipo} (continuidade): ${empresaOrigem} → ${empresa.nome_fantasia}` +
+      ` (vigência ${formatarData(data)}) — mesmo contrato, muda só o registro.` +
+      ` Aprovada na demanda ${formatarNumeroDemanda(demanda.numero)}.`,
+    payload,
     diff,
   };
 }
