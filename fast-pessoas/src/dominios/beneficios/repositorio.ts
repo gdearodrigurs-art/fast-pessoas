@@ -911,6 +911,8 @@ export interface Dependente {
   nascimento: string;
   parentesco: Parentesco;
   cpf: string | null;
+  /** Conta na dedução do IRRF (Lei 9.250)? Ato do DP; autoatendimento nasce false. */
+  deduz_irrf: boolean;
 }
 
 interface LinhaDependente extends Record<string, unknown> {
@@ -920,6 +922,7 @@ interface LinhaDependente extends Record<string, unknown> {
   nascimento: string;
   parentesco: Parentesco;
   cpf: string | null;
+  deduz_irrf: boolean;
 }
 
 function paraDependente(linha: LinhaDependente): Dependente {
@@ -935,7 +938,7 @@ export async function listarDependentes(
 ): Promise<Dependente[]> {
   const linhas = await consultar<LinhaDependente>(
     `SELECT id, colaborador_id, nome, nascimento::text AS nascimento,
-            parentesco, cpf
+            parentesco, cpf, deduz_irrf
        FROM rh.dependente
       WHERE colaborador_id = $1
       ORDER BY nome, id`,
@@ -952,11 +955,15 @@ export async function inserirDependente(
     nascimento: string;
     parentesco: Parentesco;
     cpf: string | null;
+    // Só o DP marca (conferência). Sem valor = false: é como o autoatendimento
+    // (0056) insere, que é o comportamento certo — só o DP abate no IRRF.
+    deduz_irrf?: boolean;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
-    `INSERT INTO rh.dependente (colaborador_id, nome, nascimento, parentesco, cpf)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO rh.dependente
+       (colaborador_id, nome, nascimento, parentesco, cpf, deduz_irrf)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
     [
       dados.colaborador_id,
@@ -964,6 +971,7 @@ export async function inserirDependente(
       dados.nascimento,
       dados.parentesco,
       dados.cpf,
+      dados.deduz_irrf ?? false,
     ]
   );
   return Number(rows[0].id);
@@ -975,7 +983,7 @@ export async function buscarDependenteParaAtualizar(
 ): Promise<Dependente | null> {
   const { rows } = await cliente.query<LinhaDependente>(
     `SELECT id, colaborador_id, nome, nascimento::text AS nascimento,
-            parentesco, cpf
+            parentesco, cpf, deduz_irrf
        FROM rh.dependente
       WHERE id = $1
       FOR UPDATE`,
@@ -992,6 +1000,7 @@ export async function atualizarDependente(
     nascimento?: string;
     parentesco?: Parentesco;
     cpf?: string | null;
+    deduz_irrf?: boolean;
   }
 ): Promise<void> {
   const colunas: Record<string, string> = {
@@ -999,6 +1008,7 @@ export async function atualizarDependente(
     nascimento: "nascimento",
     parentesco: "parentesco",
     cpf: "cpf",
+    deduz_irrf: "deduz_irrf",
   };
   const chaves = Object.keys(campos) as (keyof typeof campos)[];
   if (chaves.length === 0) return;

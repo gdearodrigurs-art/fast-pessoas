@@ -1365,6 +1365,7 @@ function diffDependente(dados: {
   nascimento?: string;
   parentesco?: string;
   cpf?: string | null;
+  deduz_irrf?: boolean;
 }): Diff {
   const diff: Diff = {};
   if (dados.nome !== undefined) diff["Nome"] = { de: null, para: dados.nome };
@@ -1377,6 +1378,9 @@ function diffDependente(dados: {
   if (dados.cpf !== undefined) {
     // Minimização: o CPF do dependente não viaja para a trilha de auditoria.
     diff["CPF"] = { de: null, para: dados.cpf ? "informado" : "removido" };
+  }
+  if (dados.deduz_irrf !== undefined) {
+    diff["Abate no IRRF"] = { de: null, para: dados.deduz_irrf ? "sim" : "não" };
   }
   return diff;
 }
@@ -1400,6 +1404,8 @@ export async function criarDependente(
       nascimento: dados.nascimento,
       parentesco: dados.parentesco,
       cpf: dados.cpf ?? null,
+      // Só o DP (esta rota, adesao.gerir) marca; ausente = false.
+      deduz_irrf: dados.deduz_irrf ?? false,
     });
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,

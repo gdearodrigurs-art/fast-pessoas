@@ -979,6 +979,7 @@ function DialogoDependente({
     dependente?.parentesco ?? "filho"
   );
   const [cpf, setCpf] = useState(dependente?.cpf ?? "");
+  const [deduzIrrf, setDeduzIrrf] = useState(dependente?.deduz_irrf ?? false);
   const [enviando, erro, executar] = useEnvio(aoConcluir);
   const edicao = dependente !== undefined;
   return (
@@ -999,6 +1000,7 @@ function DialogoDependente({
                 nascimento,
                 parentesco,
                 cpf: cpfLimpo === "" ? null : cpfLimpo,
+                deduz_irrf: deduzIrrf,
               })
             : requisitar("/api/beneficios/dependentes", "POST", {
                 colaborador_id: colaboradorId,
@@ -1006,6 +1008,7 @@ function DialogoDependente({
                 nascimento,
                 parentesco,
                 cpf: cpfLimpo === "" ? undefined : cpfLimpo,
+                deduz_irrf: deduzIrrf,
               })
         );
       }}
@@ -1063,6 +1066,16 @@ function DialogoDependente({
         value={cpf}
         onChange={(evento) => setCpf(evento.target.value)}
       />
+      <label className={estilos.rotuloCampo} htmlFor="dependente-irrf">
+        <input
+          id="dependente-irrf"
+          type="checkbox"
+          checked={deduzIrrf}
+          onChange={(evento) => setDeduzIrrf(evento.target.checked)}
+        />{" "}
+        Abate no IRRF — dependente elegível (Lei 9.250: filho até 21, ou 24 se
+        universitário; ou cônjuge). Conferência do DP; o autoatendimento não marca.
+      </label>
     </CascaDialogo>
   );
 }

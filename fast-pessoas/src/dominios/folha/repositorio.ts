@@ -449,9 +449,11 @@ export async function listarColaboradoresParaCalculo(
     carga_semanal_minutos: number | null;
   }>(
     `SELECT c.id, c.nome_completo, c.matricula, p.salario::text AS salario,
+            -- Só dependente ELEGÍVEL abate no IRRF (pendência #9, migration 0061):
+            -- deduz_irrf é ato do DP (conferência); o autoatendimento nasce false.
             (SELECT COUNT(*) FROM rh.dependente d
               WHERE d.colaborador_id = c.id
-                AND (d.nascimento IS NULL OR d.nascimento <= $1)) AS dependentes,
+                AND d.deduz_irrf = true) AS dependentes,
             j.carga_semanal_minutos
        FROM rh.colaborador c
        JOIN LATERAL (

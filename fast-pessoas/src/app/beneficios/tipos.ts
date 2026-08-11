@@ -92,6 +92,8 @@ export interface Dependente {
   nascimento: string;
   parentesco: Parentesco;
   cpf: string | null;
+  /** Conta na dedução do IRRF? Ato do DP (conferência); autoatendimento nasce false. */
+  deduz_irrf: boolean;
 }
 
 export interface UnidadeOpcao {
