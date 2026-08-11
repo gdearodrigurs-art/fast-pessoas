@@ -80,6 +80,11 @@ export type CorpoCancelamento = z.infer<typeof esquemaCancelamento>;
 // As famílias de modelo. NULL = modelo GERAL (fallback); os demais são os tipos
 // de vínculo com documentação legalmente distinta (migration 0058). "geral" só
 // aparece como rótulo/chave derivada, nunca como valor gravado.
+//
+// 'temporario' (válido em rh.colaborador.tipo_vinculo) é OMITIDO de propósito: a
+// Fast não contrata por esse vínculo para fins de admissão, então quem for
+// temporário usa o checklist Geral. Decisão do dono em docs/pendencias.md #12.
+// Se um dia passar a usar, reabrir a #12 (migration estende o CHECK da 0058).
 export const TIPOS_VINCULO_MODELO = [
   "clt",
   "estagiario",

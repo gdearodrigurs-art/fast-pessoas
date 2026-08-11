@@ -303,6 +303,11 @@ a mais.
 **Eixo:** rastro de leitura (8) — dado sensível de terceiro devolvido sem registro em
 `audit.leitura_sensivel`.
 
+**DECISÃO (11/08/2026) — NÃO auditar (deliberado).** O dono decidiu reservar "sensível" a
+salário e parecer; o contato do candidato (nome/e-mail/telefone) NÃO grava `audit.leitura_sensivel`.
+Fica registrado aqui como escolha consciente, não omissão. Se um dia entrar no escopo, o mesmo padrão
+de `registrarLeituraSensivel` que já existe para oferta_valor/parecer se aplica. **RESOLVIDO.**
+
 ---
 
 ## 11 · Replay de TOTP: o mesmo código vale de novo dentro da janela (~90s) — IMPLEMENTADO na branch, falta o smoke de persona
@@ -401,3 +406,10 @@ trata temporário como CLT para fins de admissão), incluir a família é ruído
 temporário que precise de um checklist diferente do geral.
 
 **Eixo:** nada chumbado (9) — o domínio do modelo omite um valor que o cadastro admite.
+
+**DECISÃO (11/08/2026) — a Fast NÃO contrata por vínculo temporário para fins de admissão;
+trata como CLT.** Portanto o modelo de checklist NÃO ganha a família 'temporário' — quem for
+'temporario' no cadastro usa o checklist Geral, de propósito. Registrado como escolha, com um
+comentário em `admissao/esquemas.ts` (TIPOS_VINCULO_MODELO) apontando aqui. Se um dia a Fast
+passar a usar o vínculo, reabrir: migration estendendo o CHECK da 0058 + a família na tela.
+**RESOLVIDO.**
