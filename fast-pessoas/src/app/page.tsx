@@ -14,6 +14,7 @@ interface Permissoes extends Record<string, unknown> {
   desligamento_ver: boolean;
   beneficios_acessar: boolean;
   avaliacao_acessar: boolean;
+  pdi_acessar: boolean;
   recrutamento_acessar: boolean;
   ponto_proprio: boolean;
   ponto_administrar: boolean;
@@ -67,6 +68,9 @@ export default async function PaginaInicial() {
         OR sistema.tem_permissao($1, 'avaliacao.configurar')
         OR sistema.tem_permissao($1, 'avaliacao.decidir')
         OR sistema.tem_permissao($1, 'avaliacao.resultado.ver'))   AS avaliacao_acessar,
+       (sistema.tem_permissao($1, 'pdi.ver')
+        OR sistema.tem_permissao($1, 'pdi.gerar')
+        OR sistema.tem_permissao($1, 'pdi.homologar'))             AS pdi_acessar,
        (sistema.tem_permissao($1, 'rs.ver')
         OR sistema.tem_permissao($1, 'rs.requisicao.criar'))       AS recrutamento_acessar,
        -- Espelho do PRÓPRIO ponto é direito do trabalhador (Portaria 671
@@ -238,6 +242,13 @@ export default async function PaginaInicial() {
           descricao:
             "Ciclos de experiência (45/90) e desempenho, líder→liderado.",
           mostrar: pode?.avaliacao_acessar ?? false,
+        },
+        {
+          href: "/pdi",
+          titulo: "PDI",
+          descricao:
+            "Plano de desenvolvimento montado por IA a partir da avaliação; o gestor ajusta e o RH homologa.",
+          mostrar: pode?.pdi_acessar ?? false,
         },
       ],
     },

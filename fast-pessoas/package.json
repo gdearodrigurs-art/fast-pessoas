@@ -18,6 +18,7 @@
     "fechar-onda": "node db/fechar-onda.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "@types/qrcode": "^1.5.6",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.4",
