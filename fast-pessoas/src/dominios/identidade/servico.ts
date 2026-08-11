@@ -16,10 +16,12 @@ import {
   atualizarTotpSecret,
   buscarPorEmail,
   buscarPorId,
+  consumirPassoTotp,
   listarChavesDoUsuario,
   registrarAcao,
   UsuarioIdentidade,
 } from "./repositorio";
+import { validarTotpComPasso } from "./totp";
 
 // Hash sacrificial: iguala o tempo de resposta quando o e-mail não existe,
 // para não denunciar quais contas estão cadastradas.
@@ -57,18 +59,27 @@ export type ResultadoAutenticacao =
       motivo: "credenciais_invalidas" | "totp_obrigatorio" | "totp_invalido";
     };
 
+// Enrolamento (secret PENDENTE, ainda sem usuário para consumir passo) usa só a
+// validação. Login e revalidações críticas usam validarEConsumirTotp, que torna
+// o código de USO ÚNICO.
 function validarCodigoTotp(secret: string, codigo: string): boolean {
-  try {
-    const totp = new OTPAuth.TOTP({
-      secret: OTPAuth.Secret.fromBase32(secret),
-      algorithm: "SHA1",
-      digits: 6,
-      period: 30,
-    });
-    return totp.validate({ token: codigo, window: 1 }) !== null;
-  } catch {
-    return false;
-  }
+  return validarTotpComPasso(secret, codigo) !== null;
+}
+
+/**
+ * Valida E CONSOME o código: verdadeiro só se o código bate E o passo dele ainda
+ * não foi usado por este usuário (anti-replay). Reapresentar o MESMO código
+ * dentro da janela devolve falso — o passo já foi consumido. Um código fresco
+ * tem sempre passo maior, então login legítimo nunca é barrado.
+ */
+async function validarEConsumirTotp(
+  usuarioId: number,
+  secret: string,
+  codigo: string
+): Promise<boolean> {
+  const passo = validarTotpComPasso(secret, codigo);
+  if (passo === null) return false;
+  return consumirPassoTotp(usuarioId, passo);
 }
 
 export async function autenticar(
@@ -106,7 +117,13 @@ export async function autenticar(
     if (!credenciais.codigo_totp) {
       return { ok: false, motivo: "totp_obrigatorio" };
     }
-    if (!validarCodigoTotp(usuario.totp_secret, credenciais.codigo_totp)) {
+    if (
+      !(await validarEConsumirTotp(
+        usuario.id,
+        usuario.totp_secret,
+        credenciais.codigo_totp
+      ))
+    ) {
       await registrarAcao(
         "login_falha",
         { id: usuario.id, papel: usuario.papel },
@@ -190,7 +207,9 @@ export async function validarTotpDoUsuario(
   if (!usuario || !usuario.ativo || !usuario.totp_secret) {
     return "sem_2fa";
   }
-  return validarCodigoTotp(usuario.totp_secret, codigo) ? "ok" : "invalido";
+  return (await validarEConsumirTotp(usuario.id, usuario.totp_secret, codigo))
+    ? "ok"
+    : "invalido";
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +343,9 @@ export async function desativar2fa(
     throw new ErroHttpCampo(400, "Senha atual incorreta.", "senha");
   }
 
-  if (!validarCodigoTotp(usuario.totp_secret, dados.codigo)) {
+  if (
+    !(await validarEConsumirTotp(usuario.id, usuario.totp_secret, dados.codigo))
+  ) {
     await registrarAcao("desativacao_2fa_falha", {
       id: usuario.id,
       papel: usuario.papel,

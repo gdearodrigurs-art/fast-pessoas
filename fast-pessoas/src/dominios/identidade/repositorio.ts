@@ -105,10 +105,35 @@ export async function atualizarTotpSecret(
   usuarioId: number,
   totpSecret: string | null
 ): Promise<void> {
+  // Zera o último passo consumido junto com a troca do secret: sem isso, quem
+  // reativa o 2FA no MESMO período de 30s em que desativou teria o primeiro
+  // código novo recusado como replay (o passo bateria com o já consumido).
   await cliente.query(
-    "UPDATE sistema.usuario SET totp_secret = $2 WHERE id = $1",
+    "UPDATE sistema.usuario SET totp_secret = $2, totp_ultimo_passo = NULL WHERE id = $1",
     [usuarioId, totpSecret]
   );
+}
+
+/**
+ * Consome o passo TOTP de forma ATÔMICA: grava `totp_ultimo_passo = passo` só se
+ * for MAIOR que o já gravado (ou se ainda for nulo). Devolve true quando gravou
+ * (código de uso único aceito) e false quando não gravou (passo já consumido =
+ * replay). O UPDATE condicional em uma só instrução é o que serializa duas
+ * tentativas simultâneas do mesmo código.
+ */
+export async function consumirPassoTotp(
+  usuarioId: number,
+  passo: number
+): Promise<boolean> {
+  const linhas = await consultar<{ id: string }>(
+    `UPDATE sistema.usuario
+        SET totp_ultimo_passo = $2
+      WHERE id = $1
+        AND (totp_ultimo_passo IS NULL OR totp_ultimo_passo < $2)
+      RETURNING id`,
+    [usuarioId, passo]
+  );
+  return linhas.length > 0;
 }
 
 export async function atualizarSenhaHash(

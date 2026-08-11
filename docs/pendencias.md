@@ -304,7 +304,20 @@ a mais.
 
 ---
 
-## 11 · Replay de TOTP: o mesmo código vale de novo dentro da janela (~90s)
+## 11 · Replay de TOTP: o mesmo código vale de novo dentro da janela (~90s) — IMPLEMENTADO na branch, falta o smoke de persona
+
+**Feito em 10/08/2026 na `revisao-geral`** (migration 0060 + `identidade/totp.ts` +
+`consumirPassoTotp` + os 3 pontos de uso ligados). Provado em duas metades: o cálculo do
+passo por teste puro (`tests/totp.test.ts`, 5 casos) e o consumo atômico contra o banco
+(`db/provas-totp.js`: fresco aceito → replay recusado → seguinte aceito → antigo recusado,
+em transação revertida). **O que FALTA antes de mergear na main:** a bateria de 2FA por
+persona (login das 7 personas com código fresco da `db/codigo-2fa.js`, mais um teste manual
+de reativar 2FA logo após desativar) — é a rede que o arnês pede para mudança de auth, e eu
+não consigo rodá-la headless sem as personas. Enquanto isso não rodar, não empurre a `main`.
+O texto abaixo era o registro original.
+
+---
+
 
 **Onde está:** `src/dominios/identidade/servico.ts:60` — `validarCodigoTotp` usa `window: 1`
 (aceita ±1 período de 30s) e NÃO registra código já consumido. O mesmo helper é reusado no
