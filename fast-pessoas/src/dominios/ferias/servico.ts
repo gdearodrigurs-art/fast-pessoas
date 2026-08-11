@@ -81,16 +81,16 @@ const CHAVE_TIPO_DEMANDA = "programacao_ferias";
  * INTERPRETAÇÃO, não o texto da lei, e ela vem casada com DIAS_GOZO_MAXIMO:
  * quem goza 10 dias poderia começar mais tarde e aqui não pode.
  *
- * Duas dívidas honestas que ficam registradas:
- *  1. o comentário da migration 0007 diz "limite_concessivo = fim + 12 meses",
- *     e o código sempre gravou 11 — a documentação e o dado divergem desde a
- *     origem; quem vale é este arquivo, e é o que está nas linhas do banco;
- *  2. trocar o número exige BACKFILL: limite_concessivo é materializado na
- *     criação do período, então mudar só a conta deixaria linhas antigas com
- *     uma régua e linhas novas com outra. É por isso que a correção certa é
- *     migration + parâmetro + reconciliação, e não editar este 11.
+ * DECISÃO DO DONO (pendência #3, 11/08/2026): SEPARAR as duas coisas que o 11
+ * colava. O limite LEGAL do "dobro" (art. 134: "nos 12 meses subsequentes") é
+ * 12 e é LEI, não escolha — é este número, e é o que decide "VENCIDA — dobro".
+ * A migration 0062 reconciliou as linhas antigas: recomputou limite = fim + 12 e
+ * desvenceu quem a régua de 11 tinha marcado cedo demais.
+ *
+ * O 11 vira um ALERTA administrável — o aviso antecipado ao DP, que NÃO afirma
+ * dobro — numa fatia seguinte (tabela de parâmetro + tela). Pendência #3.
  */
-const MESES_LIMITE_CONCESSIVO = 11;
+const MESES_LIMITE_CONCESSIVO = 12;
 
 // ------------------------------------------------------------------ datas (UTC no banco, SP na régua)
 

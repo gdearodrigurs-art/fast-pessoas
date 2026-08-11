@@ -93,6 +93,14 @@ reapontou exatamente este `MESES_LIMITE_CONCESSIVO = 11` (`ferias/servico.ts:92`
 `rh.periodo_aquisitivo.limite_concessivo`), com o detalhe de que, colado à premissa de gozo de 30
 dias, ele acusa "dobro" cedo demais para quem tira férias parciais. Segue aqui como #3 — não dupliquei.
 
+**DECISÃO DO DONO (11/08/2026): separar — 12 legal + alerta 11 administrável.** A metade LEGAL está
+FEITA e provada: `MESES_LIMITE_CONCESSIVO = 12` (art. 134) e a migration 0062 reconciliou as linhas
+já materializadas (recomputou limite = fim + 12 e desvenceu quem os 11 marcaram cedo demais — no dev,
+3 períodos voltaram de 'vencido' para 'em_aberto', e os 2 que passaram de 12 meses seguem vencidos). O
+falso "VENCIDA — dobro" um mês antes está corrigido. **Falta a fatia do ALERTA administrável** (o aviso
+antecipado ao DP em N meses, default 11, que NÃO afirma dobro): precisa de tabela de parâmetro versionada
++ tela + o flag "chegando o limite" no painel de vencimento. É trabalho adicional, decisão-livre.
+
 ---
 
 ## 4 · Folha: 5º dia corrido ou 5º dia útil?
