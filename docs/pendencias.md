@@ -109,7 +109,11 @@ implementável — mas alguém precisa dizer como o crédito de uma empresa vira
 
 **DECISÃO DO DONO (11/08/2026): escolhida NA HORA da transferência.** Igual ao #1 — não é regra global.
 Numa **continuidade** (matriz/filial) o saldo segue com o vínculo; numa **rescisão** (CNPJ distinto)
-liquida no acerto e o novo começa zerado. **A construir** junto do passo continuidade × rescisão do #1.
+liquida no acerto e o novo começa zerado.
+
+**RESOLVIDO via #1 (11/08/2026).** A continuidade não liquida o banco — ele segue no mesmo vínculo
+(provado: o vínculo 168 manteve o saldo de 996 minutos após a continuidade). A rescisão liquida pela
+regra vigente (`liquidarBancoNaRescisao`, comportamento anterior). É exatamente a decisão do dono.
 
 ---
 
