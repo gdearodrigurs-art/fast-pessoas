@@ -859,6 +859,11 @@ export async function registrarDevolucaoEpi(
     sessao.usuario_id,
     async (cliente) => {
       const momento = await marcarDevolucaoEpi(cliente, entregaId);
+      if (momento === null) {
+        // Corrida: outra requisição registrou a devolução entre o pré-check
+        // (fora da transação) e aqui. 409 em vez do 500 do trigger.
+        throw new ErroHttp(409, "Devolução já registrada para esta entrega.");
+      }
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,

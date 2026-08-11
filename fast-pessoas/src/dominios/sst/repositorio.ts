@@ -597,14 +597,17 @@ export async function inserirEntregaEpi(
 export async function marcarDevolucaoEpi(
   cliente: PoolClient,
   id: number
-): Promise<string> {
+): Promise<string | null> {
+  // Condicional (devolvido_em IS NULL): duas requisições concorrentes passavam
+  // pelo mesmo pré-check e o UPDATE incondicional da segunda batia no trigger de
+  // imutabilidade (500). Casando 0 linhas, quem chama devolve 409 limpo.
   const { rows } = await cliente.query<{ devolvido_em: string }>(
     `UPDATE rh.epi_entrega SET devolvido_em = now()
-      WHERE id = $1
+      WHERE id = $1 AND devolvido_em IS NULL
       RETURNING devolvido_em::text AS devolvido_em`,
     [id]
   );
-  return rows[0].devolvido_em;
+  return rows[0]?.devolvido_em ?? null;
 }
 
 export async function marcarCienciaEntregaEpi(
