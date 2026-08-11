@@ -1724,8 +1724,9 @@ export async function conferirTabelaLegal(
 // ------------------------------------------------------------------ indicador
 
 /**
- * % das competências mensais dos últimos 12 meses fechadas até o dia 5 do mês
- * seguinte (America/Sao_Paulo). Null quando nenhuma competência venceu o prazo.
+ * % das competências mensais dos últimos 12 meses fechadas até o 5º dia útil do
+ * mês seguinte (art. 459 §1º; sábado conta, domingo e feriado nacional não;
+ * America/Sao_Paulo). Null quando nenhuma competência venceu o prazo.
  * Agregado sem valores — seguro para o painel de indicadores.
  */
 export async function valorIndicadorFolhaNoPrazo(): Promise<number | null> {

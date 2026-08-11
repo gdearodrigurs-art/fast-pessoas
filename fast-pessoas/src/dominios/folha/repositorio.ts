@@ -1918,9 +1918,11 @@ export async function listarCasosTesteAtivos(): Promise<CasoTeste[]> {
 // ------------------------------------------------------------------ indicador
 
 /**
- * % de competências mensais dos últimos 12 meses fechadas até o dia 5 do mês
- * seguinte (America/Sao_Paulo). Denominador: competências cujo prazo já venceu
- * OU que já fecharam; null se não houver nenhuma.
+ * % de competências mensais dos últimos 12 meses fechadas até o 5º DIA ÚTIL do
+ * mês seguinte (art. 459 §1º da CLT; sábado conta, domingo e feriado nacional
+ * não — regra em rh.enesimo_dia_util_folha, que lê o calendário administrável
+ * rh.feriado). Denominador: competências cujo prazo já venceu OU que já
+ * fecharam; null se não houver nenhuma.
  */
 export async function indicadorFolhaNoPrazo(): Promise<{
   no_prazo: number;
@@ -1929,7 +1931,8 @@ export async function indicadorFolhaNoPrazo(): Promise<{
   const linhas = await consultar<{ no_prazo: string; total: string }>(
     `WITH base AS (
        SELECT c.estado,
-              (make_date(c.ano, c.mes, 1) + INTERVAL '1 month' + INTERVAL '4 days')::date AS prazo,
+              rh.enesimo_dia_util_folha(
+                (make_date(c.ano, c.mes, 1) + INTERVAL '1 month')::date, 5) AS prazo,
               (c.fechada_em AT TIME ZONE 'America/Sao_Paulo')::date AS fechada_dia,
               (now() AT TIME ZONE 'America/Sao_Paulo')::date AS hoje
          FROM rh_folha.competencia_folha c

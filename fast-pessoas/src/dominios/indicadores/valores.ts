@@ -75,7 +75,7 @@ const FONTES: Record<string, () => Promise<ValorApurado>> = {
       detalhe:
         valor === null
           ? "nenhuma competência mensal com prazo vencido"
-          : "competências mensais fechadas até o dia 5 do mês seguinte (12 meses)",
+          : "competências mensais fechadas até o 5º dia útil do mês seguinte (12 meses)",
     };
   },
   adesao_checkin: async () => {

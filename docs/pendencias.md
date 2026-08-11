@@ -137,9 +137,19 @@ contagem? Para o art. 459 o entendimento majoritário é que sim (dia útil = di
 bancário), o que muda a data em vários meses do ano. É o único ponto aqui com resposta em disputa.
 
 **DECISÃO DO DONO (11/08/2026): 5º dia ÚTIL, e SÁBADO CONTA como dia útil.** Só domingo e feriado não
-contam. **A construir** (decisão-livre): tirar o `INTERVAL` chumbado do SQL e computar o 5º dia útil por
-uma régua administrável (calendário de feriados + sábado-conta), alimentando o indicador com o prazo
-legal, não com o corrido.
+contam.
+
+**RESOLVIDO (11/08/2026, migration 0064).** O `INTERVAL '4 days'` chumbado saiu; o prazo agora é
+`rh.enesimo_dia_util_folha(mes_pgto, 5)` — o 5º dia útil, com sábado contando e domingo/feriado nacional
+não. A função lê o **mesmo calendário administrável** que o ponto já mantém (`rh.feriado`, editável em
+/ponto/parametros) — não criei tabela nem tela nova, e o eixo 9 fica satisfeito lendo a fonte que já
+existe. O `5` é a lei (art. 459 §1º), fica no chamador com a citação. A descrição do indicador e os
+comentários que diziam "dia 5" foram alinhados. **Provado**: Jan/Mai (feriado empurra 05→07), Ago
+(começa no sábado → 5º útil = 06, não 07), Nov (5º útil cai num sábado, com Finados pulado); 36 meses
+sem NULL, sempre entre dia 5 e 7. Suíte 179, tsc e lint verdes. Nota: só feriado NACIONAL entra no
+prazo (municipal/estadual raramente cai nos 5 primeiros dias úteis); a régua "dia útil" do prazo (sábado
+conta) é de propósito diferente da do ponto/painel (seg–sex). Sub-pergunta do sábado: decidida pelo dono,
+não precisou de contador.
 
 ---
 
