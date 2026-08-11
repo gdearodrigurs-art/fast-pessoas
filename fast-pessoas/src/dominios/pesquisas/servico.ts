@@ -373,10 +373,18 @@ export async function alterarCicloPesquisa(
   }
 
   await comTransacao(sessao.usuario_id, async (cliente) => {
-    if (dados.acao === "abrir") {
-      await abrirPesquisa(cliente, id);
-    } else {
-      await encerrarPesquisa(cliente, id);
+    const mudou =
+      dados.acao === "abrir"
+        ? await abrirPesquisa(cliente, id)
+        : await encerrarPesquisa(cliente, id);
+    if (mudou === 0) {
+      // Corrida entre o pré-check (fora da transação) e aqui: outra transição
+      // já mudou o estado. Sem conferir o rowCount, o audit gravava um evento
+      // fantasma de uma mudança que não aconteceu e a tela dizia "sucesso".
+      throw new ErroHttp(
+        409,
+        "A pesquisa mudou de estado enquanto isto era processado. Recarregue a página."
+      );
     }
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,

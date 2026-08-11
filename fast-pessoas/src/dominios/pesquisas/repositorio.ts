@@ -277,28 +277,33 @@ export async function inserirPergunta(
   return Number(rows[0].id);
 }
 
+// Devolvem quantas linhas mudaram: a guarda de status mora no WHERE, então
+// 0 significa que outra transição concorrente já mudou o estado — quem chama
+// confere e recusa (409) em vez de auditar um evento que não aconteceu.
 export async function abrirPesquisa(
   cliente: PoolClient,
   id: number
-): Promise<void> {
-  await cliente.query(
+): Promise<number> {
+  const { rowCount } = await cliente.query(
     `UPDATE rh_clima.pesquisa
         SET status = 'aberta', aberta_em = now()
       WHERE id = $1 AND status = 'rascunho'`,
     [id]
   );
+  return rowCount ?? 0;
 }
 
 export async function encerrarPesquisa(
   cliente: PoolClient,
   id: number
-): Promise<void> {
-  await cliente.query(
+): Promise<number> {
+  const { rowCount } = await cliente.query(
     `UPDATE rh_clima.pesquisa
         SET status = 'encerrada', encerrada_em = now()
       WHERE id = $1 AND status = 'aberta'`,
     [id]
   );
+  return rowCount ?? 0;
 }
 
 // ------------------------------------------------------------------ respondente

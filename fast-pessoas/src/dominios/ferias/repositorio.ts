@@ -215,10 +215,15 @@ export async function marcarPeriodosVencidos(
   { id: number; colaborador_id: number; status_antigo: StatusPeriodo }[]
 > {
   const parametros: unknown[] = [];
-  let filtro = "";
+  let filtroInterno = "";
   if (colaboradorId !== null) {
     parametros.push(colaboradorId);
-    filtro = "AND p.colaborador_id = $1";
+    // O filtro tem que morar DENTRO da subconsulta que trava (FOR UPDATE). Fora
+    // dela, o FOR UPDATE travava TODOS os períodos vencidos da empresa a cada
+    // pessoa que abria /ferias — duas pessoas carregando a página ao mesmo
+    // tempo (ou o lote noturno) se serializavam por uma linha de outro alguém,
+    // podendo até dar deadlock. Escopado, só as linhas do alvo são travadas.
+    filtroInterno = "AND colaborador_id = $1";
   }
   const { rows } = await cliente.query<{
     id: string;
@@ -230,9 +235,9 @@ export async function marcarPeriodosVencidos(
        FROM (SELECT id, status FROM rh.periodo_aquisitivo
               WHERE status IN ('em_aberto','programado_parcial')
                 AND limite_concessivo < ${HOJE_SP}
+                ${filtroInterno}
               FOR UPDATE) antigo
       WHERE p.id = antigo.id
-        ${filtro}
       RETURNING p.id, p.colaborador_id, antigo.status AS status_antigo`,
     parametros
   );

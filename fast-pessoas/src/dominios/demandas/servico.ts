@@ -849,6 +849,19 @@ export async function recusarDemanda(
         "Só é possível recusar demanda aberta ou em atendimento."
       );
     }
+    // Se o efeito programado da movimentação JÁ foi aplicado no cadastro (a
+    // pessoa já foi promovida/transferida), recusar não desfaz nada: só marcaria
+    // a demanda como recusada (situação "cancelado") enquanto o cadastro segue
+    // mutado — relatório de turnover e trilha passariam a mentir. Recusar só
+    // cancela efeito que ainda NÃO aconteceu. (buscarMovimentacao devolve null
+    // para demanda que não é movimentação, então o guarda não atrapalha as outras.)
+    const movimentacao = await buscarMovimentacao(id, cliente);
+    if (movimentacao && movimentacao.aplicada_em !== null) {
+      throw new ErroHttp(
+        409,
+        "O efeito desta movimentação já foi aplicado no cadastro: conclua a demanda, não há o que recusar."
+      );
+    }
     await registrarTransicao(cliente, sessao, demanda, "recusada", motivo, {
       "Motivo da recusa": { de: null, para: motivo },
     });
