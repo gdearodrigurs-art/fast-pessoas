@@ -10,6 +10,7 @@ interface Permissoes extends Record<string, unknown> {
   ferias_programar: boolean;
   afastamento_ver: boolean;
   admissao_ver: boolean;
+  admissao_modelo_administrar: boolean;
   desligamento_ver: boolean;
   beneficios_acessar: boolean;
   avaliacao_acessar: boolean;
@@ -56,6 +57,7 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'ferias.programar')               AS ferias_programar,
        sistema.tem_permissao($1, 'afastamento.ver')                AS afastamento_ver,
        sistema.tem_permissao($1, 'admissao.ver')                   AS admissao_ver,
+       sistema.tem_permissao($1, 'admissao.modelo.administrar')    AS admissao_modelo_administrar,
        sistema.tem_permissao($1, 'desligamento.ver')               AS desligamento_ver,
        (sistema.tem_permissao($1, 'adesao.solicitar')
         OR sistema.tem_permissao($1, 'adesao.gerir')
@@ -253,6 +255,13 @@ export default async function PaginaInicial() {
           titulo: "Admissões",
           descricao: "Processos de admissão com checklist até o primeiro dia.",
           mostrar: pode?.admissao_ver ?? false,
+        },
+        {
+          href: "/admissoes/modelos",
+          titulo: "Modelos de admissão",
+          descricao:
+            "Checklist de admissão por tipo de vínculo (CLT, estágio, aprendiz, PJ).",
+          mostrar: pode?.admissao_modelo_administrar ?? false,
         },
         {
           href: "/desligamentos",

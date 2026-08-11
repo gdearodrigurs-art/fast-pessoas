@@ -75,6 +75,82 @@ export const esquemaCancelamento = z.object({
 
 export type CorpoCancelamento = z.infer<typeof esquemaCancelamento>;
 
+// ------------------------------------------------------------------ modelo de checklist por vínculo
+
+// As famílias de modelo. NULL = modelo GERAL (fallback); os demais são os tipos
+// de vínculo com documentação legalmente distinta (migration 0058). "geral" só
+// aparece como rótulo/chave derivada, nunca como valor gravado.
+export const TIPOS_VINCULO_MODELO = [
+  "clt",
+  "estagiario",
+  "aprendiz",
+  "pj",
+] as const;
+export type TipoVinculoModelo = (typeof TIPOS_VINCULO_MODELO)[number];
+
+export const ROTULOS_FAMILIA_MODELO: Record<
+  TipoVinculoModelo | "geral",
+  string
+> = {
+  geral: "Geral (fallback)",
+  clt: "CLT",
+  estagiario: "Estagiário",
+  aprendiz: "Aprendiz",
+  pj: "PJ",
+};
+
+/** A família de um modelo, para agrupar/rotular: o vínculo, ou "geral" se nulo. */
+export function familiaDoModelo(
+  tipoVinculo: TipoVinculoModelo | null
+): TipoVinculoModelo | "geral" {
+  return tipoVinculo ?? "geral";
+}
+
+// Um item do modelo: o que a empresa FIRMA no checklist. `obrigatorio` trava o
+// "Concluir processo"; o item extra por processo (esquemaItemAvulso) não.
+export const esquemaItemModelo = z.object({
+  descricao: z
+    .string()
+    .trim()
+    .min(3, "Descreva o item em pelo menos 3 caracteres")
+    .max(300, "Descrição longa demais"),
+  obrigatorio: z.boolean(),
+});
+
+export type ItemModelo = z.infer<typeof esquemaItemModelo>;
+
+// Salvar um modelo = gravar uma nova versão ATIVA para a família (o vínculo, ou
+// geral quando tipo_vinculo é nulo), encerrando a anterior no mesmo ato. A ordem
+// dos itens é a ordem do array. Descrição não se repete na mesma lista.
+export const esquemaModeloAdmissao = z
+  .object({
+    tipo_vinculo: z.enum(TIPOS_VINCULO_MODELO).nullable(),
+    itens: z
+      .array(esquemaItemModelo)
+      .min(1, "O checklist precisa de ao menos um item.")
+      .max(60, "Checklist longo demais (máximo 60 itens)."),
+  })
+  .refine(
+    (modelo) => {
+      const descricoes = modelo.itens.map((item) =>
+        item.descricao.trim().toLowerCase()
+      );
+      return new Set(descricoes).size === descricoes.length;
+    },
+    { message: "Há itens com a mesma descrição na lista.", path: ["itens"] }
+  );
+
+export type ModeloAdmissaoEntrada = z.infer<typeof esquemaModeloAdmissao>;
+
+/** Valida a estrutura no cliente antes de habilitar o "Salvar". Lista os erros. */
+export function validarModeloAdmissao(
+  entrada: ModeloAdmissaoEntrada
+): string[] {
+  const resultado = esquemaModeloAdmissao.safeParse(entrada);
+  if (resultado.success) return [];
+  return resultado.error.issues.map((issue) => issue.message);
+}
+
 // ------------------------------------------------------------------ prazos do contrato de experiência
 
 /** Alerta visual do painel quando faltam este nº de dias (ou menos) para o prazo. */

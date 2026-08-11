@@ -1,6 +1,6 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
-import { EstadoProcesso, StatusItem } from "./esquemas";
+import { EstadoProcesso, StatusItem, TipoVinculoModelo } from "./esquemas";
 
 export interface ItemChecklistTemplate {
   ordem: number;
@@ -169,6 +169,100 @@ export async function buscarChecklistAtivo(
     [tipoVinculo]
   );
   return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+// ------------------------------------------------------------------ administração dos modelos (por vínculo)
+
+export interface ModeloAdmissao {
+  id: number;
+  versao: number;
+  tipo_vinculo: TipoVinculoModelo | null;
+  status: string;
+  inicio_vigencia: string;
+  fim_vigencia: string | null;
+  itens: ItemChecklistTemplate[];
+}
+
+/**
+ * Todas as versões de todos os modelos, para o painel de administração. Agrupa
+ * por família (COALESCE(tipo_vinculo,'geral')) e, dentro dela, versão mais nova
+ * primeiro — a ativa fica no topo de cada família.
+ */
+export async function listarModelosAdmissao(): Promise<ModeloAdmissao[]> {
+  const linhas = await consultar<{
+    id: string;
+    versao: number;
+    tipo_vinculo: TipoVinculoModelo | null;
+    status: string;
+    inicio_vigencia: string;
+    fim_vigencia: string | null;
+    itens: ItemChecklistTemplate[];
+  }>(
+    `SELECT id, versao, tipo_vinculo, status,
+            inicio_vigencia::text AS inicio_vigencia,
+            fim_vigencia::text AS fim_vigencia,
+            itens
+       FROM rh.checklist_admissao_versao
+      ORDER BY COALESCE(tipo_vinculo, 'geral'), versao DESC`
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+/**
+ * Próxima versão da FAMÍLIA (o geral e cada vínculo têm a sua sequência — 0058).
+ * COALESCE trata o geral como 'geral', o mesmo do índice único da migration.
+ */
+export async function proximaVersaoDaFamilia(
+  cliente: PoolClient,
+  tipoVinculo: TipoVinculoModelo | null
+): Promise<number> {
+  const { rows } = await cliente.query<{ proxima: number }>(
+    `SELECT COALESCE(MAX(versao), 0) + 1 AS proxima
+       FROM rh.checklist_admissao_versao
+      WHERE COALESCE(tipo_vinculo, 'geral') = COALESCE($1, 'geral')`,
+    [tipoVinculo]
+  );
+  return rows[0].proxima;
+}
+
+/**
+ * Encerra a versão ATIVA da família (se houver), com fim em rh.hoje(). Escopo
+ * por COALESCE(tipo_vinculo,'geral') de propósito: encerrar um vínculo NÃO pode
+ * tocar o geral (era o erro do modelo análogo, que encerrava a ativa global).
+ * Devolve o id encerrado, ou null quando a família ainda não tinha ativa.
+ */
+export async function encerrarModeloAtivoDaFamilia(
+  cliente: PoolClient,
+  tipoVinculo: TipoVinculoModelo | null
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `UPDATE rh.checklist_admissao_versao
+        SET status = 'encerrada', fim_vigencia = rh.hoje()
+      WHERE status = 'ativa'
+        AND COALESCE(tipo_vinculo, 'geral') = COALESCE($1, 'geral')
+      RETURNING id`,
+    [tipoVinculo]
+  );
+  return rows.length ? Number(rows[0].id) : null;
+}
+
+/** Insere uma nova versão já ATIVA para a família, com início em rh.hoje(). */
+export async function inserirModeloAtivo(
+  cliente: PoolClient,
+  dados: {
+    tipoVinculo: TipoVinculoModelo | null;
+    versao: number;
+    itens: ItemChecklistTemplate[];
+  }
+): Promise<{ id: number; versao: number }> {
+  const { rows } = await cliente.query<{ id: string; versao: number }>(
+    `INSERT INTO rh.checklist_admissao_versao
+       (tipo_vinculo, versao, itens, status, inicio_vigencia)
+     VALUES ($1, $2, $3::jsonb, 'ativa', rh.hoje())
+     RETURNING id, versao`,
+    [dados.tipoVinculo, dados.versao, JSON.stringify(dados.itens)]
+  );
+  return { id: Number(rows[0].id), versao: rows[0].versao };
 }
 
 // ------------------------------------------------------------------ candidatos à abertura
