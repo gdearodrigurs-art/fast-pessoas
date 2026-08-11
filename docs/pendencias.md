@@ -18,6 +18,7 @@
 | 7 | Benefício na transferência entre CNPJs: o critério ainda barra | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
 | 9 | Folha: quem conta como dependente para o IRRF | Guilherme | 10/08/2026 | base do IRRF retido |
 | 10 | Contato do candidato: leitura entra na trilha? | Guilherme | 10/08/2026 | rastro LGPD de dado de terceiro |
+| 11 | Replay de TOTP: código válido reutilizável na janela | Guilherme | 10/08/2026 | endurecimento do 2FA |
 
 ---
 
@@ -300,3 +301,40 @@ a mais.
 
 **Eixo:** rastro de leitura (8) — dado sensível de terceiro devolvido sem registro em
 `audit.leitura_sensivel`.
+
+---
+
+## 11 · Replay de TOTP: o mesmo código vale de novo dentro da janela (~90s)
+
+**Onde está:** `src/dominios/identidade/servico.ts:60` — `validarCodigoTotp` usa `window: 1`
+(aceita ±1 período de 30s) e NÃO registra código já consumido. O mesmo helper é reusado no
+login (l.105), no `desativar2fa` (l.323) e em `validarTotpDoUsuario` (l.189), então um único
+código interceptado pode ser repetido nesses fluxos enquanto não expira naturalmente.
+
+**O buraco:** quem captura um código de 6 dígitos (phishing/MITM) MAIS a senha pode reapresentar
+o MESMO código dentro da janela de aceitação para completar login ou uma revalidação crítica,
+porque nenhum código já usado é rejeitado. TOTP é, por definição, de uso único; hoje é
+reutilizável por ~90s.
+
+**Minha recomendação: rastrear o último passo (counter) aceito por usuário e recusar reuso.**
+Adicionar `totp_ultimo_passo BIGINT` em `sistema.usuario` (migration), a validação devolver o
+passo absoluto (contador do período + delta do `validate`) e, na MESMA operação, aceitar só passo
+> último e gravar o novo — um UPDATE condicional (`... WHERE totp_ultimo_passo IS NULL OR
+totp_ultimo_passo < $passo`) é a trava atômica: 0 linhas = replay = recusa. Opcional: apertar
+`window` para 0.
+
+**A favor:** fecha o eixo "enrolamento TOTP sem bypass" de verdade — código vira de uso único,
+como manda o padrão.
+
+**Contra / por que NÃO fiz junto com o resto da varredura:** mexe no caminho de AUTH em três
+lugares e num `sistema.usuario` que TODO login toca, e a regressão de 2FA deste projeto é por
+PERSONA (as tarefas de smoke 2FA), não pelo `npm test`. Um erro no cálculo do passo ou na trava
+arrisca LOCKOUT de quem usa 2FA — exatamente o tipo de mudança que o arnês manda validar com o
+dono e as personas antes de entrar. (Um código fresco sempre tem passo maior, então o único caso
+recusado é reapresentar o MESMO código; ainda assim quero a bateria de personas rodando antes do
+merge.)
+
+**O que trava:** nada do fluxo normal hoje. É endurecimento de segurança; vira relevante sob
+captura ativa de credenciais. Severidade avaliada como PLAUSIBLE (janela estreita).
+
+**Eixo:** auth / enrolamento TOTP sem bypass.

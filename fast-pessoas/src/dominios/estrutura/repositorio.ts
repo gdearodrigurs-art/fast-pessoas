@@ -423,26 +423,6 @@ export async function existeEmpresaAtiva(
   return rows.length > 0;
 }
 
-/**
- * Gêmeo de validação do seletor: o mesmo "ativo" que `listarCentrosCustoAtivos`
- * usa para OFERECER. Os dois têm que dizer a mesma coisa — senão a API aceita
- * por POST o que a tela deixou de mostrar.
- */
-export async function existeCentroCustoAtivo(
-  cliente: PoolClient,
-  centroCustoId: number
-): Promise<boolean> {
-  const { rows } = await cliente.query(
-    `SELECT 1
-       FROM rh.centro_custo cc
-       JOIN rh.empresa_grupo eg ON eg.id = cc.empresa_id
-      WHERE cc.id = $1 AND cc.inativado_em IS NULL
-        AND eg.inativada_em IS NULL`,
-    [centroCustoId]
-  );
-  return rows.length > 0;
-}
-
 // ------------------------------------------------------------------ filtro pelos três (leitura)
 //
 // Uma fonte só para "quem está registrado em X, trabalhando em Y, custando em
