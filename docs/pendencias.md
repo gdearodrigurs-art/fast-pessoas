@@ -59,13 +59,21 @@ rescisão. Na continuidade: mantém a **mesma matrícula**, mexe **só no regist
 estabelecimento/centro; cargo, salário, gestor, férias, banco, benefício e dependentes seguem
 intactos), e quando a raiz é igual o sistema **oferece os dois, continuidade como padrão**.
 
-**EM CONSTRUÇÃO (branch revisao-geral).** Slice 1 FEITO (migration 0065): coluna `modo_transferencia`
-em `rh.demanda_movimentacao`, CHECK relaxado por modo (matrícula/gestor/tipo só na rescisão), e função
-`rh.mesma_raiz_cnpj`. Provado no dev: os 4 CNPJs da demo são filiais da raiz 41235678 (`mesma_raiz(16,17)=
-true`); o backfill marcou o pedido antigo como 'rescisao'. Faltam: serviço (efeito continuidade +
-validação da criação), tela (o toggle), ficha (evento no mesmo vínculo). Nota de demo: os 4 CNPJs hoje
-são a MESMA raiz — para exibir um caso de rescisão-por-raiz-distinta na 3001, semear uma empresa de raiz
-diferente.
+**EM CONSTRUÇÃO (branch revisao-geral). Backend FEITO E PROVADO ponta a ponta (slices 1-3).**
+- Slice 1 (migration 0065): coluna `modo_transferencia`, CHECK relaxado por modo, função `rh.mesma_raiz_cnpj`.
+- Slice 2 (serviço): validação da criação (continuidade só com mesma raiz; matrícula só na rescisão) +
+  o efeito `aplicarContinuidadeDeRegistro` (encerra a lotação vigente, abre outra no MESMO vínculo; não
+  desliga, não abre vínculo novo, não liquida banco, não zera férias).
+- Slice 3 (prova por script contra a 3001): continuidade DCS→Supply de quem tem 7 períodos de férias,
+  banco e dependentes — vínculos 71→71 (nenhum novo), mesmo vínculo ativo/mesma matrícula/mesma
+  admissão, lotação trocada, **férias e banco IGUAIS**, evento `transferencia_continuidade` gravado. A
+  prova ACHOU UM BUG e ele foi corrigido: o gate de estabilidade do art. 118 barrava a criação de
+  QUALQUER transferência ("ENCERRA o contrato"), mas a continuidade não encerra — passou a valer só na
+  rescisão. Negativo provado: continuidade + matrícula = 400.
+
+**Faltam: slice 4 (tela — o toggle continuidade × rescisão no formulário) e slice 5 (ficha — a
+continuidade como evento no mesmo vínculo).** Nota de demo: os 4 CNPJs hoje são a MESMA raiz — para
+exibir rescisão-por-raiz-distinta na 3001, semear uma empresa de raiz diferente.
 
 **Onde está:** `db/migrations/0048_transferencia_entre_empresas.sql:142-145`
 

@@ -1286,11 +1286,18 @@ export async function criarMovimentacao(
       // conferido de novo na aplicação — o estado pode mudar entre abrir e
       // aprovar, ainda mais depois que o efeito passou a esperar a data
       // pretendida.
-      await exigirEstabilidadeLivreParaTransferir(
-        cliente,
-        alvo.id,
-        "colaborador_id"
-      );
+      // GATE DE ESTABILIDADE (art. 118) — só na RESCISÃO. Ele existe porque a
+      // transferência ENCERRA o contrato; a continuidade não encerra nada (mesmo
+      // empregador, o contrato segue), então a estabilidade acidentária não é
+      // ameaçada e não há o que barrar. Guardar aqui é o que faz a continuidade
+      // valer para quem tem estabilidade — que é o comportamento correto.
+      if (dados.modo_transferencia === "rescisao") {
+        await exigirEstabilidadeLivreParaTransferir(
+          cliente,
+          alvo.id,
+          "colaborador_id"
+        );
+      }
       const lotacao = await buscarLotacaoVigenteParaAtualizar(cliente, alvo.id);
       if (!lotacao) {
         throw new ErroHttpCampo(
