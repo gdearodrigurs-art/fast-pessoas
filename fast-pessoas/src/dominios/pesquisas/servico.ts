@@ -33,6 +33,7 @@ import {
   contarAtivos,
   encerrarPesquisa,
   inserirParticipacao,
+  travarPesquisaParaResposta,
   inserirPergunta,
   inserirPesquisa,
   inserirPlano,
@@ -644,6 +645,17 @@ export async function responder(
 
   try {
     await comTransacao(sessao.usuario_id, async (cliente) => {
+      // Revalida SOB TRAVA: entre o pré-check (fora da transação) e aqui um
+      // admin pode ter encerrado a pesquisa. Sem isto uma resposta tardia
+      // entrava numa pesquisa 'encerrada' cujo resultado já foi declarado
+      // definitivo — e, anônima, sem como rastrear ou desfazer.
+      const atual = await travarPesquisaParaResposta(cliente, id);
+      if (!atual || atual.status !== "aberta") {
+        throw new ErroHttp(409, "Esta pesquisa não está aberta para resposta.");
+      }
+      if (hoje < atual.inicio || hoje > atual.fim) {
+        throw new ErroHttp(409, "Fora do período de resposta desta pesquisa.");
+      }
       // A participação vem PRIMEIRO: se a pessoa já respondeu, a violação de
       // unicidade aborta a transação antes de gravar qualquer resposta.
       const participacaoId = await inserirParticipacao(

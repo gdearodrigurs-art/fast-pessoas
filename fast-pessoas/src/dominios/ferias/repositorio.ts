@@ -553,6 +553,25 @@ export async function diasSolicitadosNoPeriodo(
   return Number(rows[0].total);
 }
 
+/**
+ * Trava as programações de férias de UM colaborador na transação (advisory
+ * lock). Serializa criações concorrentes do mesmo colaborador para que a
+ * checagem de sobreposição enxergue a programação que a transação irmã ainda
+ * não commitou — sem isto, duas criações em períodos DIFERENTES travavam linhas
+ * diferentes (só o período escolhido) e nenhuma via a pendência da outra.
+ */
+export async function travarProgramacoesDoColaborador(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<void> {
+  await cliente.query(
+    `SELECT pg_advisory_xact_lock(
+              hashtext('rh.programacao_ferias'),
+              hashtext($1::text))`,
+    [colaboradorId]
+  );
+}
+
 /** Sobreposição de datas com outra programação ativa do mesmo colaborador. */
 export async function existeSobreposicao(
   cliente: PoolClient,

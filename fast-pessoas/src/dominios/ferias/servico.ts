@@ -38,6 +38,7 @@ import {
   diasSolicitadosNoPeriodo,
   existePeriodoParaVencer,
   existeSobreposicao,
+  travarProgramacoesDoColaborador,
   inserirPeriodoSeFaltar,
   inserirProgramacao,
   LinhaPainelVencimento,
@@ -520,6 +521,11 @@ export async function criarProgramacao(
   const programacaoId = await comTransacao(
     sessao.usuario_id,
     async (cliente) => {
+      // Trava por colaborador ANTES de checar sobreposição: sem ela,
+      // criarProgramacao só travava o PERÍODO escolhido, então duas criações em
+      // períodos diferentes do mesmo colaborador não se enxergavam e podiam
+      // gravar férias sobrepostas (dois cliques / duas abas).
+      await travarProgramacoesDoColaborador(cliente, colaboradorId);
       const periodo = await buscarPeriodoParaAtualizar(
         cliente,
         dados.periodo_aquisitivo_id
@@ -661,6 +667,19 @@ export async function aprovarExcecao(
         cliente,
         programacao.demanda_id
       );
+      // Se o gestor JÁ decidiu a demanda (recusou ou concluiu), aprovar a
+      // exceção por cima anulava a decisão dele em silêncio: a programação
+      // virava 'aprovada' e o período era consumido, com o histórico contando
+      // duas verdades. Recusa 409 em vez de sobrescrever.
+      if (
+        demanda &&
+        (demanda.status === "recusada" || demanda.status === "concluida")
+      ) {
+        throw new ErroHttp(
+          409,
+          "A demanda vinculada já foi decidida (recusada/concluída) — não se aprova a exceção por cima."
+        );
+      }
       if (demanda && demanda.status === "aguardando_aprovacao") {
         await atualizarStatusDemanda(cliente, demanda.id, "aberta");
         await inserirTransicao(cliente, {

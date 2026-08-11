@@ -306,6 +306,27 @@ export async function encerrarPesquisa(
   return rowCount ?? 0;
 }
 
+/**
+ * Trava a pesquisa e devolve o estado atual DENTRO da transação — para o
+ * responder() revalidar status e período sob a trava, fechando a janela entre o
+ * pré-check (fora da transação) e a gravação em que um admin pode ter encerrado.
+ */
+export async function travarPesquisaParaResposta(
+  cliente: PoolClient,
+  id: number
+): Promise<{ status: string; inicio: string; fim: string } | null> {
+  const { rows } = await cliente.query<{
+    status: string;
+    inicio: string;
+    fim: string;
+  }>(
+    `SELECT status, inicio::text AS inicio, fim::text AS fim
+       FROM rh_clima.pesquisa WHERE id = $1 FOR UPDATE`,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
 // ------------------------------------------------------------------ respondente
 
 /**
