@@ -106,9 +106,17 @@ dias, ele acusa "dobro" cedo demais para quem tira férias parciais. Segue aqui 
 FEITA e provada: `MESES_LIMITE_CONCESSIVO = 12` (art. 134) e a migration 0062 reconciliou as linhas
 já materializadas (recomputou limite = fim + 12 e desvenceu quem os 11 marcaram cedo demais — no dev,
 3 períodos voltaram de 'vencido' para 'em_aberto', e os 2 que passaram de 12 meses seguem vencidos). O
-falso "VENCIDA — dobro" um mês antes está corrigido. **Falta a fatia do ALERTA administrável** (o aviso
-antecipado ao DP em N meses, default 11, que NÃO afirma dobro): precisa de tabela de parâmetro versionada
-+ tela + o flag "chegando o limite" no painel de vencimento. É trabalho adicional, decisão-livre.
+falso "VENCIDA — dobro" um mês antes está corrigido.
+
+**RESOLVIDO POR COMPLETO (11/08/2026).** Ao construir a fatia do alerta, descobriu-se que o aviso
+antecipado **já existia e funcionava**: o painel de vencimento do DP marca cada período com `nivelAlerta`
+("Vence em até 30/60/90 dias"), e a faixa de 30 dias é exatamente o "avisar aos 11 meses" (30 dias antes
+do limite de 12 meses). A data exata e os dias restantes aparecem em número na linha. O único ponto em
+aberto era tornar as faixas **editáveis pela tela** — e o dono decidiu **deixá-las fixas**: como a decisão
+escrita da FB-4 já argumentava (ver `ferias/esquemas.ts:97`), essas faixas são cor/etiqueta, não regra
+(trocar 60→45 não adianta nem atrasa o vencimento de ninguém, não mexe no dobro do art. 137). Não violam
+o eixo 9 ("nada chumbado" vale para número que muda o que o sistema AFIRMA sobre a pessoa; a faixa só muda
+quando a etiqueta fica amarela). Nada mais a fazer no #3.
 
 ---
 
