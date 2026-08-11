@@ -298,6 +298,7 @@ export interface ProcessoParaTransicao {
   elegivel_entrevista: boolean;
   estado: EstadoProcesso;
   data_projetada_termino: string;
+  data_comunicacao: string;
 }
 
 export async function buscarParaTransicao(
@@ -313,12 +314,14 @@ export async function buscarParaTransicao(
     elegivel_entrevista: boolean;
     estado: EstadoProcesso;
     data_projetada_termino: string;
+    data_comunicacao: string;
   }>(
     `SELECT p.id, p.colaborador_id,
             c.nome_completo AS colaborador_nome,
             c.matricula AS colaborador_matricula,
             t.nome AS tipo_nome, t.elegivel_entrevista, p.estado,
-            p.data_projetada_termino::text AS data_projetada_termino
+            p.data_projetada_termino::text AS data_projetada_termino,
+            p.data_comunicacao::text AS data_comunicacao
        FROM rh.processo_desligamento p
        JOIN rh.colaborador c ON c.id = p.colaborador_id
        JOIN rh.tipo_desligamento_versao t ON t.id = p.tipo_desligamento_versao_id
