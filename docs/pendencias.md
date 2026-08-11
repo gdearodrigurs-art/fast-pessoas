@@ -51,8 +51,21 @@ distintos** é **rescisão** — baixa na CTPS e acerto. Não é uma regra globa
 pergunta qual dos dois na hora. **Invariante inegociável: a ficha/histórico do funcionário nunca se
 perde**, em nenhum dos dois caminhos (hoje já é assim — a pessoa mantém os dois vínculos e a ficha
 mostra a linha do tempo contínua; onda I). O que a continuidade acrescenta é o vínculo *seguir* em vez
-de encerrar-e-reabrir, carregando período aquisitivo, tempo de casa e benefício (ver #7). **A construir**
-(decisão-livre): o passo "continuidade × rescisão" no fluxo da transferência.
+de encerrar-e-reabrir, carregando período aquisitivo, tempo de casa e benefício (ver #7).
+
+**FRONTEIRAS DECIDIDAS (11/08/2026):** régua objetiva — mesma **raiz de CNPJ** (8 primeiros dígitos)
+= mesmo empregador (matriz↔filial) = continuidade possível; raiz diferente ou CNPJ ausente = só
+rescisão. Na continuidade: mantém a **mesma matrícula**, mexe **só no registro/lotação** (empresa/
+estabelecimento/centro; cargo, salário, gestor, férias, banco, benefício e dependentes seguem
+intactos), e quando a raiz é igual o sistema **oferece os dois, continuidade como padrão**.
+
+**EM CONSTRUÇÃO (branch revisao-geral).** Slice 1 FEITO (migration 0065): coluna `modo_transferencia`
+em `rh.demanda_movimentacao`, CHECK relaxado por modo (matrícula/gestor/tipo só na rescisão), e função
+`rh.mesma_raiz_cnpj`. Provado no dev: os 4 CNPJs da demo são filiais da raiz 41235678 (`mesma_raiz(16,17)=
+true`); o backfill marcou o pedido antigo como 'rescisao'. Faltam: serviço (efeito continuidade +
+validação da criação), tela (o toggle), ficha (evento no mesmo vínculo). Nota de demo: os 4 CNPJs hoje
+são a MESMA raiz — para exibir um caso de rescisão-por-raiz-distinta na 3001, semear uma empresa de raiz
+diferente.
 
 **Onde está:** `db/migrations/0048_transferencia_entre_empresas.sql:142-145`
 
