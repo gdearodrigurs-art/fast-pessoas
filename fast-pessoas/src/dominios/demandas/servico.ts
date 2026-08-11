@@ -61,6 +61,7 @@ import {
   buscarEtapaPendente,
   buscarVinculoParaTransferir,
   centroCustoAtivo,
+  decisorDaEtapaLider,
   copiarDependentes,
   EmpresaAtiva,
   empresaAtiva,
@@ -1705,6 +1706,17 @@ export async function decidirEtapaMovimentacao(
         throw new ErroHttp(
           409,
           "Quem abriu o pedido não decide o nível da diretoria."
+        );
+      }
+      // 4 olhos de verdade: quem DECIDIU a etapa do líder também não decide a
+      // da diretoria. Sem isto, uma pessoa que é o líder vigente do alvo E tem
+      // a chave da diretoria (e não abriu o pedido) aprovava os dois níveis
+      // sozinha, colapsando a cadeia num só par de olhos.
+      const decisorLider = await decisorDaEtapaLider(cliente, demandaId);
+      if (decisorLider !== null && decisorLider === sessao.usuario_id) {
+        throw new ErroHttp(
+          409,
+          "Quem decidiu o nível do líder não decide o nível da diretoria."
         );
       }
     }

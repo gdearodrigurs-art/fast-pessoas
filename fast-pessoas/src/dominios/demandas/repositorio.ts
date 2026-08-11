@@ -680,6 +680,27 @@ export async function listarEtapas(
   return linhas.map(paraEtapa);
 }
 
+/**
+ * Quem decidiu (aprovou) a etapa do LÍDER desta demanda. O nível da diretoria
+ * não pode ser decidido pela mesma pessoa (4 olhos) — e o tipo público
+ * EtapaAprovacao não expõe o id do decisor, por isso a consulta dedicada.
+ */
+export async function decisorDaEtapaLider(
+  cliente: PoolClient,
+  demandaId: number
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ decisor_usuario_id: string | null }>(
+    `SELECT decisor_usuario_id
+       FROM rh.etapa_aprovacao_demanda
+      WHERE demanda_id = $1 AND nivel = 'lider' AND status = 'aprovada'
+      ORDER BY ordem
+      LIMIT 1`,
+    [demandaId]
+  );
+  const id = rows[0]?.decisor_usuario_id;
+  return id === undefined || id === null ? null : Number(id);
+}
+
 /** Etapas de várias demandas de uma vez (fila do líder / da diretoria). */
 export async function listarEtapasDeVarias(
   demandaIds: number[]

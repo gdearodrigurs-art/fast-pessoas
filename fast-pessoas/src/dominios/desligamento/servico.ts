@@ -627,6 +627,18 @@ export async function encerrarProcessoDesligamento(
         `O processo não encerra com a entrevista pendente (status atual: ${ROTULOS_STATUS_ENTREVISTA[entrevista.status]}). Registre o desfecho — realizada, recusada ou não realizada com motivo.`
       );
     }
+    // Término efetivo não pode ser ANTERIOR à comunicação: nem o banco nem o
+    // esquema cobrem esta borda, e a data efetiva vai para rh.colaborador,
+    // para a janela do KPI e para o fechamento da liderança
+    // (GREATEST(inicio, término) colapsava a vigência a zero se o término fosse
+    // no passado). Um ano digitado errado gravava um desligamento incoerente.
+    if (dados.data_termino_efetiva < processo.data_comunicacao) {
+      throw new ErroHttpCampo(
+        409,
+        "O término efetivo não pode ser anterior à comunicação do desligamento.",
+        "data_termino_efetiva"
+      );
+    }
 
     await encerrarProcesso(cliente, id, dados.data_termino_efetiva);
     await auditarTransicao(cliente, sessao, id, processo.estado, "encerrado", {
