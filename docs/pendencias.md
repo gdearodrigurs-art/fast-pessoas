@@ -411,16 +411,20 @@ de `registrarLeituraSensivel` que já existe para oferta_valor/parecer se aplica
 
 ---
 
-## 11 · Replay de TOTP: o mesmo código vale de novo dentro da janela (~90s) — IMPLEMENTADO na branch, falta o smoke de persona
+## 11 · Replay de TOTP: o mesmo código vale de novo dentro da janela (~90s) — RESOLVIDO (implementado + bateria de persona passou)
 
 **Feito em 10/08/2026 na `revisao-geral`** (migration 0060 + `identidade/totp.ts` +
 `consumirPassoTotp` + os 3 pontos de uso ligados). Provado em duas metades: o cálculo do
 passo por teste puro (`tests/totp.test.ts`, 5 casos) e o consumo atômico contra o banco
 (`db/provas-totp.js`: fresco aceito → replay recusado → seguinte aceito → antigo recusado,
-em transação revertida). **O que FALTA antes de mergear na main:** a bateria de 2FA por
-persona (login das 7 personas com código fresco da `db/codigo-2fa.js`, mais um teste manual
-de reativar 2FA logo após desativar) — é a rede que o arnês pede para mudança de auth, e eu
-não consigo rodá-la headless sem as personas. Enquanto isso não rodar, não empurre a `main`.
+em transação revertida). **BATERIA DE PERSONA FEITA E PASSOU (11/08/2026)** — o último portão
+antes do merge. `provas/pendencia-11/bateria-2fa.js` (contra a 3001) provou, para as 7 personas
+que exigem 2FA (daniel.melo, debora.rezende, diretora.pessoas, dp, lidertd, recrutador, rh):
+sem código = 401 (bloqueado), com código fresco = 200 (entram, sem lockout), replay do mesmo
+código = 401 (anti-replay vivo). E o FIX da madrugada: o código consumido no login do DP,
+reusado em `folha/aprovar`, foi ACEITO (o erro que sobrou foi 409 de ESTADO — "só a partir de
+Em conferência" — não de código). Persona sem 2FA (otavio.dantas) entra sem código. **Não trava
+mais o merge.**
 
 **Revisão adversarial do próprio TOTP (10/08/2026) achou e eu consertei:** (1) BLOCKER — o
 "último passo" era compartilhado entre login, aprovação de folha e desativação; como
