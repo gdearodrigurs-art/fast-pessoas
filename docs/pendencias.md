@@ -78,10 +78,19 @@ intactos), e quando a raiz é igual o sistema **oferece os dois, continuidade co
   tsc do formulário limpo, lint 0 erros, sem erro de compilação no dev server. (Não capturei screenshot
   — o pane do browser não estava visível; a verificação foi funcional.)
 
-**Falta só o slice 5 (ficha — a continuidade como evento no mesmo vínculo, já gravada como
-`transferencia_continuidade`; garantir que a linha do tempo da ficha a mostra bem).** Nota de demo: os
-4 CNPJs hoje são a MESMA raiz — para exibir rescisão-por-raiz-distinta na 3001, semear empresa de raiz
-diferente (a "Fast Serviços" já nasce sem CNPJ, o que já força rescisão).
+- Slice 5 (ficha): a ficha rotula o evento `transferencia_continuidade` ("Continuidade — mudança de
+  registro") no mapa de tipos, com o mesmo símbolo/cor da transferência. A continuidade aparece como um
+  evento no MESMO vínculo (não uma sucessão): confirmado que `rh.evento_da_pessoa` (fonte da linha do
+  tempo) traz o evento do vínculo 168.
+
+**RESOLVIDO POR COMPLETO (11/08/2026) — os 5 slices.** A transferência entre empresas do grupo agora
+tem os dois modos: **continuidade** (matriz↔filial, mesma raiz de CNPJ — o contrato segue no mesmo
+vínculo, sem desligar, sem zerar férias/banco) e **rescisão** (raiz distinta — o que já existia). A tela
+oferece continuidade como padrão quando a raiz bate; o servido reconfere. A prova por script achou e
+corrigiu um bug (o gate de estabilidade barrava continuidade). Invariante do dono garantido: a ficha/
+histórico nunca se perde. Nota de demo: os 4 CNPJs hoje são a MESMA raiz — para exibir rescisão-por-raiz-
+distinta na 3001, semear empresa de raiz diferente (a "Fast Serviços" já nasce sem CNPJ, o que já força
+rescisão).
 
 **Onde está:** `db/migrations/0048_transferencia_entre_empresas.sql:142-145`
 

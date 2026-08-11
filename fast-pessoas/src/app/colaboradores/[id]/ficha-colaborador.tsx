@@ -348,6 +348,11 @@ const TIPOS_EVENTO: Record<string, { rotulo: string; simbolo: string; cor: strin
   ocorrencia: { rotulo: "Ocorrência", simbolo: "⚠", cor: "#c96f00" },
   mudanca_gestor: { rotulo: "Mudança de gestor", simbolo: "⇄", cor: "#00838f" },
   transferencia: { rotulo: "Transferência", simbolo: "➜", cor: "#00838f" },
+  transferencia_continuidade: {
+    rotulo: "Continuidade (mudança de registro)",
+    simbolo: "➜",
+    cor: "#00838f",
+  },
   alteracao_status: { rotulo: "Status", simbolo: "•", cor: "#6b6763" },
   alteracao_vinculo: { rotulo: "Vínculo", simbolo: "•", cor: "#6b6763" },
 };
