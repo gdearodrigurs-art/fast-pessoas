@@ -71,9 +71,17 @@ intactos), e quando a raiz é igual o sistema **oferece os dois, continuidade co
   QUALQUER transferência ("ENCERRA o contrato"), mas a continuidade não encerra — passou a valer só na
   rescisão. Negativo provado: continuidade + matrícula = 400.
 
-**Faltam: slice 4 (tela — o toggle continuidade × rescisão no formulário) e slice 5 (ficha — a
-continuidade como evento no mesmo vínculo).** Nota de demo: os 4 CNPJs hoje são a MESMA raiz — para
-exibir rescisão-por-raiz-distinta na 3001, semear uma empresa de raiz diferente.
+- Slice 4 (tela): o formulário de movimentação passou a oferecer o modo. `/opcoes` devolve o
+  `cnpj_atual` do alvo; a tela compara a raiz (8 dígitos) com a da empresa destino — mesma raiz mostra
+  o seletor continuidade × rescisão (padrão continuidade) e esconde matrícula/gestor/tipo; raiz distinta
+  ou CNPJ ausente força rescisão com aviso. Verificado: `/opcoes` entrega `cnpj_atual` nos 62 alvos,
+  tsc do formulário limpo, lint 0 erros, sem erro de compilação no dev server. (Não capturei screenshot
+  — o pane do browser não estava visível; a verificação foi funcional.)
+
+**Falta só o slice 5 (ficha — a continuidade como evento no mesmo vínculo, já gravada como
+`transferencia_continuidade`; garantir que a linha do tempo da ficha a mostra bem).** Nota de demo: os
+4 CNPJs hoje são a MESMA raiz — para exibir rescisão-por-raiz-distinta na 3001, semear empresa de raiz
+diferente (a "Fast Serviços" já nasce sem CNPJ, o que já força rescisão).
 
 **Onde está:** `db/migrations/0048_transferencia_entre_empresas.sql:142-145`
 

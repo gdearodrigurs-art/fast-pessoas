@@ -1590,6 +1590,8 @@ export interface OpcaoColaborador {
   nome_completo: string;
   cargo_atual: string | null;
   unidade_atual: string | null;
+  /** CNPJ da empresa de registro vigente — a tela deriva a raiz (continuidade). */
+  cnpj_atual: string | null;
 }
 
 /**
@@ -1613,6 +1615,7 @@ export async function listarAlvosPossiveis(
     nome_completo: string;
     cargo_atual: string | null;
     unidade_atual: string | null;
+    cnpj_atual: string | null;
   }>(
     `SELECT c.id, c.nome_completo,
             (SELECT cv.nome
@@ -1626,7 +1629,12 @@ export async function listarAlvosPossiveis(
                  ON ev.estabelecimento_id = l.estabelecimento_id
                 AND ev.status = 'ativa'
               WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL)
-              AS unidade_atual
+              AS unidade_atual,
+            (SELECT eg.cnpj
+               FROM rh.lotacao l
+               JOIN rh.empresa_grupo eg ON eg.id = l.empresa_id
+              WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL)
+              AS cnpj_atual
        FROM rh.colaborador c
       WHERE c.status = 'ativo' ${filtro}
       ORDER BY c.nome_completo`,
