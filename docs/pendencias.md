@@ -16,7 +16,7 @@
 | 5 | Lista de rubricas e layout dos importadores | Diego | 29/07/2026 | folha completa, importação |
 | 6 | Balde anônimo já gravado com corte errado | Guilherme | 01/08/2026 | nada hoje; conta na implantação |
 | 7 | Benefício na transferência entre CNPJs: o critério ainda barra · ✅ RESOLVIDA via #1 | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
-| 9 | Folha: quem conta como dependente para o IRRF | Guilherme | 10/08/2026 | base do IRRF retido |
+| 9 | Folha: quem conta como dependente para o IRRF · ✅ RESOLVIDA (0061) | Guilherme | 10/08/2026 | base do IRRF retido |
 | 10 | Contato do candidato: leitura entra na trilha? | Guilherme | 10/08/2026 | rastro LGPD de dado de terceiro |
 | 11 | Replay de TOTP: código válido reutilizável na janela | Guilherme | 10/08/2026 | endurecimento do 2FA |
 | 12 | Vínculo "temporário" não tem família de modelo de admissão | Guilherme | 10/08/2026 | checklist próprio de temporário |
@@ -341,7 +341,7 @@ fiz sozinho por exigir migration para um 500→400 cosmético.
 
 ---
 
-## 9 · Folha: quem conta como dependente para o IRRF?
+## 9 · Folha: quem conta como dependente para o IRRF? — RESOLVIDO (0061)
 
 **Onde está:** `src/dominios/folha/repositorio.ts:452` — a dedução de dependente do IRRF conta TODA
 linha de `rh.dependente` do colaborador, sem filtro de elegibilidade (qualquer parentesco — filho,
@@ -372,6 +372,15 @@ fiscal, por isso não decidi sozinho.
 
 **Eixo:** dinheiro / nada chumbado — contagem que muda o resultado afirmado (imposto retido) saindo de
 uma fonte que não é a regra fiscal.
+
+**RESOLVIDO (11/08/2026 — migration 0061; guarda 12/08/2026).** Fez-se exatamente o recomendado:
+`rh.dependente` ganhou `deduz_irrf BOOLEAN NOT NULL DEFAULT false`, com backfill pela regra de idade
+(cônjuge e filho < 21 → true; o resto, incl. `outro`, fica false para o DP conferir; os 24 anos do
+universitário são exceção que o DP marca à mão). A folha (`folha/repositorio.ts`) passou a contar
+**só `deduz_irrf = true`** na dedução do IRRF; o autoatendimento (0056) insere `false` (não reduz
+imposto sozinho); e o DP marca/desmarca em `/beneficios` (`adesao.gerir`), auditado ("Abate no IRRF").
+Guarda de regressão re-executável em `provas/folha/prova-dependente-irrf.js` (banco, sem servidor,
+exit 0/1) — prova o DEFAULT false, que nenhum `outro` abate, e que a folha deduz só os elegíveis.
 
 ---
 
