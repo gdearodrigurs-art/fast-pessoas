@@ -849,6 +849,14 @@ export async function ajustarMarcacao(
   // estrangeira de rh.marcacao estourava lá dentro e o DP recebia 500 ("erro
   // interno") por ter digitado um id errado, que é erro dele e não do servidor.
   await exigirColaboradorExistente(dados.colaborador_id);
+  // Escrever ponto de terceiro exige ALCANCE sobre a pessoa, igual à leitura
+  // (diaParaAjuste): a chave ponto.ajustar sozinha não basta. Sem isto, quem
+  // recebesse ponto.ajustar sem ponto.administrar corrigia ponto de qualquer um,
+  // enquanto a leitura do mesmo dia lhe daria 403 — filtro no servidor (eixo 7,
+  // revisão). O DP atual (ponto.administrar) segue passando por todos.
+  if (!(await ehVinculoProprio(sessao, dados.colaborador_id))) {
+    await exigirAlcanceSobre(sessao, dados.colaborador_id);
+  }
   return comTransacao(sessao.usuario_id, async (cliente) => {
     if (dados.substitui_marcacao_id) {
       // Trava a original ANTES de ler: serializa dois ajustes concorrentes sobre
@@ -1143,11 +1151,11 @@ export async function apurarCompetencia(
     primeiroDia,
     ultimoDia
   );
-  // Saldo de banco de horas de todos. Antes lia-se de dentro da transação de
-  // cada pessoa, mas SEMPRE pelo pool (nunca pelo cliente da transação), então
-  // ler tudo aqui devolve exatamente os mesmos números: o saldo de uma pessoa
-  // não depende do que foi gravado para outra.
-  const saldos = await repo.saldosBanco(idsAlvo);
+  // O saldo do banco (base do teto) é lido na FASE 3, DENTRO da transação e atrás
+  // da trava POR colaborador — não aqui, fora de trava. Ler no pool ~50 s antes de
+  // gravar deixava o teto ser conferido contra saldo obsoleto quando um lançamento
+  // manual concorrente commitava no meio (a trava da apuração e a do banco usam
+  // namespaces diferentes e não se serializam). (revisão)
 
   // ------------------------------------------------------------------
   // FASE 2 — CÁLCULO PURO: o motor roda para todo mundo SEM tocar no banco.
@@ -1410,6 +1418,18 @@ export async function apurarCompetencia(
       ano,
       mes
     );
+
+    // Trava o banco de cada pessoa (ordem de id, sem deadlock) e RELÊ o saldo
+    // dentro da transação: o teto é conferido contra o saldo corrente, não contra
+    // o da FASE 1. No caso comum (sem lançamento concorrente) o valor é idêntico,
+    // então a apuração normal não muda de resultado. (revisão)
+    for (const id of [...idsPreparados].sort((a, b) => a - b)) {
+      await repo.travarBancoDoColaborador(cliente, id);
+    }
+    const saldos = new Map<number, number>();
+    for (const id of idsPreparados) {
+      saldos.set(id, await repo.saldoBanco(id, cliente));
+    }
 
     const paraGravar: repo.DadosApuracao[] = [];
     for (const pessoa of preparadas) {
@@ -2639,6 +2659,11 @@ export async function lancarMovimentoBanco(
   // chegava até o INSERT e voltava 500 pela chave estrangeira — e um saldo de
   // banco de horas resolvido para pessoa nenhuma não é erro de servidor.
   await exigirColaboradorExistente(dados.colaborador_id);
+  // Mesma trava de alcance da marcação: lançar banco de terceiro exige alcance
+  // sobre a pessoa, não só a chave ponto.ajustar (eixo 7, revisão).
+  if (!(await ehVinculoProprio(sessao, dados.colaborador_id))) {
+    await exigirAlcanceSobre(sessao, dados.colaborador_id);
+  }
   const regra = await repo.resolverRegraBanco(dados.colaborador_id, dados.data);
   return comTransacao(sessao.usuario_id, async (cliente) => {
     // Trava por colaborador ANTES de somar o saldo: sem ela, dois lançamentos
@@ -2804,6 +2829,17 @@ async function levantarExpiracao(
 ): Promise<ExpiracaoPessoa[]> {
   const candidatos = await repo.colaboradoresComSaldoPositivo();
   if (candidatos.length === 0) return [];
+  // Sob transação (execução real da expiração), trava cada banco ANTES de ler o
+  // livro — em ordem de id para não haver deadlock. Duas execuções concorrentes
+  // serializam por colaborador, e a segunda relê o livro já com a expiração da
+  // primeira aplicada, não expirando em dobro. Na prévia da tela (cliente null)
+  // não há trava nem escrita, então não trava. (revisão)
+  if (cliente) {
+    const ids = candidatos.map((pessoa) => pessoa.id).sort((a, b) => a - b);
+    for (const id of ids) {
+      await repo.travarBancoDoColaborador(cliente, id);
+    }
+  }
   const livros = await repo.movimentosBancoEmOrdem(
     cliente,
     candidatos.map((pessoa) => pessoa.id)
@@ -2983,7 +3019,11 @@ export async function liquidarBancoNaRescisao(
   colaboradorId: number,
   dataTermino: string
 ): Promise<AcertoBancoRescisao> {
-  const saldo = await repo.saldoBanco(colaboradorId);
+  // Trava o banco ANTES de ler o saldo (como lancarMovimentoBanco): senão a
+  // liquidação lia o saldo fora da transação e uma expiração/lançamento
+  // concorrente furava o acerto. saldoBanco com cliente lê atrás da trava. (revisão)
+  await repo.travarBancoDoColaborador(cliente, colaboradorId);
+  const saldo = await repo.saldoBanco(colaboradorId, cliente);
   const regra = await repo.resolverRegraBanco(colaboradorId, dataTermino);
   if (!regra) {
     return {
