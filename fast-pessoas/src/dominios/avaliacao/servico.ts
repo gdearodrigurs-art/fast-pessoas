@@ -1006,11 +1006,25 @@ export async function selecionarPares(
 ): Promise<void> {
   await comTransacao(sessao.usuario_id, async (cliente) => {
     const ciclo = await exigirGestaoDePares(cliente, sessao, cicloId);
+    // Só COLEGA DE EQUIPE do avaliado pode ser par — a lista de candidatos é filtro
+    // de SERVIDOR (eixo 7), não enfeite de tela. Sem isto dava para inserir um
+    // colaborador qualquer como par, que passava a ver o nome do avaliado e poluía
+    // o agregado 360. (revisão)
+    const candidatos = new Set(
+      (await listarCandidatosPares(cicloId)).map((c) => c.colaborador_id)
+    );
     for (const parId of colaboradorIds) {
       if (parId === ciclo.colaborador_id || parId === ciclo.avaliador_colaborador_id) {
         throw new ErroHttpCampo(
           400,
           "Um par não pode ser o próprio avaliado nem o líder do ciclo.",
+          "pares"
+        );
+      }
+      if (!candidatos.has(parId)) {
+        throw new ErroHttpCampo(
+          400,
+          "Só colegas de equipe do avaliado podem ser pares.",
           "pares"
         );
       }
@@ -1210,7 +1224,13 @@ export async function agregarPares(cicloId: number): Promise<AgregadoPares> {
   if (n_pares < piso) {
     return { revelavel: false, n_pares, piso, por_indicador: [] };
   }
-  const por_indicador = await agregarParesDoCiclo(cicloId);
+  // PISO TAMBÉM POR INDICADOR: o par pode marcar "não observado" (sem nota), então
+  // um indicador pode ter menos respostas REAIS que o piso mesmo com n_pares >= piso
+  // — e a média de uma única nota revela aquele par. Derruba do agregado todo
+  // indicador com menos de `piso` respostas. (revisão)
+  const por_indicador = (await agregarParesDoCiclo(cicloId)).filter(
+    (indicador) => indicador.respostas >= piso
+  );
   return { revelavel: true, n_pares, piso, por_indicador };
 }
 
