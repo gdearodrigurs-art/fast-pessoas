@@ -453,7 +453,12 @@ export async function listarColaboradoresParaCalculo(
             -- deduz_irrf é ato do DP (conferência); o autoatendimento nasce false.
             (SELECT COUNT(*) FROM rh.dependente d
               WHERE d.colaborador_id = c.id
-                AND d.deduz_irrf = true) AS dependentes,
+                AND d.deduz_irrf = true
+                -- ...e conta por NASCIMENTO na data da competência, não por data
+                -- de cadastro: filho que nasce DEPOIS da competência não entra no
+                -- recálculo dela. Elegibilidade (deduz_irrf) e vigência (nascimento)
+                -- são ORTOGONAIS — o #9 trocou uma pela outra; aqui somam. (rev.)
+                AND (d.nascimento IS NULL OR d.nascimento <= $1)) AS dependentes,
             j.carga_semanal_minutos
        FROM rh.colaborador c
        JOIN LATERAL (
