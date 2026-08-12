@@ -121,6 +121,27 @@ interface Folha {
   itens: ItemFolha[];
 }
 
+interface TotalRubrica {
+  rubrica_id: number;
+  codigo: string;
+  nome: string;
+  natureza: NaturezaRubrica;
+  pessoas: number;
+  total_centavos: number;
+}
+
+interface TotalCentro {
+  empresa_id: number | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
+  empresa_nome: string | null;
+  pessoas: number;
+  proventos_centavos: number;
+  descontos_centavos: number;
+  liquido_centavos: number;
+}
+
 interface Visao {
   pode: {
     ver: boolean;
@@ -139,6 +160,9 @@ interface Visao {
   folhas: Folha[];
   /** Quantas a competência tem no total — o "de N" ao lado da contagem. */
   folhas_na_competencia: number;
+  /** Os outros dois cortes da conferência, sob o mesmo recorte que `folhas`. */
+  por_rubrica: TotalRubrica[];
+  por_centro_custo: TotalCentro[];
   /** Da competência inteira, não do recorte: filtrar não apaga os seletores. */
   opcoes_estrutura: OpcoesFiltroEstrutura;
   /** Do RECORTE: soma exatamente as linhas de `folhas`. */
@@ -384,6 +408,8 @@ export function PainelCompetencia({ id }: { id: number }) {
   // saíssem do resultado filtrado, escolher um centro de custo apagaria os
   // outros da lista e não haveria como voltar.
   const folhasDoRecorte = visao?.folhas ?? [];
+  const porRubrica = visao?.por_rubrica ?? [];
+  const porCentro = visao?.por_centro_custo ?? [];
   const opcoesEstrutura = visao?.opcoes_estrutura ?? null;
   const folhasNaCompetencia = visao?.folhas_na_competencia ?? 0;
   const recorteAtivo = filtroEstruturaAtivo(estrutura);
@@ -919,6 +945,97 @@ export function PainelCompetencia({ id }: { id: number }) {
                     <span>Líquido total{recorteAtivo ? " (recorte)" : ""}</span>
                   </div>
                 </div>
+                {/* As outras duas leituras da MESMA competência recortada: por
+                    rubrica (o corte que o contador confere) e por centro de
+                    custo (o rateio). Recolhidas — a lista por pessoa é a
+                    principal; estas se abrem só para bater a soma. Somam sobre o
+                    mesmo recorte que a lista abaixo (mesmo filtro no servidor). */}
+                {porRubrica.length > 0 && (
+                  <details className={estilos.memoria}>
+                    <summary>
+                      Conferência por rubrica ({porRubrica.length})
+                    </summary>
+                    <div className={estilos.tabelaEnvolucro}>
+                      <table className={estilos.tabela}>
+                        <thead>
+                          <tr>
+                            <th>Código</th>
+                            <th>Rubrica</th>
+                            <th>Natureza</th>
+                            <th className={estilos.numero}>Pessoas</th>
+                            <th className={estilos.numero}>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {porRubrica.map((r) => (
+                            <tr key={r.rubrica_id}>
+                              <td>{r.codigo}</td>
+                              <td>{r.nome}</td>
+                              <td>
+                                <span
+                                  className={classeEtiquetaNatureza(r.natureza)}
+                                >
+                                  {ROTULOS_NATUREZA[r.natureza]}
+                                </span>
+                              </td>
+                              <td className={estilos.numero}>{r.pessoas}</td>
+                              <td className={estilos.numero}>
+                                {formatarMoedaCentavos(r.total_centavos)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+                {porCentro.length > 0 && (
+                  <details className={estilos.memoria}>
+                    <summary>
+                      Conferência por centro de custo ({porCentro.length})
+                    </summary>
+                    <div className={estilos.tabelaEnvolucro}>
+                      <table className={estilos.tabela}>
+                        <thead>
+                          <tr>
+                            <th>Empresa</th>
+                            <th>Centro de custo</th>
+                            <th className={estilos.numero}>Pessoas</th>
+                            <th className={estilos.numero}>Proventos</th>
+                            <th className={estilos.numero}>Descontos</th>
+                            <th className={estilos.numero}>Líquido</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {porCentro.map((cc, indice) => (
+                            <tr
+                              key={`${cc.empresa_id ?? "s"}-${
+                                cc.centro_custo_id ?? `sem-${indice}`
+                              }`}
+                            >
+                              <td>{cc.empresa_nome ?? "—"}</td>
+                              <td>
+                                {cc.centro_custo_codigo
+                                  ? `${cc.centro_custo_codigo} · ${cc.centro_custo_nome ?? ""}`
+                                  : "Sem centro de custo"}
+                              </td>
+                              <td className={estilos.numero}>{cc.pessoas}</td>
+                              <td className={estilos.numero}>
+                                {formatarMoedaCentavos(cc.proventos_centavos)}
+                              </td>
+                              <td className={estilos.numero}>
+                                {formatarMoedaCentavos(cc.descontos_centavos)}
+                              </td>
+                              <td className={estilos.numero}>
+                                {formatarMoedaCentavos(cc.liquido_centavos)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
                 <div className={estilos.tabelaEnvolucro}>
                   <table className={estilos.tabela}>
                     <thead>

@@ -1757,6 +1757,128 @@ export async function listarFolhasDaCompetencia(
   }));
 }
 
+// ------------------------------------------------------------------ conferência: as outras duas visões
+
+export interface TotalPorRubrica {
+  rubrica_id: number;
+  codigo: string;
+  nome: string;
+  natureza: NaturezaRubrica;
+  /** Quantas pessoas têm essa rubrica no recorte. */
+  pessoas: number;
+  total_centavos: number;
+}
+
+/**
+ * A folha SOMADA por rubrica (o corte do contador): quanto de salário, de INSS,
+ * de VT no total da competência. Mesma tabela de itens da visão por pessoa,
+ * agregada; sob o MESMO recorte, para o total bater com a lista filtrada.
+ */
+export async function totaisPorRubrica(
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
+): Promise<TotalPorRubrica[]> {
+  const parametros: unknown[] = [competenciaId];
+  const recorte = existeApropriacao(filtro, parametros, "f");
+  const linhas = await consultar<{
+    rubrica_id: string;
+    codigo: string;
+    nome: string;
+    natureza: NaturezaRubrica;
+    pessoas: number;
+    total: string;
+  }>(
+    `SELECT r.id AS rubrica_id, r.codigo, r.nome, r.natureza,
+            count(DISTINCT i.folha_colaborador_id)::int AS pessoas,
+            sum(i.valor)::text AS total
+       FROM rh_folha.item_calculo i
+       JOIN rh_folha.folha_colaborador f ON f.id = i.folha_colaborador_id
+       JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
+       JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id
+      WHERE f.competencia_id = $1${recorte}
+      GROUP BY r.id, r.codigo, r.nome, r.natureza
+      ORDER BY r.natureza, r.codigo`,
+    parametros
+  );
+  return linhas.map((linha) => ({
+    rubrica_id: Number(linha.rubrica_id),
+    codigo: linha.codigo,
+    nome: linha.nome,
+    natureza: linha.natureza,
+    pessoas: Number(linha.pessoas),
+    total_centavos: paraCentavos(linha.total),
+  }));
+}
+
+export interface TotalPorCentroCusto {
+  empresa_id: number | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
+  empresa_nome: string | null;
+  pessoas: number;
+  proventos_centavos: number;
+  descontos_centavos: number;
+  liquido_centavos: number;
+}
+
+/**
+ * A folha SOMADA por centro de custo (o rateio contábil): quanto cada CC carrega
+ * de proventos, descontos e líquido. Apropriação CONGELADA na data da competência
+ * (0047) — trocar o CC de alguém hoje não move o custo do mês passado. Linhas sem
+ * apropriação caem num balde de CC nulo (visível, não some). Mesmo recorte.
+ */
+export async function totaisPorCentroCusto(
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
+): Promise<TotalPorCentroCusto[]> {
+  const parametros: unknown[] = [competenciaId];
+  const recorte = condicaoApropriacao(filtro, parametros, "ap");
+  const linhas = await consultar<{
+    empresa_id: string | null;
+    centro_custo_id: string | null;
+    centro_custo_codigo: string | null;
+    centro_custo_nome: string | null;
+    empresa_nome: string | null;
+    pessoas: number;
+    proventos: string;
+    descontos: string;
+    liquido: string;
+  }>(
+    // Agrupa pela IDENTIDADE (empresa_id, centro_custo_id) — eixo 2, nunca por
+    // nome. O mesmo centro pode receber custo de empresas distintas (rateio
+    // intercompany): cada par (empresa, centro) vira uma linha. Código e nome
+    // são rótulos do grupo (max sobre um valor estável por id).
+    `SELECT ap.empresa_id, ap.centro_custo_id,
+            max(ap.centro_custo_codigo) AS centro_custo_codigo,
+            max(ap.centro_custo_nome)   AS centro_custo_nome,
+            max(ap.empresa_nome)        AS empresa_nome,
+            count(*)::int AS pessoas,
+            sum(f.total_proventos)::text AS proventos,
+            sum(f.total_descontos)::text AS descontos,
+            sum(f.liquido)::text AS liquido
+       FROM rh_folha.folha_colaborador f
+       LEFT JOIN rh_folha.apropriacao_competencia ap
+              ON ap.folha_colaborador_id = f.id
+      WHERE f.competencia_id = $1${recorte}
+      GROUP BY ap.empresa_id, ap.centro_custo_id
+      ORDER BY max(ap.empresa_nome) NULLS LAST, max(ap.centro_custo_codigo) NULLS LAST`,
+    parametros
+  );
+  return linhas.map((linha) => ({
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
+    centro_custo_id:
+      linha.centro_custo_id === null ? null : Number(linha.centro_custo_id),
+    centro_custo_codigo: linha.centro_custo_codigo,
+    centro_custo_nome: linha.centro_custo_nome,
+    empresa_nome: linha.empresa_nome,
+    pessoas: Number(linha.pessoas),
+    proventos_centavos: paraCentavos(linha.proventos),
+    descontos_centavos: paraCentavos(linha.descontos),
+    liquido_centavos: paraCentavos(linha.liquido),
+  }));
+}
+
 /**
  * O que oferecer nos três seletores e quantas linhas a competência tem no
  * total. Sai SEMPRE da competência inteira, sem recorte: se as opções viessem

@@ -114,6 +114,10 @@ import {
   situacaoConferenciaTabelas,
   tabelasVigentes,
   TabelasVigentesMotor,
+  totaisPorCentroCusto,
+  totaisPorRubrica,
+  TotalPorCentroCusto,
+  TotalPorRubrica,
   VariavelResumo,
   VersaoParametros,
   VersaoTabelaInss,
@@ -280,6 +284,12 @@ export interface VisaoCompetencia {
   folhas: FolhaComItens[];
   /** Quantas linhas a competência tem SEM recorte — o "de N" do cabeçalho. */
   folhas_na_competencia: number;
+  /**
+   * Os outros dois cortes da conferência, sob o MESMO recorte que `folhas`:
+   * a folha somada por rubrica (provento/desconto) e por centro de custo.
+   */
+  por_rubrica: TotalPorRubrica[];
+  por_centro_custo: TotalPorCentroCusto[];
   /** Sempre da competência inteira: filtrar não pode apagar os seletores. */
   opcoes_estrutura: OpcoesFiltroEstrutura;
   /** Os totais são DO RECORTE — soma exatamente as linhas devolvidas acima. */
@@ -346,6 +356,8 @@ export async function montarVisaoCompetencia(
     folhas,
     itens,
     estrutura,
+    porRubrica,
+    porCentro,
   ] = await Promise.all([
     permissoesFolha(sessao.usuario_id),
     listarImpedidos(dataRef),
@@ -357,6 +369,8 @@ export async function montarVisaoCompetencia(
     listarFolhasDaCompetencia(competenciaId, filtro),
     listarItensDaCompetencia(competenciaId, filtro),
     resumoEstruturaDaCompetencia(competenciaId),
+    totaisPorRubrica(competenciaId, filtro),
+    totaisPorCentroCusto(competenciaId, filtro),
   ]);
 
   if (folhas.length > 0 || variaveis.length > 0) {
@@ -411,6 +425,8 @@ export async function montarVisaoCompetencia(
       itens: itensPorFolha.get(folha.id) ?? [],
     })),
     folhas_na_competencia: estrutura.total_folhas,
+    por_rubrica: porRubrica,
+    por_centro_custo: porCentro,
     opcoes_estrutura: estrutura.opcoes,
     totais,
   };
