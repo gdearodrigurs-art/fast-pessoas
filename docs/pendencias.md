@@ -13,7 +13,7 @@
 | 2 | Saldo de banco de horas na transferência · ✅ RESOLVIDA via #1 | Guilherme | 31/07/2026 | fechamento contábil entre CNPJs |
 | 3 | Limite concessivo de férias: 11 ou 12 meses · ✅ RESOLVIDA | Guilherme | 30/07/2026 | alerta de "dobro" na tela do titular |
 | 4 | Folha: 5º dia corrido ou útil | Guilherme | 30/07/2026 | indicador de prazo de fechamento |
-| 5 | Lista de rubricas e layout dos importadores | Diego | 29/07/2026 | folha completa, importação |
+| 5 | Lista de rubricas e layout dos importadores · ⏳ PARCIAL (0069: catálogo seguro; falta importadores + decisões) | Diego | 29/07/2026 | folha completa, importação |
 | 6 | Balde anônimo já gravado com corte errado | Guilherme | 01/08/2026 | nada hoje; conta na implantação |
 | 7 | Benefício na transferência entre CNPJs: o critério ainda barra · ✅ RESOLVIDA via #1 | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
 | 9 | Folha: quem conta como dependente para o IRRF · ✅ RESOLVIDA (0061) | Guilherme | 10/08/2026 | base do IRRF retido |
@@ -199,6 +199,28 @@ não precisou de contador.
 
 Pendente desde 29/07. Sem ela a folha não fecha o ciclo real e os importadores não têm contra o que ser
 escritos. As seis rubricas nomeadas pela diretoria já estão no sistema; falta o resto do plano.
+
+**PARCIALMENTE RESOLVIDA (12/08/2026).** O Diego devolveu o plano de rubricas
+(`Cópia de rubricas-e-importadores-para-o-diego preencv2.xlsx`) — ~51 rubricas com natureza,
+incidências e tipo de cálculo. A leitura fiel, item a item, está em
+[docs/18-plano-de-rubricas-diego.md](18-plano-de-rubricas-diego.md).
+
+- **Entrou** (migration 0069): o catálogo SEGURO — 9 rubricas novas de `valor_informado`, sem
+  decisão pendente (Triênio + descontos: consignado, refeição, VT não usado, planos Assim/Amil, dano).
+- **Continua aberto, com o Diego/DP:** (a) decisão de código — as duplicatas onde ele usou o código
+  real da folha da Fast e o sistema tem placeholder (Salário Base, HE, DSR, Salário Família, INSS);
+  (b) incidência a validar — 0136/0137 Férias (gozadas × indenizadas), 0087 Salário Maternidade;
+  (c) percentuais faltando — ZE24FO Periculosidade, 5000FO VT 1%; (d) o motor de rescisão/férias/13º
+  (as ~30 "Automático" — épico à parte); e **(e) a aba Importadores, que ele deixou só no exemplo** —
+  sem ela os leitores de arquivo não têm o que ler. Folha de confirmação para devolver a ele:
+  `docs/confirmacao-rubricas-diego.xlsx`.
+
+**ATUALIZAÇÃO 12/08/2026 (rodada 2 — Diego devolveu a confirmação).** Migration 0070 entrou com mais
+3 rubricas inequívocas (Aluguel Moto, Periculosidade 30%, VT 1%). **Decisão do dono:** adotar os
+códigos reais no lugar dos placeholders — mas a execução vai **junto dos importadores** (4 das 7 são
+códigos do motor; trocar edita o cálculo e exige re-verificação). **Importadores: o dono pediu para
+deixar como pendência**, não construir agora — é o que ainda trava a folha real. Detalhe em
+[docs/18](18-plano-de-rubricas-diego.md) §2a e §5.
 
 ---
 
