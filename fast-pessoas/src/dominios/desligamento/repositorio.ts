@@ -350,7 +350,12 @@ export async function inserirProcesso(
     aberto_por_usuario_id: number;
   }
 ): Promise<{ id: number; data_limite_477: string }> {
-  // Art. 477 §6º: 10 dias corridos a partir do término (projetado na abertura).
+  // Art. 477 §6º da CLT: o acerto é pago em até 10 dias CORRIDOS do término
+  // (projetado na abertura). Constante LEGAL — NÃO é parâmetro de negócio
+  // administrável (como as faixas de férias da pendência #3); fica explícita e
+  // citada aqui, não mágica dentro do SQL. Se a régua mudar (lei, ou passar a dias
+  // úteis), vira função versionada como o 5º dia útil da folha (0064). (revisão)
+  const DIAS_LIMITE_PAGAMENTO_477 = 10;
   const { rows } = await cliente.query<{
     id: string;
     data_limite_477: string;
@@ -359,7 +364,7 @@ export async function inserirProcesso(
        (colaborador_id, tipo_desligamento_versao_id, iniciativa,
         data_comunicacao, modalidade_aviso, data_projetada_termino,
         data_limite_477, motivo, aberto_por_usuario_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $6::date + 10, $7, $8)
+     VALUES ($1, $2, $3, $4, $5, $6, $6::date + $9::int, $7, $8)
      RETURNING id, data_limite_477::text AS data_limite_477`,
     [
       dados.colaborador_id,
@@ -370,6 +375,7 @@ export async function inserirProcesso(
       dados.data_projetada_termino,
       dados.motivo,
       dados.aberto_por_usuario_id,
+      DIAS_LIMITE_PAGAMENTO_477,
     ]
   );
   return {
