@@ -349,10 +349,22 @@ eSocial/IRRF pede) volta para o DP. **DECISÃO:** expor o CPF do dependente
 (possível menor) no autoatendimento é escolha de PRIVACIDADE/LGPD, não bug —
 por isso não fiz sozinho. Antes era o DP quem digitava; agora seria a pessoa.
 
+**DECISÃO DO DONO (12/08/2026): fica com o DP.** O CPF do dependente (dado de possível menor)
+NÃO vai para o autoatendimento — o colaborador cadastra o dependente e o DP completa o CPF na
+conferência do IRRF. Registrado como escolha de privacidade, não omissão. **RESOLVIDO.**
+
 **8b — data de nascimento de dependente não tem teto (não-futuro).** Baixo
 impacto (data futura só não conta no IRRF), e hoje é *consistente* com o caminho
 do DP, que também não trava. Consertar só o portal criaria inconsistência entre
 os dois. Guardar nos dois (ou em nenhum) é decisão de escopo.
+
+**RESOLVIDO (12/08/2026, migration 0071) — guardar nos DOIS.** Um trinco no banco
+(`rh.exigir_dependente_nascimento_nao_futuro`, `BEFORE INSERT OR UPDATE ON rh.dependente`)
+recusa `nascimento > rh.hoje()` — cobre o DP e o autoatendimento num lugar só (os dois caminhos
+usam esquemas diferentes, mas o mesmo `INSERT`). Em UPDATE só checa se a data mudou (editar outro
+campo de cadastro antigo não trava). SQLSTATE `45002` → 400 amigável via `responderErro`.
+**Provado ponta a ponta:** POST com data futura devolve `400 "data de nascimento não pode ser no
+futuro"` e não cria linha; 0 dependentes futuros na base.
 
 **8c — TOCTOU na categoria de devolução:** se a categoria for inativada entre a
 checagem `ativa` e o INSERT, o `RAISE EXCEPTION` cru do trigger vira 500 em vez
@@ -360,6 +372,12 @@ do 4xx amigável que já existe algumas linhas acima. **Fails-safe** (nenhuma
 linha ruim entra), então é UX/observabilidade, não perda de dado. Conserto:
 dar um SQLSTATE-sentinela ao trigger (migration nova) e mapear no serviço. Não
 fiz sozinho por exigir migration para um 500→400 cosmético.
+
+**RESOLVIDO (12/08/2026, migration 0071) — exatamente o recomendado.** O trigger da 0054 ganhou
+`USING ERRCODE = '45001'` (via `CREATE OR REPLACE`, a 0054 é imutável). O mapeamento não foi no
+serviço e sim UMA vez em `src/lib/http.ts` (`mensagemDoTrinco` + branch no `responderErro`): a
+classe `45` de SQLSTATE ficou reservada para "trinco de negócio → 400 com a mensagem", então toda
+rota herda, sem tocar em cada serviço. Mesmo mecanismo central provado pelo 8b.
 
 ---
 
