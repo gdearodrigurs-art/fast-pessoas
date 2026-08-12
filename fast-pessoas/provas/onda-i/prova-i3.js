@@ -1,17 +1,29 @@
 // Prova ponta a ponta da I3 — transferência entre empresas do grupo.
-// Roda contra o dev server que já está no ar em http://localhost:3001.
+// Roda contra o dev server no ar (porta 3001) com o semeador já executado:
+//   node --env-file=.env.local-db provas/onda-i/prova-i3.js
+// Sai com código 0 se PASSOU, 1 se qualquer checagem falhou (portão de máquina).
 const { execFileSync } = require('child_process');
+const path = require('path');
 const { Pool } = require('pg');
 
-const BASE = 'http://localhost:3001';
+const BASE = process.env.PROVA_BASE || 'http://localhost:3001';
 const SENHA = 'FastDemo2026!';
+// Raiz do app derivada do próprio arquivo — sem caminho chumbado, roda em qualquer máquina.
+const RAIZ = path.join(__dirname, '..', '..');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Veredito de máquina: cada checagem soma em `falhas`; no fim, exit 1 se houver.
+let falhas = 0;
+function checar(ok, msg) {
+  console.log((ok ? '  ✅ ' : '  ❌ ') + msg);
+  if (!ok) falhas += 1;
+}
 
 function totp(email) {
   return execFileSync(
     process.execPath,
-    ['--env-file=.env', 'db/codigo-2fa.js', email],
-    { cwd: 'C:/sistema RH/fast-pessoas', encoding: 'utf8' }
+    ['--env-file=.env.local-db', 'db/codigo-2fa.js', email],
+    { cwd: RAIZ, encoding: 'utf8' }
   ).trim().match(/\d{6}/)[0];
 }
 
@@ -49,7 +61,18 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
 
 (async () => {
   const alvoNome = process.argv[2] ?? null;
-  let destinoFix;
+
+  // Preflight: sem banco ou sem servidor, falha com mensagem clara em vez de stack.
+  if (!process.env.DATABASE_URL) {
+    console.error('DATABASE_URL ausente. Rode: node --env-file=.env.local-db provas/onda-i/prova-i3.js');
+    process.exit(1);
+  }
+  try {
+    await fetch(BASE);
+  } catch {
+    console.error(`Servidor não respondeu em ${BASE}. Suba o dev (porta 3001) e rode o semeador (db:demo) antes.`);
+    process.exit(1);
+  }
 
   titulo('0. ESTADO ANTES');
   console.table(await sql(
@@ -79,13 +102,19 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
         AND EXISTS (SELECT 1 FROM rh.dependente d WHERE d.colaborador_id = c.id)
         AND EXISTS (SELECT 1 FROM rh.relacao_gestor rg
                      WHERE rg.liderado_colaborador_id = c.id AND rg.fim_vigencia IS NULL)
+        -- Sem estabilidade acidentária (art. 118): a rescisão barra quem a tem,
+        -- então um alvo com ela derrubaria a prova. Mesma régua do serviço.
+        AND NOT EXISTS (SELECT 1 FROM rh.afastamento a
+                         WHERE a.colaborador_id = c.id AND a.tipo = 'acidente_trabalho'
+                           AND (a.fim IS NULL
+                                OR a.fim >= (now() AT TIME ZONE 'America/Sao_Paulo')::date
+                                            - INTERVAL '12 months'))
       ORDER BY (SELECT count(*) FROM rh.evento_colaborador e WHERE e.colaborador_id = c.id) DESC,
                c.id
       LIMIT 1`, [alvoNome]);
   if (!alvo) throw new Error('nenhum alvo com dependente e gestor vigente');
   alvo.id = Number(alvo.id); alvo.pessoa_id = Number(alvo.pessoa_id);
   alvo.empresa_id = Number(alvo.empresa_id); alvo.usuario_id = Number(alvo.usuario_id);
-  destinoFix = null;
   console.log('\nALVO ESCOLHIDO:');
   console.table([alvo]);
 
@@ -101,8 +130,11 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
     [destino.id]);
   destino.id = Number(destino.id); local.id = Number(local.id); centro.id = Number(centro.id);
   const matriculaNova = 'T3-' + String(Date.now()).slice(-6);
+  // Data pretendida = HOJE: desde a onda A4 o efeito espera a data pretendida, e
+  // aplica na própria aprovação quando a data já chegou (<= hoje). Com amanhã, a
+  // movimentação ficaria só programada e o vínculo novo não nasceria nesta prova.
   const [{ hoje }] = await sql(
-    `SELECT ((now() AT TIME ZONE 'America/Sao_Paulo')::date + 1)::text hoje`);
+    `SELECT ((now() AT TIME ZONE 'America/Sao_Paulo')::date)::text hoje`);
 
   console.log(`\nDESTINO: ${destino.nome_fantasia} · ${local.unidade} · ${centro.codigo}`);
   console.log(`MATRÍCULA NOVA: ${matriculaNova} · VIGÊNCIA: ${hoje}`);
@@ -117,10 +149,11 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
     tipo: 'transferencia_empresa', colaborador_id: alvo.id,
     empresa_destino_id: destino.id, estabelecimento_destino_id: local.id,
     centro_custo_destino_id: centro.id, matricula_destino: matriculaNova,
-    data_pretendida: hoje, justificativa: 'tentativa do gestor',
+    modo_transferencia: 'rescisao', data_pretendida: hoje, justificativa: 'tentativa do gestor',
   });
   console.log('gestor POST transferencia_empresa →', tentativaGestor.status,
     JSON.stringify(tentativaGestor.dados));
+  checar(tentativaGestor.status >= 400, 'gestor NÃO abre transferência entre empresas');
 
   // ---------------------------------------------------------------- abre o pedido
   titulo('2. DP ABRE O PEDIDO');
@@ -134,34 +167,37 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
     tipo: 'transferencia_empresa', colaborador_id: alvo.id,
     empresa_destino_id: alvo.empresa_id, estabelecimento_destino_id: local.id,
     centro_custo_destino_id: centro.id, matricula_destino: matriculaNova,
-    data_pretendida: hoje, justificativa: 'mesma empresa',
+    modo_transferencia: 'rescisao', data_pretendida: hoje, justificativa: 'mesma empresa',
   });
   console.log('destino = empresa atual →', mesma.status, JSON.stringify(mesma.dados));
+  checar(mesma.status >= 400, 'destino = empresa atual é rejeitado');
 
   // negativo: matrícula já usada
   const repetida = await api(dp, 'POST', '/api/demandas/movimentacao', {
     tipo: 'transferencia_empresa', colaborador_id: alvo.id,
     empresa_destino_id: destino.id, estabelecimento_destino_id: local.id,
     centro_custo_destino_id: centro.id, matricula_destino: alvo.matricula,
-    data_pretendida: hoje, justificativa: 'matrícula repetida',
+    modo_transferencia: 'rescisao', data_pretendida: hoje, justificativa: 'matrícula repetida',
   });
   console.log('matrícula já em uso →', repetida.status, JSON.stringify(repetida.dados));
+  checar(repetida.status >= 400, 'matrícula já em uso é rejeitada');
 
   // negativo: com salário
   const comSalario = await api(dp, 'POST', '/api/demandas/movimentacao', {
     tipo: 'transferencia_empresa', colaborador_id: alvo.id,
     empresa_destino_id: destino.id, estabelecimento_destino_id: local.id,
     centro_custo_destino_id: centro.id, matricula_destino: matriculaNova,
-    salario_proposto: 9999, data_pretendida: hoje, justificativa: 'com aumento',
+    modo_transferencia: 'rescisao', salario_proposto: 9999, data_pretendida: hoje, justificativa: 'com aumento',
   });
   console.log('com salário proposto →', comSalario.status, JSON.stringify(comSalario.dados));
+  checar(comSalario.status >= 400, 'salário proposto na transferência é rejeitado');
 
   // o pedido de verdade
   const criado = await api(dp, 'POST', '/api/demandas/movimentacao', {
     tipo: 'transferencia_empresa', colaborador_id: alvo.id,
     empresa_destino_id: destino.id, estabelecimento_destino_id: local.id,
     centro_custo_destino_id: centro.id, matricula_destino: matriculaNova,
-    data_pretendida: hoje,
+    modo_transferencia: 'rescisao', data_pretendida: hoje,
     justificativa: 'Reestruturação do grupo: a operação em que ele atua passou para a outra empresa.',
   });
   console.log('\nPOST /api/demandas/movimentacao →', criado.status);
@@ -239,6 +275,22 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
       GROUP BY 1 ORDER BY 1`, [alvo.pessoa_id]));
 
   const novoId = cartao.movimentacao.vinculo_destino_id;
+  checar(novoId != null, 'a movimentação APLICOU na aprovação e criou o vínculo novo');
+
+  // Invariantes DUROS da transferência (viram veredito de máquina).
+  const [inv] = novoId != null ? await sql(
+    `SELECT n.sucede_vinculo_id::int sucede, n.pessoa_id::int novo_pessoa,
+            n.usuario_id::int novo_usuario, v.pessoa_id::int velho_pessoa,
+            v.usuario_id::int velho_usuario, v.status velho_status
+       FROM rh.colaborador n, rh.colaborador v
+      WHERE n.id = $1 AND v.id = $2`, [novoId, alvo.id]) : [undefined];
+  checar(inv?.sucede === alvo.id, 'o vínculo NOVO sucede o antigo (sucede_vinculo_id)');
+  checar(inv?.novo_pessoa === alvo.pessoa_id && inv?.velho_pessoa === alvo.pessoa_id,
+    'MESMA pessoa nos dois vínculos');
+  checar(inv?.novo_usuario === alvo.usuario_id && inv?.velho_usuario === alvo.usuario_id,
+    'MESMO usuário (login) nos dois vínculos');
+  checar(inv?.velho_status === 'desligado', 'o vínculo ANTIGO ficou desligado');
+
   console.log('\n-- posição e alocação: a velha fechou na véspera, a nova abriu');
   console.table(await sql(
     `SELECT c.matricula, 'posicao' o, p.inicio_vigencia::text ini, p.fim_vigencia::text fim,
@@ -327,11 +379,14 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
   ]) {
     const r = await api(dp, 'GET', caminho);
     console.log(`${rotulo} → ${r.status}`);
+    checar(r.status === 200, `tela ${rotulo} responde 200`);
     if (caminho.startsWith('/api/colaboradores/')) {
-      const f = r.dados;
+      // A ficha veio a ser aninhada em { colaborador: {...} } — desembrulha.
+      const f = r.dados.colaborador ?? r.dados;
       console.log(`   ${f.nome_completo} · matrícula ${f.matricula} · ${f.status}` +
         ` · REGISTRO ${f.empresa_nome} · LOTAÇÃO ${f.unidade} · CC ${f.centro_custo}` +
         ` · vínculos na ficha: ${f.vinculos?.length}`);
+      checar((f.vinculos?.length ?? 0) >= 2, `ficha (${rotulo}) mostra os dois vínculos`);
     }
     if (caminho === '/api/colaboradores') {
       const linhas = (r.dados.colaboradores ?? r.dados).filter?.(
@@ -356,5 +411,10 @@ async function sql(q, p = []) { return (await pool.query(q, p)).rows; }
             (SELECT count(*) FROM rh.colaborador WHERE sucede_vinculo_id IS NOT NULL) sucessoes`));
 
   console.log(`\nIDS PARA LIMPEZA: demanda=${demandaId} vinculo_novo=${novoId} vinculo_antigo=${alvo.id} pessoa=${alvo.pessoa_id}`);
+  console.log('\n' + '='.repeat(70));
+  console.log(falhas === 0
+    ? '✅ PROVA DA ONDA I (transferência entre empresas) PASSOU'
+    : `❌ PROVA FALHOU — ${falhas} checagem(ns) não passaram`);
   await pool.end();
+  process.exit(falhas === 0 ? 0 : 1);
 })().catch(async (e) => { console.error('FALHOU:', e); await pool.end(); process.exit(1); });

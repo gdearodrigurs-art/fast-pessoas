@@ -404,6 +404,27 @@ Leste) pedida pelo próprio colaborador por mudança de residência, aprovada co
 comentário da diretoria: *"Reposição da Leste resolvida sem abrir vaga e sem
 custo de recrutamento."*
 
+#### O caso que motivou a onda: **transferência entre empresas do grupo**
+
+**Persona `dp@`** · **Tela:** `/colaboradores` → ficha da **conferente da Filial
+Sul** transferida da **Casa do Montador para a Supply** (reorganização
+societária: a Supply passou a ser a empregadora do quadro de conferência das
+lojas; ela permaneceu na mesma unidade, no mesmo cargo, com o mesmo líder — mudou
+o CNPJ do registro). A ficha mostra **os dois vínculos da mesma pessoa** — o da
+Casa do Montador *desligado* e o da Supply *ativo* — e a **linha do tempo
+contínua**, que atravessa os dois.
+
+> "Este é o caso que o senhor descreveu na reunião: *'ele demite e recontrata na
+> outra empresa, mas não queria perder os dados e o histórico'*. Antes, eram dois
+> atos soltos — o histórico se perdia e o turnover contava uma demissão e uma
+> admissão que não aconteceram. Agora é **um ato só**: a pessoa é a mesma (mesmo
+> CPF, mesmo login, mesmo 2FA), e a ficha guarda os dois vínculos. Este caso
+> **encerrou** o contrato numa empresa e reabriu na outra (rescisão). O sistema
+> também faz **continuidade** — quando é matriz↔filial da mesma raiz de CNPJ, o
+> contrato *segue* no mesmo vínculo, sem baixa e sem zerar férias/banco —,
+> oferecida como padrão quando a raiz permite. E ele barra a saída de quem tem
+> estabilidade acidentária (art. 118), como o desligamento faz."
+
 ### 5e. "O check-in não substitui pesquisa anual, eNPS e plano de ação" (1 min)
 
 Ela estava certa, e nós registramos por escrito que era **custo de uma decisão

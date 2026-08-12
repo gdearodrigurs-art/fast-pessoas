@@ -9,13 +9,13 @@
 
 | # | Assunto | Dono | Aberta em | Trava o quê |
 |---|---|---|---|---|
-| 1 | Transferência entre CNPJs: rescisão ou continuidade? | Guilherme | 31/07/2026 | férias, aviso prévio |
-| 2 | Saldo de banco de horas na transferência | Guilherme | 31/07/2026 | fechamento contábil entre CNPJs |
-| 3 | Limite concessivo de férias: 11 ou 12 meses | Guilherme | 30/07/2026 | alerta de "dobro" na tela do titular |
+| 1 | Transferência entre CNPJs: rescisão ou continuidade? · ✅ RESOLVIDA (0065) | Guilherme | 31/07/2026 | férias, aviso prévio |
+| 2 | Saldo de banco de horas na transferência · ✅ RESOLVIDA via #1 | Guilherme | 31/07/2026 | fechamento contábil entre CNPJs |
+| 3 | Limite concessivo de férias: 11 ou 12 meses · ✅ RESOLVIDA | Guilherme | 30/07/2026 | alerta de "dobro" na tela do titular |
 | 4 | Folha: 5º dia corrido ou útil | Guilherme | 30/07/2026 | indicador de prazo de fechamento |
 | 5 | Lista de rubricas e layout dos importadores | Diego | 29/07/2026 | folha completa, importação |
 | 6 | Balde anônimo já gravado com corte errado | Guilherme | 01/08/2026 | nada hoje; conta na implantação |
-| 7 | Benefício na transferência entre CNPJs: o critério ainda barra | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
+| 7 | Benefício na transferência entre CNPJs: o critério ainda barra · ✅ RESOLVIDA via #1 | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
 | 9 | Folha: quem conta como dependente para o IRRF | Guilherme | 10/08/2026 | base do IRRF retido |
 | 10 | Contato do candidato: leitura entra na trilha? | Guilherme | 10/08/2026 | rastro LGPD de dado de terceiro |
 | 11 | Replay de TOTP: código válido reutilizável na janela | Guilherme | 10/08/2026 | endurecimento do 2FA |
