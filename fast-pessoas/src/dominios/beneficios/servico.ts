@@ -3,7 +3,7 @@ import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { mensagemSemFicha } from "../../lib/ficha-de-colaborador";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
-import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { ErroHttp, exigirSessaoValida, lerSessao } from "../../lib/sessao";
 import { exigirVigenciaNaoFutura } from "../../lib/vigencia";
 import {
   ROTULOS_VINCULO,
@@ -138,10 +138,9 @@ export async function exigirAcessoBeneficios(): Promise<{
   sessao: PayloadSessao;
   pode: PermissoesBeneficios;
 }> {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    throw new ErroHttp(401, "Não autenticado");
-  }
+  // Defesa em profundidade: a MESMA guarda dos outros módulos (401 + barra 2FA
+  // pendente), não o atalho lerSessao()+if que dependia só do proxy (revisão).
+  const sessao = exigirSessaoValida(await lerSessao());
   const pode = await permissoesDe(sessao.usuario_id);
   if (!pode.solicitar && !pode.gerir && !pode.administrar && !pode.ver) {
     throw new ErroHttp(403, "Sem permissão para esta operação");
