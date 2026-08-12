@@ -12,8 +12,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  divergenciasAutoLider,
   selecionarCandidatos,
   validarFocos,
+  validarPontosCegos,
+  type RespostaAuto,
 } from "../src/dominios/pdi/calculo";
 import {
   esquemaConteudoPdi,
@@ -238,4 +241,65 @@ test("limparContextoLivre não mexe em texto sem PII", () => {
 test("contemPiiObvio pega CPF e ignora texto limpo", () => {
   assert.equal(contemPiiObvio("o CPF é 123.456.789-09"), true);
   assert.equal(contemPiiObvio("texto sem qualquer dado pessoal"), false);
+});
+
+// ------------------------------------------------------------------ pontos cegos (auto × líder)
+
+function respostaAuto(
+  indicadorNome: string,
+  pilarNome: string,
+  nota: number | null,
+  naoObservado = false
+): RespostaAuto {
+  return {
+    indicador_nome: indicadorNome,
+    pilar_nome: pilarNome,
+    nota,
+    nao_observado: naoObservado,
+  };
+}
+
+test("divergenciasAutoLider: só onde os dois deram nota, por magnitude", () => {
+  // Líder: Assiduidade 2, Cumprimento 4, Conhecimento 5, Atitude 3.
+  const auto: RespostaAuto[] = [
+    respostaAuto("Assiduidade e compromisso", "Dever", 4), // líder 2 → +2
+    respostaAuto("Cumprimento de normas", "Dever", 4), // líder 4 → 0 (sai)
+    respostaAuto("Conhecimento técnico do cargo", "Desenvolvimento (CHA)", 3), // líder 5 → -2
+    respostaAuto("Atitude e proatividade", "Desenvolvimento (CHA)", null, true), // não observado (sai)
+  ];
+  const divs = divergenciasAutoLider(memoriaExemplo(), auto);
+  assert.equal(divs.length, 2);
+  const assid = divs.find((d) => d.competencia.startsWith("Assiduidade"));
+  assert.equal(assid?.nota_colaborador, 4);
+  assert.equal(assid?.nota_lider, 2);
+  assert.equal(assid?.gap, 2);
+  const conhec = divs.find((d) => d.competencia.startsWith("Conhecimento"));
+  assert.equal(conhec?.gap, -2);
+});
+
+test("divergenciasAutoLider: sem autoavaliação, sem divergências", () => {
+  assert.deepEqual(divergenciasAutoLider(memoriaExemplo(), []), []);
+});
+
+test("validarPontosCegos: havia divergência e o PDI não trouxe cegos → aviso", () => {
+  const divs = divergenciasAutoLider(memoriaExemplo(), [
+    respostaAuto("Assiduidade e compromisso", "Dever", 5),
+  ]);
+  const avisos = validarPontosCegos(divs, []);
+  assert.equal(avisos.length, 1);
+  assert.equal(avisos[0].tipo, "ponto_cego_ignorado");
+});
+
+test("validarPontosCegos: com pontos cegos preenchidos, sem aviso", () => {
+  const divs = divergenciasAutoLider(memoriaExemplo(), [
+    respostaAuto("Assiduidade e compromisso", "Dever", 5),
+  ]);
+  assert.deepEqual(
+    validarPontosCegos(divs, ["o colaborador superestima a assiduidade"]),
+    []
+  );
+});
+
+test("validarPontosCegos: sem divergências, nunca gera aviso", () => {
+  assert.deepEqual(validarPontosCegos([], []), []);
 });

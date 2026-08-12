@@ -156,6 +156,25 @@ export const esquemaLoteDesempenho = z.object({
 
 export type EntradaLote = z.infer<typeof esquemaLoteDesempenho>;
 
+/** Seleção de pares pelo gestor (ids de colaboradores; o serviço valida a equipe). */
+export const esquemaSelecionarPares = z.object({
+  colaborador_ids: z
+    .array(z.number().int().positive())
+    .min(1, "Selecione ao menos um par")
+    .max(50, "Pares demais")
+    .refine((l) => new Set(l).size === l.length, {
+      message: "Par repetido na seleção",
+    }),
+});
+
+export type SelecionarPares = z.infer<typeof esquemaSelecionarPares>;
+
+export const esquemaRemoverPar = z.object({
+  colaborador_id: z.number().int().positive(),
+});
+
+export type RemoverPar = z.infer<typeof esquemaRemoverPar>;
+
 export const esquemaCancelamento = z.object({
   motivo: z
     .string()

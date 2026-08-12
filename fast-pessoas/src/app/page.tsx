@@ -14,6 +14,8 @@ interface Permissoes extends Record<string, unknown> {
   desligamento_ver: boolean;
   beneficios_acessar: boolean;
   avaliacao_acessar: boolean;
+  autoavaliacao_pendente: boolean;
+  avaliacao_par_pendente: boolean;
   pdi_acessar: boolean;
   recrutamento_acessar: boolean;
   ponto_proprio: boolean;
@@ -116,7 +118,30 @@ export default async function PaginaInicial() {
           WHERE g.usuario_id = $1
             AND rg.fim_vigencia IS NULL
             AND rg.inicio_vigencia <= (now() AT TIME ZONE 'America/Sao_Paulo')::date
-       )                                                           AS lidera_alguem`,
+       )                                                           AS lidera_alguem,
+       -- Autoavaliação PENDENTE é FATO, não permissão (a chave autoavaliar está
+       -- em todo papel): o card só aparece se há uma a fazer — senão vira ruído
+       -- para quem não tem ciclo de desempenho aberto.
+       EXISTS (
+         SELECT 1
+           FROM rh.avaliacao a
+           JOIN rh.ciclo_avaliacao ca ON ca.id = a.ciclo_id
+           JOIN rh.colaborador c ON c.id = ca.colaborador_id
+          WHERE a.papel = 'auto' AND c.usuario_id = $1
+            AND ca.status IN ('aberto','em_avaliacao')
+            AND a.estado <> 'enviada'
+       )                                                           AS autoavaliacao_pendente,
+       -- Avaliação de par PENDENTE (alguém me pediu para avaliar um colega e
+       -- ainda não enviei). Mesmo raciocínio de FATO do card da autoavaliação.
+       EXISTS (
+         SELECT 1
+           FROM rh.avaliacao a
+           JOIN rh.colaborador p ON p.id = a.avaliador_colaborador_id
+           JOIN rh.ciclo_avaliacao ca ON ca.id = a.ciclo_id
+          WHERE a.papel = 'par' AND p.usuario_id = $1
+            AND ca.status IN ('aberto','em_avaliacao','consolidado')
+            AND a.estado <> 'enviada'
+       )                                                           AS avaliacao_par_pendente`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -145,6 +170,20 @@ export default async function PaginaInicial() {
           // Sem chave: toda sessão autenticada tem direito ao PRÓPRIO portal,
           // como já tem direito à própria ficha. A tela e a API resolvem o resto.
           mostrar: true,
+        },
+        {
+          href: "/autoavaliacao",
+          titulo: "Minha autoavaliação",
+          descricao:
+            "Sua visão sobre o próprio trabalho, no modelo do ciclo — cega à avaliação do líder. Só aparece quando há uma pendente.",
+          mostrar: pode?.autoavaliacao_pendente ?? false,
+        },
+        {
+          href: "/avaliacao-par",
+          titulo: "Avaliar um colega (360)",
+          descricao:
+            "Um gestor pediu a sua visão sobre um colega. Resposta anônima e agregada. Só aparece quando há uma pendente.",
+          mostrar: pode?.avaliacao_par_pendente ?? false,
         },
         {
           href: "/demandas",

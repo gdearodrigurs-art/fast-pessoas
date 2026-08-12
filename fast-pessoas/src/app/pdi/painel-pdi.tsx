@@ -496,6 +496,21 @@ function DetalhePdi({
         </div>
       ))}
 
+      {conteudo.pontos_cegos.length > 0 && (
+        <div style={{ borderTop: "1px solid #eee", paddingTop: 12, marginTop: 12 }}>
+          <strong>Pontos cegos (autoavaliação × líder)</strong>
+          <p style={{ margin: "2px 0 6px", fontSize: 12, color: "#888" }}>
+            Onde a visão do colaborador diverge da do líder — insumo de conversa,
+            não nota.
+          </p>
+          <ul style={{ margin: "6px 0", paddingLeft: 18, fontSize: 14 }}>
+            {conteudo.pontos_cegos.map((p, i) => (
+              <li key={i}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div style={{ borderTop: "1px solid #eee", paddingTop: 12, marginTop: 12 }}>
         <strong>Resumo</strong>
         {editando ? (

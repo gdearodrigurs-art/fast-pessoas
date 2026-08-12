@@ -3,7 +3,7 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
-import { inserirEvento } from "../colaboradores/repositorio";
+import { inserirEvento, lerMinimoPorRecorte } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import { notificar } from "../notificacoes/servico";
 import { calcularResultado, EstruturaCongelada } from "./calculo";
@@ -22,8 +22,14 @@ import {
 } from "./esquemas";
 import {
   abrirLoteDesempenho,
+  agregarParesDoCiclo,
+  AgregadoParIndicador,
   ativarModelo,
   atualizarStatusCiclo,
+  AutoavaliacaoDetalhe,
+  AutoavaliacaoResumo,
+  buscarAutoavaliacao,
+  buscarAvaliacaoDePar,
   buscarCicloDetalhe,
   buscarCicloParaMutacao,
   buscarDecisao,
@@ -36,17 +42,24 @@ import {
   CicloDetalhe,
   CicloParaMutacao,
   CicloResumo,
+  contarIndicadoresDoModelo,
+  contarParesEnviados,
   criarModeloRascunho,
   DecisaoGravada,
   existeRascunho,
   garantirAvaliacao,
   gerarCiclosExperiencia,
   inserirDecisao,
+  inserirPar,
   inserirResultado,
   listarAtivosSemGestor,
+  listarAutoavaliacoesDoColaborador,
+  listarAvaliacoesDeParDoColaborador,
+  listarCandidatosPares,
   listarCiclos,
   listarCiclosDoAvaliador,
   listarModelos,
+  listarParesDoCiclo,
   listarPendenciasSemGestor,
   listarRespostas,
   listarRespostasComCliente,
@@ -54,6 +67,7 @@ import {
   ModeloResumo,
   PendenciaSemGestor,
   registrarLeituraSensivel,
+  removerPar,
   RespostaGravada,
   salvarRespostas,
   substituirEstrutura,
@@ -421,7 +435,11 @@ function montarSituacao(
     proximo_passo =
       `O avaliador responde TODOS os indicadores do modelo congelado ` +
       `(v${ciclo.modelo_versao}) — nota 1–5 ou "não observado" — e envia. ` +
-      "O envio consolida o resultado automaticamente; envio parcial não existe.";
+      (ciclo.tipo === "desempenho"
+        ? "A autoavaliação do colaborador é obrigatória: o resultado consolida " +
+          "quando o líder E o colaborador tiverem enviado (envio parcial de cada " +
+          "avaliação não existe). A nota oficial sai só da avaliação do líder."
+        : "O envio consolida o resultado automaticamente; envio parcial não existe.");
   } else if (ciclo.status === "consolidado") {
     titulo = "Aguardando decisão";
     detalhe =
@@ -610,7 +628,7 @@ async function exigirCicloDoAvaliador(
       `Ciclo ${ROTULOS_STATUS_CICLO[ciclo.status].toLowerCase()} não aceita respostas.`
     );
   }
-  if (ciclo.avaliacao_estado === "enviada") {
+  if (ciclo.lider_estado === "enviada") {
     throw new ErroHttp(
       409,
       "Avaliação já enviada é imutável — fale com o RH se precisar corrigir."
@@ -644,7 +662,8 @@ export async function salvarRascunho(
       }
     }
     const avaliacaoId =
-      ciclo.avaliacao_id ?? (await garantirAvaliacao(cliente, cicloId));
+      ciclo.lider_avaliacao_id ??
+      (await garantirAvaliacao(cliente, cicloId, "lider"));
     await salvarRespostas(cliente, avaliacaoId, entrada.respostas);
     if (ciclo.status === "aberto") {
       await atualizarStatusCiclo(cliente, cicloId, "em_avaliacao");
@@ -670,10 +689,11 @@ export async function salvarRascunho(
 }
 
 /**
- * ENVIO + CONSOLIDAÇÃO na mesma transação (MVP líder→liderado: uma
- * avaliação por ciclo). Envio parcial NÃO existe: o motor exige toda
- * pergunta com nota OU não observado — senão continua rascunho (409).
- * O resultado nasce do MOTOR (calculo.ts) com memória de cálculo completa.
+ * ENVIO da avaliação do LÍDER. Já NÃO consolida sozinho (0067): nos ciclos de
+ * desempenho a consolidação espera também a autoavaliação. Envio parcial não
+ * existe — o motor exige toda pergunta com nota OU não observado (409). Marca a
+ * do líder como enviada e TENTA consolidar; se a auto ainda não chegou, quem
+ * fechar o par consolida depois. A nota oficial sai só das respostas do líder.
  */
 export async function enviarAvaliacao(
   sessao: PayloadSessao,
@@ -686,24 +706,16 @@ export async function enviarAvaliacao(
       throw new ErroHttp(500, "Modelo congelado do ciclo não encontrado.");
     }
     const avaliacaoId =
-      ciclo.avaliacao_id ?? (await garantirAvaliacao(cliente, cicloId));
+      ciclo.lider_avaliacao_id ??
+      (await garantirAvaliacao(cliente, cicloId, "lider"));
     const respostas = await listarRespostasComCliente(cliente, avaliacaoId);
 
-    // Motor: lança 409 se faltar resposta (parcial = continua rascunho)
-    // ou se tudo estiver marcado como não observado.
-    const resultado = calcularResultado(estrutura, respostas);
+    // Porteiro de qualidade do envio: lança 409 se faltar resposta (parcial =
+    // continua rascunho) ou se tudo for "não observado". O número em si só é
+    // gravado na consolidação — aqui é só validação.
+    calcularResultado(estrutura, respostas);
 
     await marcarEnviada(cliente, avaliacaoId);
-    await inserirResultado(cliente, {
-      ciclo_id: cicloId,
-      percentual: resultado.percentual,
-      faixa_resultado_id: resultado.faixa.id,
-      recomendacao: resultado.faixa.recomendacao,
-      memoria_calculo: resultado.memoria,
-    });
-    await atualizarStatusCiclo(cliente, cicloId, "consolidado");
-
-    const rotuloCiclo = `${ROTULOS_TIPO_CICLO[ciclo.tipo]} de ${ciclo.colaborador_nome} (matrícula ${ciclo.matricula})`;
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
@@ -711,28 +723,495 @@ export async function enviarAvaliacao(
       tabela: TABELA_AVALIACAO,
       registroId: String(avaliacaoId),
       diff: {
-        Ciclo: { de: null, para: rotuloCiclo },
-        Estado: { de: "Rascunho", para: "Enviada (imutável)" },
+        Ciclo: {
+          de: null,
+          para: `${ROTULOS_TIPO_CICLO[ciclo.tipo]} de ${ciclo.colaborador_nome} (matrícula ${ciclo.matricula})`,
+        },
+        "Avaliação do líder": { de: "Rascunho", para: "Enviada (imutável)" },
       },
     });
+
+    await consolidarSePronto(cliente, sessao, cicloId);
+  });
+}
+
+/**
+ * Consolida o ciclo SE o par exigido já está completo: sempre a avaliação do
+ * líder enviada e — nos ciclos de DESEMPENHO — também a autoavaliação. A nota
+ * oficial sai EXCLUSIVAMENTE das respostas do LÍDER; a auto é só perspectiva.
+ * Idempotente: se já há resultado, não faz nada (o UNIQUE do banco é a rede, e
+ * o gatilho resultado_exigir_avaliacao_enviada é o backstop). Chamada pelos dois
+ * envios (líder e auto); quem fecha o par é quem consolida.
+ */
+async function consolidarSePronto(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  cicloId: number
+): Promise<void> {
+  const jaConsolidado = await buscarResultadoComCliente(cliente, cicloId);
+  if (jaConsolidado) return;
+
+  // Reler DENTRO da transação: reflete o marcarEnviada que acabou de acontecer.
+  const ciclo = await buscarCicloParaMutacao(cliente, cicloId);
+  if (!ciclo || ciclo.lider_avaliacao_id === null) return;
+  if (ciclo.lider_estado !== "enviada") return;
+  if (ciclo.tipo === "desempenho" && ciclo.auto_estado !== "enviada") return;
+
+  const estrutura = await buscarEstrutura(ciclo.modelo_versao_id);
+  if (!estrutura) {
+    throw new ErroHttp(500, "Modelo congelado do ciclo não encontrado.");
+  }
+  const respostasLider = await listarRespostasComCliente(
+    cliente,
+    ciclo.lider_avaliacao_id
+  );
+  const resultado = calcularResultado(estrutura, respostasLider);
+
+  await inserirResultado(cliente, {
+    ciclo_id: cicloId,
+    percentual: resultado.percentual,
+    faixa_resultado_id: resultado.faixa.id,
+    recomendacao: resultado.faixa.recomendacao,
+    memoria_calculo: resultado.memoria,
+  });
+  await atualizarStatusCiclo(cliente, cicloId, "consolidado");
+
+  const rotuloCiclo = `${ROTULOS_TIPO_CICLO[ciclo.tipo]} de ${ciclo.colaborador_nome} (matrícula ${ciclo.matricula})`;
+  await registrarAlteracao(cliente, {
+    usuarioId: sessao.usuario_id,
+    papel: sessao.papel,
+    acao: "criacao",
+    tabela: TABELA_RESULTADO,
+    registroId: String(cicloId),
+    diff: {
+      Ciclo: { de: null, para: rotuloCiclo },
+      Percentual: { de: null, para: `${resultado.percentual}%` },
+      Faixa: { de: null, para: resultado.faixa.rotulo },
+      Recomendação: {
+        de: null,
+        para: ROTULOS_RECOMENDACAO[resultado.faixa.recomendacao],
+      },
+      Modelo: { de: null, para: `v${estrutura.versao}` },
+    },
+  });
+}
+
+// ------------------------------------------------------------------ autoavaliação (o próprio colaborador)
+
+/**
+ * Guarda das mutações da AUTOAVALIAÇÃO: o ator tem de ser o PRÓPRIO avaliado
+ * (usuario da sessão = colaborador do ciclo), o ciclo tem de ser de desempenho e
+ * ainda vivo, e a auto não pode estar enviada. Ausência, não vazamento: quem não
+ * é o avaliado recebe 404 (não sabe que o ciclo existe).
+ */
+async function exigirCicloDoAvaliado(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  cicloId: number
+): Promise<CicloParaMutacao> {
+  const ciclo = await buscarCicloParaMutacao(cliente, cicloId);
+  if (!ciclo || ciclo.colaborador_usuario_id !== sessao.usuario_id) {
+    throw new ErroHttp(404, "Autoavaliação não encontrada.");
+  }
+  if (ciclo.tipo !== "desempenho") {
+    throw new ErroHttp(409, "Autoavaliação só existe em ciclos de desempenho.");
+  }
+  if (ciclo.status !== "aberto" && ciclo.status !== "em_avaliacao") {
+    throw new ErroHttp(
+      409,
+      `Ciclo ${ROTULOS_STATUS_CICLO[ciclo.status].toLowerCase()} não aceita autoavaliação.`
+    );
+  }
+  if (ciclo.auto_estado === "enviada") {
+    throw new ErroHttp(
+      409,
+      "Autoavaliação já enviada é imutável — fale com o RH se precisar corrigir."
+    );
+  }
+  return ciclo;
+}
+
+/** Salva o rascunho da PRÓPRIA autoavaliação (papel=auto). */
+export async function salvarRascunhoAutoavaliacao(
+  sessao: PayloadSessao,
+  cicloId: number,
+  entrada: SalvarRespostas
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const ciclo = await exigirCicloDoAvaliado(cliente, sessao, cicloId);
+    const estrutura = await buscarEstrutura(ciclo.modelo_versao_id);
+    if (!estrutura) {
+      throw new ErroHttp(500, "Modelo congelado do ciclo não encontrado.");
+    }
+    const idsDoModelo = new Set(
+      estrutura.pilares.flatMap((p) => p.indicadores.map((i) => i.id))
+    );
+    for (const resposta of entrada.respostas) {
+      if (!idsDoModelo.has(resposta.indicador_id)) {
+        throw new ErroHttpCampo(
+          400,
+          "Resposta para indicador fora do modelo congelado do ciclo.",
+          "respostas"
+        );
+      }
+    }
+    const avaliacaoId =
+      ciclo.auto_avaliacao_id ??
+      (await garantirAvaliacao(cliente, cicloId, "auto"));
+    await salvarRespostas(cliente, avaliacaoId, entrada.respostas);
+    if (ciclo.status === "aberto") {
+      await atualizarStatusCiclo(cliente, cicloId, "em_avaliacao");
+    }
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
-      acao: "criacao",
-      tabela: TABELA_RESULTADO,
-      registroId: String(cicloId),
+      acao: "atualizacao",
+      tabela: TABELA_AVALIACAO,
+      registroId: String(avaliacaoId),
       diff: {
-        Ciclo: { de: null, para: rotuloCiclo },
-        Percentual: { de: null, para: `${resultado.percentual}%` },
-        Faixa: { de: null, para: resultado.faixa.rotulo },
-        Recomendação: {
+        Autoavaliação: {
           de: null,
-          para: ROTULOS_RECOMENDACAO[resultado.faixa.recomendacao],
+          para: `${entrada.respostas.length} resposta(s) salva(s) de ${idsDoModelo.size} indicadores`,
         },
-        Modelo: { de: null, para: `v${estrutura.versao}` },
       },
     });
   });
+}
+
+/**
+ * ENVIA a própria autoavaliação e tenta consolidar. A auto é só perspectiva —
+ * a completude é exigida (todo indicador respondido), mas "tudo não observado"
+ * é permitido (ao contrário do líder): ela não vira nota. Se o líder já enviou,
+ * este envio fecha o par e consolida (sobre a nota do líder).
+ */
+export async function enviarAutoavaliacao(
+  sessao: PayloadSessao,
+  cicloId: number
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const ciclo = await exigirCicloDoAvaliado(cliente, sessao, cicloId);
+    const avaliacaoId =
+      ciclo.auto_avaliacao_id ??
+      (await garantirAvaliacao(cliente, cicloId, "auto"));
+
+    // Completude sem julgar o mérito: todo indicador do modelo respondido.
+    const esperados = await contarIndicadoresDoModelo(
+      cliente,
+      ciclo.modelo_versao_id
+    );
+    const respondidos = (
+      await listarRespostasComCliente(cliente, avaliacaoId)
+    ).length;
+    if (respondidos < esperados) {
+      throw new ErroHttp(
+        409,
+        "Autoavaliação incompleta: responda todos os indicadores antes de enviar."
+      );
+    }
+
+    await marcarEnviada(cliente, avaliacaoId);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_AVALIACAO,
+      registroId: String(avaliacaoId),
+      diff: {
+        Ciclo: {
+          de: null,
+          para: `${ROTULOS_TIPO_CICLO[ciclo.tipo]} de ${ciclo.colaborador_nome} (matrícula ${ciclo.matricula})`,
+        },
+        Autoavaliação: { de: "Rascunho", para: "Enviada (imutável)" },
+      },
+    });
+
+    await consolidarSePronto(cliente, sessao, cicloId);
+  });
+}
+
+export interface AutoavaliacaoParaResponder {
+  ciclo: AutoavaliacaoDetalhe;
+  estrutura: EstruturaCongelada | null;
+  respostas: RespostaGravada[] | null;
+  pode_responder: boolean;
+}
+
+/**
+ * A PRÓPRIA autoavaliação para responder — CEGA por construção: devolve o
+ * modelo e as respostas da linha 'auto' do próprio colaborador, NUNCA a
+ * avaliação do líder nem o resultado. Escopo pelo usuário da sessão.
+ */
+export async function obterAutoavaliacao(
+  sessao: PayloadSessao,
+  cicloId: number
+): Promise<AutoavaliacaoParaResponder> {
+  const ciclo = await buscarAutoavaliacao(cicloId, sessao.usuario_id);
+  if (!ciclo) {
+    throw new ErroHttp(404, "Autoavaliação não encontrada.");
+  }
+  const estrutura = await buscarEstrutura(ciclo.modelo_versao_id);
+  const respostas =
+    ciclo.avaliacao_id !== null
+      ? await listarRespostas(ciclo.avaliacao_id)
+      : null;
+  const pode_responder =
+    (ciclo.status === "aberto" || ciclo.status === "em_avaliacao") &&
+    ciclo.estado !== "enviada";
+  return { ciclo, estrutura, respostas, pode_responder };
+}
+
+/** As autoavaliações do próprio colaborador (para o painel do portal). */
+export async function listarMinhasAutoavaliacoes(
+  sessao: PayloadSessao
+): Promise<AutoavaliacaoResumo[]> {
+  return listarAutoavaliacoesDoColaborador(sessao.usuario_id);
+}
+
+// ------------------------------------------------------------------ 360 de pares
+
+/** Alcance de gestão dos pares: o avaliador do ciclo OU quem tem resultado.ver. */
+async function souAvaliadorOuAmplo(
+  sessao: PayloadSessao,
+  avaliadorUsuarioId: number
+): Promise<boolean> {
+  if (avaliadorUsuarioId === sessao.usuario_id) return true;
+  const pode = await carregarPermissoes(sessao.usuario_id);
+  return pode.resultado_ver;
+}
+
+/** Guarda da GESTÃO de pares (selecionar/remover): avaliador ou amplo; desempenho vivo. */
+async function exigirGestaoDePares(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  cicloId: number
+): Promise<CicloParaMutacao> {
+  const ciclo = await buscarCicloParaMutacao(cliente, cicloId);
+  if (!ciclo || !(await souAvaliadorOuAmplo(sessao, ciclo.avaliador_usuario_id))) {
+    throw new ErroHttp(404, "Avaliação não encontrada.");
+  }
+  if (ciclo.tipo !== "desempenho") {
+    throw new ErroHttp(409, "Avaliação de pares só existe em ciclos de desempenho.");
+  }
+  if (ciclo.status === "decidido" || ciclo.status === "cancelado") {
+    throw new ErroHttp(409, "Ciclo encerrado não aceita mudança de pares.");
+  }
+  return ciclo;
+}
+
+/** O gestor seleciona os pares (colegas de equipe do avaliado). Idempotente. */
+export async function selecionarPares(
+  sessao: PayloadSessao,
+  cicloId: number,
+  colaboradorIds: number[]
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const ciclo = await exigirGestaoDePares(cliente, sessao, cicloId);
+    for (const parId of colaboradorIds) {
+      if (parId === ciclo.colaborador_id || parId === ciclo.avaliador_colaborador_id) {
+        throw new ErroHttpCampo(
+          400,
+          "Um par não pode ser o próprio avaliado nem o líder do ciclo.",
+          "pares"
+        );
+      }
+      await inserirPar(cliente, cicloId, parId);
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_AVALIACAO,
+      registroId: String(cicloId),
+      diff: {
+        "Pares selecionados": {
+          de: null,
+          para: `${colaboradorIds.length} par(es) para ${ciclo.colaborador_nome} (matrícula ${ciclo.matricula})`,
+        },
+      },
+    });
+  });
+}
+
+/** Remove um par ainda em rascunho (não dá para remover quem já enviou). */
+export async function removerParDoCiclo(
+  sessao: PayloadSessao,
+  cicloId: number,
+  parColaboradorId: number
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    await exigirGestaoDePares(cliente, sessao, cicloId);
+    const n = await removerPar(cliente, cicloId, parColaboradorId);
+    if (n === 0) {
+      throw new ErroHttp(
+        409,
+        "Par não encontrado ou já enviou a avaliação — não dá para remover."
+      );
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_AVALIACAO,
+      registroId: String(cicloId),
+      diff: { "Par removido": { de: String(parColaboradorId), para: null } },
+    });
+  });
+}
+
+/** Painel de gestão de pares do gestor: pares atuais + candidatos da equipe. */
+export async function listarGestaoPares(sessao: PayloadSessao, cicloId: number) {
+  const ciclo = await buscarCicloDetalhe(cicloId);
+  if (!ciclo || !(await souAvaliadorOuAmplo(sessao, ciclo.avaliador_usuario_id))) {
+    throw new ErroHttp(404, "Avaliação não encontrada.");
+  }
+  if (ciclo.tipo !== "desempenho") {
+    throw new ErroHttp(409, "Avaliação de pares só existe em ciclos de desempenho.");
+  }
+  const [pares, candidatos] = await Promise.all([
+    listarParesDoCiclo(cicloId),
+    listarCandidatosPares(cicloId),
+  ]);
+  return {
+    avaliado_nome: ciclo.colaborador_nome,
+    encerrado: ciclo.status === "decidido" || ciclo.status === "cancelado",
+    pares,
+    candidatos,
+  };
+}
+
+/** Guarda leve do fluxo do PAR (fora de transação): a linha 'par' do usuário. */
+async function exigirAvaliacaoDePar(sessao: PayloadSessao, cicloId: number) {
+  const par = await buscarAvaliacaoDePar(cicloId, sessao.usuario_id);
+  if (!par) throw new ErroHttp(404, "Avaliação de par não encontrada.");
+  if (par.status === "decidido" || par.status === "cancelado") {
+    throw new ErroHttp(409, "Ciclo encerrado — a avaliação de par não aceita mais respostas.");
+  }
+  return par;
+}
+
+/** Salva o rascunho da PRÓPRIA avaliação de par (cega ao líder/auto/resultado). */
+export async function salvarRascunhoDePar(
+  sessao: PayloadSessao,
+  cicloId: number,
+  entrada: SalvarRespostas
+): Promise<void> {
+  const par = await exigirAvaliacaoDePar(sessao, cicloId);
+  if (par.estado === "enviada") {
+    throw new ErroHttp(409, "Avaliação de par já enviada é imutável.");
+  }
+  if (par.avaliacao_id === null) {
+    throw new ErroHttp(500, "Linha de par ausente.");
+  }
+  const estrutura = await buscarEstrutura(par.modelo_versao_id);
+  if (!estrutura) throw new ErroHttp(500, "Modelo congelado do ciclo não encontrado.");
+  const idsDoModelo = new Set(
+    estrutura.pilares.flatMap((p) => p.indicadores.map((i) => i.id))
+  );
+  for (const resposta of entrada.respostas) {
+    if (!idsDoModelo.has(resposta.indicador_id)) {
+      throw new ErroHttpCampo(
+        400,
+        "Resposta para indicador fora do modelo congelado do ciclo.",
+        "respostas"
+      );
+    }
+  }
+  const avaliacaoId = par.avaliacao_id;
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    await salvarRespostas(cliente, avaliacaoId, entrada.respostas);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_AVALIACAO,
+      registroId: String(avaliacaoId),
+      diff: {
+        "Avaliação de par": {
+          de: null,
+          para: `${entrada.respostas.length} resposta(s) salva(s) de ${idsDoModelo.size} indicadores`,
+        },
+      },
+    });
+  });
+}
+
+/**
+ * ENVIA a própria avaliação de par (exige completude). NÃO consolida nada — os
+ * pares são opcionais e não gatilham a consolidação do ciclo.
+ */
+export async function enviarAvaliacaoDePar(
+  sessao: PayloadSessao,
+  cicloId: number
+): Promise<void> {
+  const par = await exigirAvaliacaoDePar(sessao, cicloId);
+  if (par.estado === "enviada") {
+    throw new ErroHttp(409, "Avaliação de par já enviada é imutável.");
+  }
+  if (par.avaliacao_id === null) {
+    throw new ErroHttp(500, "Linha de par ausente.");
+  }
+  const avaliacaoId = par.avaliacao_id;
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const esperados = await contarIndicadoresDoModelo(cliente, par.modelo_versao_id);
+    const respondidos = (
+      await listarRespostasComCliente(cliente, avaliacaoId)
+    ).length;
+    if (respondidos < esperados) {
+      throw new ErroHttp(
+        409,
+        "Avaliação de par incompleta: responda todos os indicadores antes de enviar."
+      );
+    }
+    await marcarEnviada(cliente, avaliacaoId);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_AVALIACAO,
+      registroId: String(avaliacaoId),
+      diff: { "Avaliação de par": { de: "Rascunho", para: "Enviada (imutável)" } },
+    });
+  });
+}
+
+/** A própria avaliação de par para responder — CEGA (nunca líder/auto/resultado). */
+export async function obterAvaliacaoDePar(sessao: PayloadSessao, cicloId: number) {
+  const par = await exigirAvaliacaoDePar(sessao, cicloId);
+  const estrutura = await buscarEstrutura(par.modelo_versao_id);
+  const respostas =
+    par.avaliacao_id !== null ? await listarRespostas(par.avaliacao_id) : null;
+  const pode_responder = par.estado !== "enviada";
+  return { par, estrutura, respostas, pode_responder };
+}
+
+/** As avaliações de par pedidas AO colaborador da sessão (para o portal). */
+export async function listarMinhasAvaliacoesDePar(sessao: PayloadSessao) {
+  return listarAvaliacoesDeParDoColaborador(sessao.usuario_id);
+}
+
+export interface AgregadoPares {
+  /** Só true se o nº de pares que enviaram atingir o piso de anonimato. */
+  revelavel: boolean;
+  n_pares: number;
+  piso: number;
+  por_indicador: AgregadoParIndicador[];
+}
+
+/**
+ * Agregado ANÔNIMO dos pares por indicador, com PISO de anonimato: abaixo do
+ * piso (sistema.parametro_privacidade.minimo_por_recorte) nada é revelado — nem
+ * a média. É o que alimenta a visão 360 do PDI sem expor par nenhum.
+ */
+export async function agregarPares(cicloId: number): Promise<AgregadoPares> {
+  const [n_pares, piso] = await Promise.all([
+    contarParesEnviados(cicloId),
+    lerMinimoPorRecorte(),
+  ]);
+  if (n_pares < piso) {
+    return { revelavel: false, n_pares, piso, por_indicador: [] };
+  }
+  const por_indicador = await agregarParesDoCiclo(cicloId);
+  return { revelavel: true, n_pares, piso, por_indicador };
 }
 
 // ------------------------------------------------------------------ decisão humana

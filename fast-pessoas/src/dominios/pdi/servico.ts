@@ -7,9 +7,17 @@ import {
 import { ErroHttp } from "../../lib/sessao";
 import type { PayloadSessao } from "../identidade/esquemas";
 import type { MemoriaCalculo } from "../avaliacao/calculo";
-import { buscarResultado } from "../avaliacao/repositorio";
+import {
+  buscarResultado,
+  listarRespostasAutoDoCiclo,
+} from "../avaliacao/repositorio";
+import { agregarPares } from "../avaliacao/servico";
 import type { AvisoPdi } from "./calculo";
-import { validarFocos } from "./calculo";
+import {
+  divergenciasAutoLider,
+  validarFocos,
+  validarPontosCegos,
+} from "./calculo";
 import {
   esquemaConteudoPdi,
   type ConteudoPdi,
@@ -20,6 +28,8 @@ import {
   INSTRUCAO_PDI,
   montarPromptPdi,
   type AvaliacaoAnonima,
+  type DivergenciaAnonima,
+  type ParAgregadoAnonimo,
 } from "./instrucao";
 import {
   atualizarConteudo,
@@ -64,7 +74,9 @@ function avaliacaoAnonima(
   percentual: number,
   faixaRotulo: string,
   recomendacao: string,
-  modeloNome: string
+  modeloNome: string,
+  divergencias: DivergenciaAnonima[],
+  paresAgregado: ParAgregadoAnonimo[]
 ): AvaliacaoAnonima {
   const competencias = [];
   for (const pilar of memoria.pilares) {
@@ -84,6 +96,10 @@ function avaliacaoAnonima(
     faixa: faixaRotulo,
     recomendacao,
     competencias,
+    ...(divergencias.length > 0
+      ? { divergencias_auto_lider: divergencias }
+      : {}),
+    ...(paresAgregado.length > 0 ? { pares_agregado: paresAgregado } : {}),
   };
 }
 
@@ -121,12 +137,39 @@ export async function gerarPdi(
     );
   }
 
+  // Perspectiva do próprio colaborador (papel=auto), se houve autoavaliação
+  // enviada: alimenta os pontos cegos (auto × líder). A nota oficial segue só do
+  // líder (resultado.memoria_calculo). Vazio → PDI só com a visão do líder.
+  const respostasAuto = await listarRespostasAutoDoCiclo(dados.ciclo_id);
+  const divergencias = divergenciasAutoLider(
+    resultado.memoria_calculo,
+    respostasAuto
+  );
+  const divergenciasAnon: DivergenciaAnonima[] = divergencias.map((d) => ({
+    competencia: d.competencia,
+    nota_colaborador: d.nota_colaborador,
+    nota_lider: d.nota_lider,
+  }));
+
+  // Visão 360 dos pares (agregada e anônima). Só vem preenchida quando o número
+  // de pares que enviaram atinge o piso de anonimato; abaixo dele, nada é revelado.
+  const agregado = await agregarPares(dados.ciclo_id);
+  const paresAnon: ParAgregadoAnonimo[] = agregado.revelavel
+    ? agregado.por_indicador.map((x) => ({
+        competencia: x.indicador_nome,
+        media_pares: x.media,
+        respostas: x.respostas,
+      }))
+    : [];
+
   const avaliacao = avaliacaoAnonima(
     resultado.memoria_calculo,
     resultado.percentual,
     resultado.faixa_rotulo,
     resultado.recomendacao,
-    contexto.modelo_nome
+    contexto.modelo_nome,
+    divergenciasAnon,
+    paresAnon
   );
 
   const { limpo, avisos: avisosDesid } = limparContextoLivre(
@@ -167,7 +210,16 @@ export async function gerarPdi(
       mensagem,
     })),
     ...validarFocos(resultado.memoria_calculo, conteudo.focos),
+    ...validarPontosCegos(divergencias, conteudo.pontos_cegos),
   ];
+  // Pares responderam mas ficaram abaixo do piso de anonimato: avisa que a visão
+  // 360 não entrou — sem revelar nada de par nenhum.
+  if (agregado.n_pares > 0 && !agregado.revelavel) {
+    avisos.push({
+      tipo: "pares_abaixo_do_piso",
+      mensagem: `${agregado.n_pares} par(es) responderam, mas abaixo do piso de anonimato (${agregado.piso}) — a visão de pares ficou de fora do PDI para não identificar ninguém.`,
+    });
+  }
 
   const id = await comTransacao(sessao.usuario_id, async (cliente) => {
     const novo = await inserirPdi(cliente, {

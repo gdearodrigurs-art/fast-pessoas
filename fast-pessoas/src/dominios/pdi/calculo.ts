@@ -45,6 +45,8 @@ export type TipoAviso =
   | "competencia_desconhecida"
   | "foco_em_forte"
   | "area_fraca_ignorada"
+  | "ponto_cego_ignorado"
+  | "pares_abaixo_do_piso"
   | "desidentificacao";
 
 export interface AvisoPdi {
@@ -172,4 +174,79 @@ export function validarFocos(
   }
 
   return avisos;
+}
+
+// ------------------------------------------------------------------ pontos cegos (auto × líder)
+
+/** Uma resposta da autoavaliação, nomeada (o repositório entrega assim). */
+export interface RespostaAuto {
+  indicador_nome: string;
+  pilar_nome: string;
+  nota: number | null;
+  nao_observado: boolean;
+}
+
+export interface Divergencia {
+  competencia: string;
+  pilar: string;
+  /** Nota que o próprio colaborador se deu (1–5). */
+  nota_colaborador: number;
+  /** Nota que o líder deu (1–5). */
+  nota_lider: number;
+  /** nota_colaborador − nota_lider. >0: o colaborador se vê MELHOR; <0: PIOR. */
+  gap: number;
+}
+
+/**
+ * As divergências auto × líder por competência — só onde os DOIS lados
+ * responderam com nota (ignora "não observado"). Ordenadas da maior para a
+ * menor magnitude. Sem limiar chumbado: é ranking relativo (eixo 9), então se
+ * adapta a qualquer modelo. É o insumo cru dos "pontos cegos" que a IA redige.
+ */
+export function divergenciasAutoLider(
+  memoriaLider: MemoriaCalculo,
+  respostasAuto: RespostaAuto[]
+): Divergencia[] {
+  const auto = respostasAuto.filter(
+    (r) => r.nota !== null && !r.nao_observado
+  );
+  const divs: Divergencia[] = [];
+  for (const pilar of memoriaLider.pilares) {
+    for (const ind of pilar.indicadores) {
+      if (ind.nota === null || ind.nao_observado) continue;
+      const par = auto.find((a) => casa(a.indicador_nome, ind.nome));
+      if (!par || par.nota === null) continue;
+      const gap = par.nota - ind.nota;
+      if (gap === 0) continue;
+      divs.push({
+        competencia: ind.nome,
+        pilar: pilar.nome,
+        nota_colaborador: par.nota,
+        nota_lider: ind.nota,
+        gap,
+      });
+    }
+  }
+  return divs.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+}
+
+/**
+ * Aviso de sanidade: havia divergências auto × líder para comentar, mas a IA
+ * devolveu os pontos cegos vazios. Não bloqueia — só chama a atenção do humano
+ * para o insumo que a máquina deixou passar.
+ */
+export function validarPontosCegos(
+  divergencias: Divergencia[],
+  pontosCegos: string[]
+): AvisoPdi[] {
+  if (divergencias.length === 0 || pontosCegos.length > 0) return [];
+  const maior = divergencias[0];
+  const sentido =
+    maior.gap > 0 ? "se avaliou acima" : "se avaliou abaixo";
+  return [
+    {
+      tipo: "ponto_cego_ignorado",
+      mensagem: `Havia divergência entre a autoavaliação e o líder (ex.: "${maior.competencia}", o colaborador ${sentido} do líder por ${Math.abs(maior.gap)} ponto(s)), mas o PDI não trouxe pontos cegos — confira.`,
+    },
+  ];
 }

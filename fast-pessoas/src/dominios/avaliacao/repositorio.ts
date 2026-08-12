@@ -314,7 +314,10 @@ const SELECT_CICLO = `
     JOIN rh.colaborador c ON c.id = ca.colaborador_id
     JOIN rh.colaborador g ON g.id = ca.avaliador_colaborador_id
     JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
-    LEFT JOIN rh.avaliacao a ON a.ciclo_id = ca.id`;
+    -- avaliacao passou a ter N papéis por ciclo (0067): o painel/lista fala do
+    -- estado da avaliação do LÍDER (a oficial). Sem o filtro, o join duplicaria
+    -- o ciclo (uma linha por papel) e o estado viria de um papel arbitrário.
+    LEFT JOIN rh.avaliacao a ON a.ciclo_id = ca.id AND a.papel = 'lider'`;
 
 function paraCiclo(linha: LinhaCiclo): CicloResumo {
   return {
@@ -381,7 +384,9 @@ export async function buscarCicloDetalhe(
        JOIN rh.colaborador c ON c.id = ca.colaborador_id
        JOIN rh.colaborador g ON g.id = ca.avaliador_colaborador_id
        JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
-       LEFT JOIN rh.avaliacao a ON a.ciclo_id = ca.id
+       -- só a avaliação do LÍDER (a oficial); a auto vive em linha separada e é
+       -- lida pelo fluxo cego do colaborador, nunca aqui (0067).
+       LEFT JOIN rh.avaliacao a ON a.ciclo_id = ca.id AND a.papel = 'lider'
       WHERE ca.id = $1`,
     [id]
   );
@@ -402,12 +407,20 @@ export interface CicloParaMutacao {
   colaborador_id: number;
   colaborador_nome: string;
   matricula: string;
+  avaliador_colaborador_id: number;
   avaliador_usuario_id: number;
+  /** Usuário do próprio avaliado — alvo do escopo da autoavaliação (papel=auto). */
+  colaborador_usuario_id: number | null;
   tipo: TipoCiclo;
   status: StatusCiclo;
   modelo_versao_id: number;
-  avaliacao_id: number | null;
-  avaliacao_estado: "rascunho" | "enviada" | null;
+  // Os dois papéis vêm SEPARADOS (0067): a mutação escolhe o seu por papel, nunca
+  // por um `linhas[0]` arbitrário do join. auto_* é null nos ciclos sem auto
+  // (experiência) ou enquanto a linha não existir.
+  lider_avaliacao_id: number | null;
+  lider_estado: "rascunho" | "enviada" | null;
+  auto_avaliacao_id: number | null;
+  auto_estado: "rascunho" | "enviada" | null;
 }
 
 export async function buscarCicloParaMutacao(
@@ -419,34 +432,53 @@ export async function buscarCicloParaMutacao(
     colaborador_id: string;
     colaborador_nome: string;
     matricula: string;
+    avaliador_colaborador_id: string;
     avaliador_usuario_id: string;
+    colaborador_usuario_id: string | null;
     tipo: TipoCiclo;
     status: StatusCiclo;
     modelo_versao_id: string;
-    avaliacao_id: string | null;
-    avaliacao_estado: "rascunho" | "enviada" | null;
+    lider_avaliacao_id: string | null;
+    lider_estado: "rascunho" | "enviada" | null;
+    auto_avaliacao_id: string | null;
+    auto_estado: "rascunho" | "enviada" | null;
   }>(
     `SELECT ca.id, ca.colaborador_id, c.nome_completo AS colaborador_nome,
-            c.matricula, g.usuario_id AS avaliador_usuario_id,
+            c.matricula, ca.avaliador_colaborador_id,
+            g.usuario_id AS avaliador_usuario_id,
+            c.usuario_id AS colaborador_usuario_id,
             ca.tipo, ca.status, ca.modelo_versao_id,
-            a.id AS avaliacao_id, a.estado AS avaliacao_estado
+            al.id AS lider_avaliacao_id, al.estado AS lider_estado,
+            au.id AS auto_avaliacao_id, au.estado AS auto_estado
        FROM rh.ciclo_avaliacao ca
        JOIN rh.colaborador c ON c.id = ca.colaborador_id
        JOIN rh.colaborador g ON g.id = ca.avaliador_colaborador_id
-       LEFT JOIN rh.avaliacao a ON a.ciclo_id = ca.id
+       LEFT JOIN rh.avaliacao al ON al.ciclo_id = ca.id AND al.papel = 'lider'
+       LEFT JOIN rh.avaliacao au ON au.ciclo_id = ca.id AND au.papel = 'auto'
       WHERE ca.id = $1
       FOR UPDATE OF ca`,
     [id]
   );
   if (rows.length === 0) return null;
+  const r = rows[0];
   return {
-    ...rows[0],
-    id: Number(rows[0].id),
-    colaborador_id: Number(rows[0].colaborador_id),
-    avaliador_usuario_id: Number(rows[0].avaliador_usuario_id),
-    modelo_versao_id: Number(rows[0].modelo_versao_id),
-    avaliacao_id:
-      rows[0].avaliacao_id === null ? null : Number(rows[0].avaliacao_id),
+    id: Number(r.id),
+    colaborador_id: Number(r.colaborador_id),
+    colaborador_nome: r.colaborador_nome,
+    matricula: r.matricula,
+    avaliador_colaborador_id: Number(r.avaliador_colaborador_id),
+    avaliador_usuario_id: Number(r.avaliador_usuario_id),
+    colaborador_usuario_id:
+      r.colaborador_usuario_id === null ? null : Number(r.colaborador_usuario_id),
+    tipo: r.tipo,
+    status: r.status,
+    modelo_versao_id: Number(r.modelo_versao_id),
+    lider_avaliacao_id:
+      r.lider_avaliacao_id === null ? null : Number(r.lider_avaliacao_id),
+    lider_estado: r.lider_estado,
+    auto_avaliacao_id:
+      r.auto_avaliacao_id === null ? null : Number(r.auto_avaliacao_id),
+    auto_estado: r.auto_estado,
   };
 }
 
@@ -498,15 +530,27 @@ async function detalharCriados(
   }));
 }
 
-/** Cria a linha de resposta (rascunho) de cada ciclo recém-aberto. */
+/**
+ * Cria as linhas de resposta (rascunho) de cada ciclo recém-aberto. Uma do
+ * LÍDER para TODO ciclo (avaliador = o designado do ciclo); e a AUTO só para os
+ * de DESEMPENHO (avaliador = o próprio avaliado), onde a autoavaliação é
+ * obrigatória (0067). Experiência (45/90) segue só com o líder.
+ */
 async function criarAvaliacoes(
   cliente: PoolClient,
   cicloIds: number[]
 ): Promise<void> {
   if (cicloIds.length === 0) return;
   await cliente.query(
-    `INSERT INTO rh.avaliacao (ciclo_id)
-     SELECT unnest($1::bigint[])`,
+    `INSERT INTO rh.avaliacao (ciclo_id, papel, avaliador_colaborador_id)
+     SELECT ca.id, 'lider', ca.avaliador_colaborador_id
+       FROM rh.ciclo_avaliacao ca
+      WHERE ca.id = ANY($1::bigint[])
+     UNION ALL
+     SELECT ca.id, 'auto', ca.colaborador_id
+       FROM rh.ciclo_avaliacao ca
+      WHERE ca.id = ANY($1::bigint[])
+        AND ca.tipo = 'desempenho'`,
     [cicloIds]
   );
 }
@@ -739,22 +783,421 @@ export async function listarRespostasComCliente(
   }));
 }
 
-/** Linha de resposta do ciclo (rascunho) — criada com o ciclo; garante aqui. */
+/**
+ * Garante a linha de resposta (rascunho) do PAPEL pedido — normalmente já existe
+ * desde a abertura (criarAvaliacoes); é a rede de segurança para ciclos legados.
+ * O avaliador sai do próprio ciclo: papel 'auto' → o avaliado; 'lider' → o
+ * avaliador designado. Chaveado por (ciclo, papel), nunca só por ciclo (0067).
+ */
 export async function garantirAvaliacao(
   cliente: PoolClient,
-  cicloId: number
+  cicloId: number,
+  papel: "lider" | "auto"
 ): Promise<number> {
   await cliente.query(
-    `INSERT INTO rh.avaliacao (ciclo_id)
-     VALUES ($1)
-     ON CONFLICT (ciclo_id) DO NOTHING`,
-    [cicloId]
+    `INSERT INTO rh.avaliacao (ciclo_id, papel, avaliador_colaborador_id)
+     SELECT ca.id, $2,
+            CASE $2 WHEN 'auto' THEN ca.colaborador_id
+                    ELSE ca.avaliador_colaborador_id END
+       FROM rh.ciclo_avaliacao ca
+      WHERE ca.id = $1
+     ON CONFLICT (ciclo_id, papel) DO NOTHING`,
+    [cicloId, papel]
   );
   const { rows } = await cliente.query<{ id: string }>(
-    `SELECT id FROM rh.avaliacao WHERE ciclo_id = $1`,
-    [cicloId]
+    `SELECT id FROM rh.avaliacao WHERE ciclo_id = $1 AND papel = $2`,
+    [cicloId, papel]
   );
   return Number(rows[0].id);
+}
+
+// ------------------------------------------------------------------ autoavaliação (papel=auto)
+
+export interface AutoavaliacaoResumo {
+  ciclo_id: number;
+  tipo: TipoCiclo;
+  status: StatusCiclo;
+  prazo: string;
+  dias_para_prazo: number;
+  modelo_versao: number;
+  modelo_nome: string;
+  estado: "rascunho" | "enviada" | null;
+}
+
+/** As autoavaliações do PRÓPRIO colaborador (papel=auto; ciclos de desempenho). */
+export async function listarAutoavaliacoesDoColaborador(
+  usuarioId: number
+): Promise<AutoavaliacaoResumo[]> {
+  const linhas = await consultar<{
+    ciclo_id: string;
+    tipo: TipoCiclo;
+    status: StatusCiclo;
+    prazo: string;
+    dias_para_prazo: number;
+    modelo_versao: number;
+    modelo_nome: string;
+    estado: "rascunho" | "enviada" | null;
+  }>(
+    `SELECT ca.id AS ciclo_id, ca.tipo, ca.status, ca.prazo::text AS prazo,
+            (ca.prazo - ${HOJE_SP})::int AS dias_para_prazo,
+            m.versao AS modelo_versao, m.nome AS modelo_nome,
+            a.estado
+       FROM rh.ciclo_avaliacao ca
+       JOIN rh.colaborador c ON c.id = ca.colaborador_id
+       JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
+       JOIN rh.avaliacao a ON a.ciclo_id = ca.id AND a.papel = 'auto'
+      WHERE c.usuario_id = $1 AND ca.tipo = 'desempenho'
+      ORDER BY (a.estado IS DISTINCT FROM 'enviada') DESC,
+               (ca.status IN ('aberto','em_avaliacao')) DESC, ca.prazo, ca.id`,
+    [usuarioId]
+  );
+  return linhas.map((l) => ({ ...l, ciclo_id: Number(l.ciclo_id) }));
+}
+
+export interface AutoavaliacaoDetalhe {
+  ciclo_id: number;
+  colaborador_nome: string;
+  tipo: TipoCiclo;
+  status: StatusCiclo;
+  prazo: string;
+  dias_para_prazo: number;
+  modelo_versao_id: number;
+  modelo_versao: number;
+  modelo_nome: string;
+  avaliacao_id: number | null;
+  estado: "rascunho" | "enviada" | null;
+}
+
+/**
+ * Uma autoavaliação para o próprio colaborador responder — CEGA: traz só o
+ * ciclo/modelo e o estado da linha 'auto'. NUNCA toca a avaliação do líder nem
+ * o resultado (é o que garante que o colaborador não copie a nota do líder).
+ * Escopo pelo usuário da sessão (c.usuario_id = $2), nunca pela requisição.
+ */
+export async function buscarAutoavaliacao(
+  cicloId: number,
+  usuarioId: number
+): Promise<AutoavaliacaoDetalhe | null> {
+  const linhas = await consultar<{
+    ciclo_id: string;
+    colaborador_nome: string;
+    tipo: TipoCiclo;
+    status: StatusCiclo;
+    prazo: string;
+    dias_para_prazo: number;
+    modelo_versao_id: string;
+    modelo_versao: number;
+    modelo_nome: string;
+    avaliacao_id: string | null;
+    estado: "rascunho" | "enviada" | null;
+  }>(
+    `SELECT ca.id AS ciclo_id, c.nome_completo AS colaborador_nome,
+            ca.tipo, ca.status, ca.prazo::text AS prazo,
+            (ca.prazo - ${HOJE_SP})::int AS dias_para_prazo,
+            ca.modelo_versao_id, m.versao AS modelo_versao, m.nome AS modelo_nome,
+            a.id AS avaliacao_id, a.estado
+       FROM rh.ciclo_avaliacao ca
+       JOIN rh.colaborador c ON c.id = ca.colaborador_id
+       JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
+       LEFT JOIN rh.avaliacao a ON a.ciclo_id = ca.id AND a.papel = 'auto'
+      WHERE ca.id = $1 AND ca.tipo = 'desempenho' AND c.usuario_id = $2`,
+    [cicloId, usuarioId]
+  );
+  if (linhas.length === 0) return null;
+  const l = linhas[0];
+  return {
+    ...l,
+    ciclo_id: Number(l.ciclo_id),
+    modelo_versao_id: Number(l.modelo_versao_id),
+    avaliacao_id: l.avaliacao_id === null ? null : Number(l.avaliacao_id),
+  };
+}
+
+export interface RespostaAutoNomeada {
+  indicador_nome: string;
+  pilar_nome: string;
+  nota: number | null;
+  nao_observado: boolean;
+}
+
+/**
+ * As respostas da autoavaliação ENVIADA de um ciclo, com nome do indicador e do
+ * pilar — insumo dos "pontos cegos" (auto × líder) do PDI. Vazio se não houver
+ * auto enviada (experiência, ou ciclo sem autoavaliação): o PDI segue sem cegos.
+ */
+export async function listarRespostasAutoDoCiclo(
+  cicloId: number
+): Promise<RespostaAutoNomeada[]> {
+  return consultar<{
+    indicador_nome: string;
+    pilar_nome: string;
+    nota: number | null;
+    nao_observado: boolean;
+  }>(
+    `SELECT i.nome AS indicador_nome, p.nome AS pilar_nome,
+            r.nota, r.nao_observado
+       FROM rh.avaliacao a
+       JOIN rh.resposta_item r ON r.avaliacao_id = a.id
+       JOIN rh.indicador_avaliacao i ON i.id = r.indicador_avaliacao_id
+       JOIN rh.pilar_avaliacao p ON p.id = i.pilar_id
+      WHERE a.ciclo_id = $1 AND a.papel = 'auto' AND a.estado = 'enviada'`,
+    [cicloId]
+  );
+}
+
+// ------------------------------------------------------------------ 360 de pares (papel=par)
+
+export interface ParDoCiclo {
+  colaborador_id: number;
+  nome: string;
+  cargo: string | null;
+  estado: "rascunho" | "enviada" | null;
+}
+
+/** Os pares já selecionados de um ciclo (com o estado de cada avaliação). */
+export async function listarParesDoCiclo(
+  cicloId: number
+): Promise<ParDoCiclo[]> {
+  const linhas = await consultar<{
+    colaborador_id: string;
+    nome: string;
+    cargo: string | null;
+    estado: "rascunho" | "enviada" | null;
+  }>(
+    `SELECT p.id AS colaborador_id, p.nome_completo AS nome,
+            NULL::text AS cargo, a.estado
+       FROM rh.avaliacao a
+       JOIN rh.colaborador p ON p.id = a.avaliador_colaborador_id
+      WHERE a.ciclo_id = $1 AND a.papel = 'par'
+      ORDER BY p.nome_completo`,
+    [cicloId]
+  );
+  return linhas.map((l) => ({ ...l, colaborador_id: Number(l.colaborador_id) }));
+}
+
+export interface CandidatoPar {
+  colaborador_id: number;
+  nome: string;
+  cargo: string | null;
+  ja_selecionado: boolean;
+}
+
+/**
+ * Candidatos a par: os colegas de equipe do avaliado (mesmo gestor vigente que o
+ * avaliador do ciclo), fora o próprio avaliado. Marca quem já foi selecionado.
+ */
+export async function listarCandidatosPares(
+  cicloId: number
+): Promise<CandidatoPar[]> {
+  const linhas = await consultar<{
+    colaborador_id: string;
+    nome: string;
+    cargo: string | null;
+    ja_selecionado: boolean;
+  }>(
+    `SELECT c.id AS colaborador_id, c.nome_completo AS nome, NULL::text AS cargo,
+            EXISTS (SELECT 1 FROM rh.avaliacao a
+                     WHERE a.ciclo_id = ca.id AND a.papel = 'par'
+                       AND a.avaliador_colaborador_id = c.id) AS ja_selecionado
+       FROM rh.ciclo_avaliacao ca
+       JOIN rh.relacao_gestor rg
+         ON rg.gestor_colaborador_id = ca.avaliador_colaborador_id
+        AND rg.fim_vigencia IS NULL
+        AND rg.inicio_vigencia <= ${HOJE_SP}
+       JOIN rh.colaborador c ON c.id = rg.liderado_colaborador_id
+      WHERE ca.id = $1 AND c.id <> ca.colaborador_id
+      ORDER BY c.nome_completo`,
+    [cicloId]
+  );
+  return linhas.map((l) => ({
+    ...l,
+    colaborador_id: Number(l.colaborador_id),
+  }));
+}
+
+/** Cria a linha de par (rascunho). A coerência (par ≠ avaliado/líder) é do gatilho. */
+export async function inserirPar(
+  cliente: PoolClient,
+  cicloId: number,
+  parColaboradorId: number
+): Promise<void> {
+  await cliente.query(
+    `INSERT INTO rh.avaliacao (ciclo_id, papel, avaliador_colaborador_id)
+     VALUES ($1, 'par', $2)
+     ON CONFLICT (ciclo_id, avaliador_colaborador_id)
+       WHERE papel = 'par' DO NOTHING`,
+    [cicloId, parColaboradorId]
+  );
+}
+
+/** Remove um par ainda em rascunho (junto das respostas que tiver salvo). */
+export async function removerPar(
+  cliente: PoolClient,
+  cicloId: number,
+  parColaboradorId: number
+): Promise<number> {
+  await cliente.query(
+    `DELETE FROM rh.resposta_item
+      WHERE avaliacao_id IN (
+        SELECT id FROM rh.avaliacao
+         WHERE ciclo_id = $1 AND papel = 'par'
+           AND avaliador_colaborador_id = $2 AND estado = 'rascunho')`,
+    [cicloId, parColaboradorId]
+  );
+  const { rowCount } = await cliente.query(
+    `DELETE FROM rh.avaliacao
+      WHERE ciclo_id = $1 AND papel = 'par'
+        AND avaliador_colaborador_id = $2 AND estado = 'rascunho'`,
+    [cicloId, parColaboradorId]
+  );
+  return rowCount ?? 0;
+}
+
+export interface AvaliacaoDeParDetalhe {
+  ciclo_id: number;
+  avaliado_nome: string;
+  tipo: TipoCiclo;
+  status: StatusCiclo;
+  prazo: string;
+  dias_para_prazo: number;
+  modelo_versao_id: number;
+  modelo_versao: number;
+  modelo_nome: string;
+  avaliacao_id: number | null;
+  estado: "rascunho" | "enviada" | null;
+}
+
+/**
+ * A avaliação de par para o colega responder — CEGA ao líder/auto/resultado. O
+ * par VÊ o nome do avaliado (precisa saber quem avalia); o que é anônimo é a
+ * resposta DELE perante o avaliado, garantido na agregação. Escopo: o usuário da
+ * sessão tem de ser o par (avaliador_colaborador da linha 'par').
+ */
+export async function buscarAvaliacaoDePar(
+  cicloId: number,
+  usuarioId: number
+): Promise<AvaliacaoDeParDetalhe | null> {
+  const linhas = await consultar<{
+    ciclo_id: string;
+    avaliado_nome: string;
+    tipo: TipoCiclo;
+    status: StatusCiclo;
+    prazo: string;
+    dias_para_prazo: number;
+    modelo_versao_id: string;
+    modelo_versao: number;
+    modelo_nome: string;
+    avaliacao_id: string | null;
+    estado: "rascunho" | "enviada" | null;
+  }>(
+    `SELECT ca.id AS ciclo_id, cc.nome_completo AS avaliado_nome,
+            ca.tipo, ca.status, ca.prazo::text AS prazo,
+            (ca.prazo - ${HOJE_SP})::int AS dias_para_prazo,
+            ca.modelo_versao_id, m.versao AS modelo_versao, m.nome AS modelo_nome,
+            a.id AS avaliacao_id, a.estado
+       FROM rh.avaliacao a
+       JOIN rh.colaborador p ON p.id = a.avaliador_colaborador_id
+       JOIN rh.ciclo_avaliacao ca ON ca.id = a.ciclo_id
+       JOIN rh.colaborador cc ON cc.id = ca.colaborador_id
+       JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
+      WHERE a.ciclo_id = $1 AND a.papel = 'par' AND p.usuario_id = $2`,
+    [cicloId, usuarioId]
+  );
+  if (linhas.length === 0) return null;
+  const l = linhas[0];
+  return {
+    ...l,
+    ciclo_id: Number(l.ciclo_id),
+    modelo_versao_id: Number(l.modelo_versao_id),
+    avaliacao_id: l.avaliacao_id === null ? null : Number(l.avaliacao_id),
+  };
+}
+
+export interface AvaliacaoDeParResumo {
+  ciclo_id: number;
+  avaliado_nome: string;
+  tipo: TipoCiclo;
+  status: StatusCiclo;
+  prazo: string;
+  dias_para_prazo: number;
+  modelo_nome: string;
+  estado: "rascunho" | "enviada" | null;
+}
+
+/** As avaliações de par que pediram AO colaborador da sessão (pendentes primeiro). */
+export async function listarAvaliacoesDeParDoColaborador(
+  usuarioId: number
+): Promise<AvaliacaoDeParResumo[]> {
+  const linhas = await consultar<{
+    ciclo_id: string;
+    avaliado_nome: string;
+    tipo: TipoCiclo;
+    status: StatusCiclo;
+    prazo: string;
+    dias_para_prazo: number;
+    modelo_nome: string;
+    estado: "rascunho" | "enviada" | null;
+  }>(
+    `SELECT ca.id AS ciclo_id, cc.nome_completo AS avaliado_nome,
+            ca.tipo, ca.status, ca.prazo::text AS prazo,
+            (ca.prazo - ${HOJE_SP})::int AS dias_para_prazo,
+            m.nome AS modelo_nome, a.estado
+       FROM rh.avaliacao a
+       JOIN rh.colaborador p ON p.id = a.avaliador_colaborador_id
+       JOIN rh.ciclo_avaliacao ca ON ca.id = a.ciclo_id
+       JOIN rh.colaborador cc ON cc.id = ca.colaborador_id
+       JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
+      WHERE p.usuario_id = $1 AND a.papel = 'par'
+        AND ca.status IN ('aberto','em_avaliacao','consolidado')
+      ORDER BY (a.estado IS DISTINCT FROM 'enviada') DESC, ca.prazo, ca.id`,
+    [usuarioId]
+  );
+  return linhas.map((l) => ({ ...l, ciclo_id: Number(l.ciclo_id) }));
+}
+
+export interface AgregadoParIndicador {
+  indicador_nome: string;
+  pilar_nome: string;
+  media: number;
+  respostas: number;
+}
+
+/** Quantos pares ENVIARAM a avaliação (base do piso de anonimato). */
+export async function contarParesEnviados(cicloId: number): Promise<number> {
+  const linhas = await consultar<{ n: string }>(
+    `SELECT count(*) AS n FROM rh.avaliacao
+      WHERE ciclo_id = $1 AND papel = 'par' AND estado = 'enviada'`,
+    [cicloId]
+  );
+  return Number(linhas[0]?.n ?? 0);
+}
+
+/**
+ * Média dos pares por indicador (só notas de avaliações de par ENVIADAS). Cru: a
+ * DECISÃO do piso de anonimato é do serviço — aqui é só a agregação, e ela nunca
+ * traz qual par deu qual nota.
+ */
+export async function agregarParesDoCiclo(
+  cicloId: number
+): Promise<AgregadoParIndicador[]> {
+  return consultar<{
+    indicador_nome: string;
+    pilar_nome: string;
+    media: number;
+    respostas: number;
+  }>(
+    `SELECT i.nome AS indicador_nome, p.nome AS pilar_nome,
+            round(avg(r.nota), 2)::float8 AS media,
+            count(r.nota)::int AS respostas
+       FROM rh.avaliacao a
+       JOIN rh.resposta_item r ON r.avaliacao_id = a.id AND r.nota IS NOT NULL
+       JOIN rh.indicador_avaliacao i ON i.id = r.indicador_avaliacao_id
+       JOIN rh.pilar_avaliacao p ON p.id = i.pilar_id
+      WHERE a.ciclo_id = $1 AND a.papel = 'par' AND a.estado = 'enviada'
+      GROUP BY i.nome, p.nome
+      ORDER BY p.nome, i.nome`,
+    [cicloId]
+  );
 }
 
 /** Upsert do rascunho — o gatilho do banco valida modelo e imutabilidade. */

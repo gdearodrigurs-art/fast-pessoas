@@ -390,6 +390,17 @@ export function DetalheAvaliacao({ id }: { id: number }) {
                   <li key={item}>{item}</li>
                 ))}
               </ul>
+              {ciclo.tipo === "desempenho" &&
+                (detalhe.pode.sou_avaliador || detalhe.pode.resultado_ver) && (
+                  <p style={{ marginTop: 8 }}>
+                    <Link
+                      href={`/avaliacoes/${ciclo.id}/pares`}
+                      style={{ color: "#2b6cb0", fontWeight: 600, fontSize: 14 }}
+                    >
+                      Gerir pares do 360 →
+                    </Link>
+                  </p>
+                )}
               {!detalhe.pode.sou_avaliador && !detalhe.pode.resultado_ver && (
                 <p className={estilos.notaLGPD}>
                   Notas por indicador e resultado consolidado são restritos

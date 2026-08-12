@@ -18,6 +18,24 @@ export interface CompetenciaAnonima {
   nota: number;
 }
 
+/** Uma divergência auto × líder — sem identidade, só a comparação de notas. */
+export interface DivergenciaAnonima {
+  competencia: string;
+  /** Nota que o próprio colaborador se deu (1–5). */
+  nota_colaborador: number;
+  /** Nota que o líder deu (1–5). */
+  nota_lider: number;
+}
+
+/** Média ANÔNIMA dos pares por competência (já passou o piso de anonimato). */
+export interface ParAgregadoAnonimo {
+  competencia: string;
+  /** Média das notas dos pares (1–5). */
+  media_pares: number;
+  /** Quantos pares responderam a competência. */
+  respostas: number;
+}
+
 export interface AvaliacaoAnonima {
   /** Contexto útil ao PDI, não identificador. Opcional em v1. */
   cargo?: string;
@@ -26,6 +44,17 @@ export interface AvaliacaoAnonima {
   faixa: string;
   recomendacao: string;
   competencias: CompetenciaAnonima[];
+  /**
+   * Divergências entre a autoavaliação do colaborador e a do líder (pontos
+   * cegos). Ausente/vazio quando não houve autoavaliação — aí o PDI segue só
+   * com a visão do líder, como antes.
+   */
+  divergencias_auto_lider?: DivergenciaAnonima[];
+  /**
+   * Visão dos PARES (360), agregada e anônima, por competência. Só vem quando o
+   * número de pares que responderam atingiu o piso de anonimato — senão ausente.
+   */
+  pares_agregado?: ParAgregadoAnonimo[];
 }
 
 export const INSTRUCAO_PDI = [
@@ -38,7 +67,7 @@ export const INSTRUCAO_PDI = [
   "3. Proponha de 1 a 4 focos de desenvolvimento, priorizando as competências de nota mais baixa (escala 1–5).",
   "4. Para cada foco: 'porque' ancorado nas notas, um 'objetivo' claro e de 1 a 3 'acoes' concretas, cada uma com um prazo dentro do horizonte informado.",
   "5. Se o contexto livre trouxer informação relevante, incorpore-a nas ações — sem repeti-la literalmente.",
-  "6. 'pontos_cegos' fica VAZIO por enquanto (ainda não há autoavaliação para comparar).",
+  "6. 'pontos_cegos': compare as perspectivas quando existirem. Se houver 'divergencias_auto_lider', escreva pontos cegos onde o colaborador se avaliou ACIMA do líder (pode superestimar; trate com evidência) ou ABAIXO (pode subestimar; reforce a confiança), citando a competência e as duas notas. Se houver 'pares_agregado' (média ANÔNIMA dos pares — jamais cite um par individual), some pontos cegos onde a média dos pares divergir do líder: é o olhar externo do 360. Escreva de 1 a 4 pontos cegos no total; se não houver nem auto nem pares, deixe 'pontos_cegos' VAZIO.",
   "7. Escreva um 'resumo' curto (2 a 4 frases), em frases completas e bem pontuadas — sem emendas, repetições ou frases cortadas.",
   "8. Tom profissional e respeitoso; nada de julgamento pessoal, só desenvolvimento.",
 ].join("\n");
