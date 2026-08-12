@@ -2024,6 +2024,25 @@ async function aplicarEfeito(
    */
   naAprovacaoFinal: boolean
 ): Promise<void> {
+  // Trava de chave DENTRO do efeito, para valer nos DOIS caminhos (aprovação
+  // final imediata e efeito programado): transferir entre empresas do grupo
+  // ENCERRA um contrato e ABRE outro — ato que exige a chave própria. Antes, a
+  // aprovação final aplicava a transferência conferindo só movimentacao.aprovar.*,
+  // sem esta chave (a diretoria a tem; um papel só-aprovador não teria). (revisão)
+  //
+  // rh.posicao.editar NÃO é exigido aqui de propósito: na aprovação final a
+  // própria CADEIA que acabou de aprovar autoriza a mudança de posição (a
+  // diretoria não tem rh.posicao.editar). Essa chave segue exigida no caminho
+  // PROGRAMADO (aplicarEfeitoProgramado), aplicado FORA da cadeia pelo DP.
+  if (
+    movimentacao.tipo === "transferencia_empresa" &&
+    !(await temPermissao(sessao.usuario_id, "movimentacao.transferir_empresa"))
+  ) {
+    throw new ErroHttp(
+      403,
+      "Transferência entre empresas do grupo é ato de DP ou da diretoria."
+    );
+  }
   const data = movimentacao.data_pretendida;
   const diffEfeito: Diff = {
     "Data de vigência": { de: null, para: formatarData(data) },
