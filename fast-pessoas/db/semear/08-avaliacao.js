@@ -443,12 +443,17 @@ const JUSTIFICATIVAS_EXPERIENCIA = [
 // ------------------------------------------------------------------ leitura do banco
 
 async function carregarEstrutura(cliente) {
+  // O lote de desempenho da demo é company-wide e a geração de notas assume UMA
+  // estrutura para todos — usa o modelo GERAL (cargo_id IS NULL), o piso. Com a
+  // 0074, modelos por cargo podem coexistir; sem este filtro, o SELECT pegaria um
+  // modelo de cargo arbitrário e misturaria estruturas entre os avaliados.
   const { rows: modelos } = await cliente.query(
-    `SELECT id, versao, nome FROM rh.modelo_avaliacao_versao WHERE status = 'ativa'`
+    `SELECT id, versao, nome FROM rh.modelo_avaliacao_versao
+      WHERE status = 'ativa' AND cargo_id IS NULL`
   );
   if (modelos.length === 0) {
     throw new Error(
-      'nenhuma versão ATIVA do modelo de avaliação — o seed da migration 0011 precisa estar aplicado'
+      'nenhuma versão ATIVA do modelo GERAL de avaliação — o seed da migration 0011 precisa estar aplicado'
     );
   }
   const modeloId = Number(modelos[0].id);
