@@ -280,6 +280,38 @@ test("esquemaAcaoPdi: modalidade vazia vira ausência; enum inválido é rejeita
   assert.equal(bad.success, false);
 });
 
+test("esquemaConteudoPdi: aceita a prosa longa que a IA gera (regressão do 502)", () => {
+  // O structured output não impõe tamanho de texto; a IA escreve ponto cego em
+  // SBI, indicador e apoio bem acima de 500 chars. Os tetos do zod têm de dar
+  // essa folga — este teste barra quem apertá-los de novo.
+  const r = esquemaConteudoPdi.safeParse({
+    focos: [
+      {
+        competencia: "Resultado",
+        porque: "b".repeat(1800),
+        objetivo: "c".repeat(1800),
+        nivel_atual: "acompanha o resultado com apoio do gestor",
+        nivel_desejado: "apura, explica e defende os próprios números sozinho",
+        acoes: [
+          {
+            descricao: "d".repeat(1200),
+            prazo_sugerido: "a partir do 2º mês, mensalmente até o 6º, com check-in quinzenal",
+            modalidade: "experiencia",
+            indicador: "e".repeat(1500),
+            apoio: "f".repeat(900),
+            tipo: "enderecar_lacuna",
+          },
+        ],
+      },
+    ],
+    pontos_cegos: [
+      { competencia: "Resultado", direcao: "superavaliado", texto: "g".repeat(900) },
+    ],
+    resumo: "h".repeat(1200),
+  });
+  assert.equal(r.success, true);
+});
+
 test("esquemaConteudoPdi rejeita plano sem focos ou ação vazia", () => {
   assert.equal(
     esquemaConteudoPdi.safeParse({ focos: [], resumo: "x" }).success,

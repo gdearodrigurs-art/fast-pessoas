@@ -117,15 +117,22 @@ export const ROTULOS_DIRECAO_PONTO_CEGO: Record<DirecaoPontoCego, string> = {
 // campos da estrutura rica são OPCIONAIS aqui (o humano pode limpar; "" e null
 // viram ausência); o motor avisa quando faltam, mas nunca bloqueia.
 
+// Os tetos (.max) são trava de SANIDADE, não regra de negócio — e precisam ser
+// FOLGADOS: o structured output (ESQUEMA_SAIDA_PDI) não impõe tamanho de texto,
+// então quem escreve na medida é o zod. Depois da Fase A, a IA escreve ponto
+// cego em SBI, indicador e apoio bem mais longos; tetos apertados rejeitavam
+// saídas boas (502 intermitente). Aqui damos margem larga; o piso (min) é o que
+// importa de fato.
+
 export const esquemaAcaoPdi = z.object({
-  descricao: z.string().trim().min(3).max(2000),
-  prazo_sugerido: z.string().trim().max(200),
+  descricao: z.string().trim().min(3).max(4000),
+  prazo_sugerido: z.string().trim().max(600),
   modalidade: z.preprocess(
     (v) => (v === "" || v === null ? undefined : v),
     z.enum(MODALIDADES_ACAO).optional()
   ),
-  indicador: z.string().trim().max(1000).optional(),
-  apoio: z.string().trim().max(500).optional(),
+  indicador: z.string().trim().max(3000).optional(),
+  apoio: z.string().trim().max(1500).optional(),
   tipo: z.preprocess(
     (v) => (v === "" || v === null ? undefined : v),
     z.enum(TIPOS_ACAO).optional()
@@ -133,11 +140,11 @@ export const esquemaAcaoPdi = z.object({
 });
 
 export const esquemaFocoPdi = z.object({
-  competencia: z.string().trim().min(1).max(200),
-  porque: z.string().trim().min(1).max(2000),
-  objetivo: z.string().trim().min(1).max(2000),
-  nivel_atual: z.string().trim().max(200).optional(),
-  nivel_desejado: z.string().trim().max(200).optional(),
+  competencia: z.string().trim().min(1).max(400),
+  porque: z.string().trim().min(1).max(4000),
+  objetivo: z.string().trim().min(1).max(4000),
+  nivel_atual: z.string().trim().max(600).optional(),
+  nivel_desejado: z.string().trim().max(600).optional(),
   acoes: z.array(esquemaAcaoPdi).min(1).max(6),
 });
 
@@ -153,7 +160,7 @@ export const esquemaPontoCegoPdi = z.preprocess(
       (v) => (v === "" || v === null ? undefined : v),
       z.enum(DIRECOES_PONTO_CEGO).optional()
     ),
-    texto: z.string().trim().min(1).max(500),
+    texto: z.string().trim().min(1).max(2000),
   })
 );
 
