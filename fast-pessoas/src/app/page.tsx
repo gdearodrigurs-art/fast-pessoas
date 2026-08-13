@@ -16,6 +16,7 @@ interface Permissoes extends Record<string, unknown> {
   avaliacao_acessar: boolean;
   autoavaliacao_pendente: boolean;
   avaliacao_par_pendente: boolean;
+  meu_pdi_acessar: boolean;
   pdi_acessar: boolean;
   recrutamento_acessar: boolean;
   ponto_proprio: boolean;
@@ -141,7 +142,14 @@ export default async function PaginaInicial() {
           WHERE a.papel = 'par' AND p.usuario_id = $1
             AND ca.status IN ('aberto','em_avaliacao','consolidado')
             AND a.estado <> 'enviada'
-       )                                                           AS avaliacao_par_pendente`,
+       )                                                           AS avaliacao_par_pendente,
+       -- Meu PDI: o card aparece se a PESSOA tem um plano homologado (aceitar e
+       -- acompanhar). Escopo pela pessoa — o PDI segue a pessoa, não o vínculo.
+       EXISTS (
+         SELECT 1 FROM rh.pdi p
+          WHERE p.status = 'homologado'
+            AND p.pessoa_id = (SELECT pessoa_id FROM sistema.usuario WHERE id = $1)
+       )                                                           AS meu_pdi_acessar`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -184,6 +192,13 @@ export default async function PaginaInicial() {
           descricao:
             "Um gestor pediu a sua visão sobre um colega. Resposta anônima e agregada. Só aparece quando há uma pendente.",
           mostrar: pode?.avaliacao_par_pendente ?? false,
+        },
+        {
+          href: "/meu-pdi",
+          titulo: "Meu PDI",
+          descricao:
+            "Seu plano de desenvolvimento: aceite o que foi combinado e registre como cada passo evolui. Só aparece quando há um plano homologado.",
+          mostrar: pode?.meu_pdi_acessar ?? false,
         },
         {
           href: "/demandas",
