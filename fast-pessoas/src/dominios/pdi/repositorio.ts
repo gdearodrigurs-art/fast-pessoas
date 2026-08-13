@@ -112,6 +112,7 @@ export interface PdiGravado {
   gerado_em: string;
   submetido_em: string | null;
   homologado_em: string | null;
+  aceito_em: string | null;
 }
 
 export async function inserirPdi(
@@ -164,6 +165,7 @@ function paraPdi(linha: Record<string, unknown>): PdiGravado {
     submetido_em: linha.submetido_em === null ? null : String(linha.submetido_em),
     homologado_em:
       linha.homologado_em === null ? null : String(linha.homologado_em),
+    aceito_em: linha.aceito_em === null ? null : String(linha.aceito_em),
   };
 }
 
@@ -171,7 +173,7 @@ const SELECT_PDI = `
   SELECT p.id, p.pessoa_id, ps.nome_completo AS pessoa_nome, p.ciclo_id, p.status,
          p.parametros, p.rascunho_ia, p.conteudo, p.avisos, p.modelo_ia,
          u.nome AS gerado_por_nome, p.gerado_em, p.submetido_em, p.homologado_em,
-         p.gerado_por
+         p.aceito_em, p.gerado_por
     FROM rh.pdi p
     JOIN rh.pessoa ps ON ps.id = p.pessoa_id
     JOIN sistema.usuario u ON u.id = p.gerado_por`;
@@ -185,6 +187,88 @@ export async function buscarPdi(
   );
   if (linhas.length === 0) return null;
   return { ...paraPdi(linhas[0]), gerado_por: Number(linhas[0].gerado_por) };
+}
+
+export interface RegistroAndamentoPdi {
+  id: number;
+  texto: string;
+  status_novo: string | null;
+  autor_nome: string;
+  criado_em: string;
+}
+export interface AcaoAcompanhada {
+  id: number;
+  descricao: string;
+  prazo: string;
+  status: string;
+  dias_ate_prazo: number;
+  andamento: RegistroAndamentoPdi[];
+}
+
+/**
+ * O acompanhamento das ações de um PDI: cada ação com o log que o colaborador
+ * foi registrando (rh.acao_andamento). Só existe depois da homologação — as
+ * ações nascem em rh.acao_aberta ali. Escopo pelo pdi_id; quem chega aqui já
+ * passou pela autorização de verPdi (pdi.ver + alcance/autoria).
+ */
+export async function acompanhamentoDoPdi(
+  pdiId: number
+): Promise<AcaoAcompanhada[]> {
+  const acoes = await consultar<{
+    id: string;
+    descricao: string;
+    prazo: string;
+    status: string;
+    dias_ate_prazo: number;
+  }>(
+    `SELECT a.id, a.descricao, a.prazo::text AS prazo, a.status,
+            (a.prazo - ${HOJE_SP})::int AS dias_ate_prazo
+       FROM rh.acao_aberta a
+      WHERE a.pdi_id = $1
+      ORDER BY (a.status = 'concluida'), a.prazo, a.id`,
+    [pdiId]
+  );
+  if (acoes.length === 0) return [];
+
+  const registros = await consultar<{
+    id: string;
+    acao_aberta_id: string;
+    texto: string;
+    status_novo: string | null;
+    autor_nome: string;
+    criado_em: string;
+  }>(
+    `SELECT an.id, an.acao_aberta_id, an.texto, an.status_novo,
+            u.nome AS autor_nome, an.criado_em::text AS criado_em
+       FROM rh.acao_andamento an
+       JOIN rh.acao_aberta a ON a.id = an.acao_aberta_id
+       JOIN sistema.usuario u ON u.id = an.autor_usuario_id
+      WHERE a.pdi_id = $1
+      ORDER BY an.criado_em, an.id`,
+    [pdiId]
+  );
+  const porAcao = new Map<number, RegistroAndamentoPdi[]>();
+  for (const r of registros) {
+    const chave = Number(r.acao_aberta_id);
+    const lista = porAcao.get(chave) ?? [];
+    lista.push({
+      id: Number(r.id),
+      texto: r.texto,
+      status_novo: r.status_novo,
+      autor_nome: r.autor_nome,
+      criado_em: r.criado_em,
+    });
+    porAcao.set(chave, lista);
+  }
+
+  return acoes.map((a) => ({
+    id: Number(a.id),
+    descricao: a.descricao,
+    prazo: a.prazo,
+    status: a.status,
+    dias_ate_prazo: a.dias_ate_prazo,
+    andamento: porAcao.get(Number(a.id)) ?? [],
+  }));
 }
 
 /** Lista os PDIs: amplos veem todos; os demais veem os que geraram. */

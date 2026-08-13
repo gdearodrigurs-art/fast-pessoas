@@ -32,6 +32,7 @@ import {
   type ParAgregadoAnonimo,
 } from "./instrucao";
 import {
+  acompanhamentoDoPdi,
   atualizarConteudo,
   buscarPdi,
   contextoDoCiclo,
@@ -257,7 +258,11 @@ export async function verPdi(sessao: PayloadSessao, id: number) {
   }
   const { gerado_por: _ignorado, ...visivel } = pdi;
   void _ignorado;
-  return visivel;
+  // O acompanhamento (ações + o log que o colaborador foi registrando) só existe
+  // depois da homologação; para os demais status vem vazio. Assim o gestor/RH vê
+  // no detalhe se a pessoa aceitou e como cada passo evoluiu.
+  const acompanhamento = await acompanhamentoDoPdi(id);
+  return { ...visivel, acompanhamento };
 }
 
 // Editar/submeter: só o autor do rascunho (ou alcance amplo).

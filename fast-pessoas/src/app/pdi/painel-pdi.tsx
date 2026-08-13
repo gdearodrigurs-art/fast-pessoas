@@ -59,6 +59,22 @@ interface Pdi {
   gerado_em: string;
   submetido_em: string | null;
   homologado_em: string | null;
+  aceito_em: string | null;
+}
+interface RegistroAndamento {
+  id: number;
+  texto: string;
+  status_novo: string | null;
+  autor_nome: string;
+  criado_em: string;
+}
+interface AcaoAcompanhada {
+  id: number;
+  descricao: string;
+  prazo: string;
+  status: string;
+  dias_ate_prazo: number;
+  andamento: RegistroAndamento[];
 }
 interface Painel {
   pdis: Pdi[];
@@ -72,6 +88,51 @@ const CORES_STATUS: Record<StatusPdi, string> = {
   homologado: "#2e7d32",
   cancelado: "#777",
 };
+
+// Status das AÇÕES do plano (o que o colaborador reporta), distinto do status do PDI.
+const ROTULO_ACAO: Record<string, string> = {
+  aberta: "Pendente",
+  em_andamento: "Em andamento",
+  concluida: "Concluída",
+  cancelada: "Cancelada",
+};
+const COR_ACAO: Record<string, string> = {
+  aberta: "#6b7280",
+  em_andamento: "#b45309",
+  concluida: "#2e7d32",
+  cancelada: "#9ca3af",
+};
+function formatarDia(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("pt-BR");
+}
+function formatarInstante(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+function acaoAtrasada(a: AcaoAcompanhada): boolean {
+  return (
+    a.status !== "concluida" && a.status !== "cancelada" && a.dias_ate_prazo < 0
+  );
+}
+function PillAcao({ status }: { status: string }) {
+  return (
+    <span
+      style={{
+        fontSize: 12,
+        fontWeight: 700,
+        padding: "1px 9px",
+        borderRadius: 999,
+        color: "#fff",
+        background: COR_ACAO[status] ?? "#6b7280",
+      }}
+    >
+      {ROTULO_ACAO[status] ?? status}
+    </span>
+  );
+}
 
 const cartao: CSSProperties = {
   border: "1px solid #e2e5ea",
@@ -378,6 +439,27 @@ function DetalhePdi({
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
 
+  // O acompanhamento (ações + log do colaborador) só existe depois de homologado.
+  // Busca no detalhe (/api/pdi/[id]) para não pesar a lista com o log de todo mundo.
+  const [acompanhamento, setAcompanhamento] = useState<AcaoAcompanhada[]>([]);
+  useEffect(() => {
+    if (pdi.status !== "homologado") return;
+    let ativo = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/pdi/${pdi.id}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        if (ativo) setAcompanhamento(d.pdi?.acompanhamento ?? []);
+      } catch {
+        /* o acompanhamento é complementar; o resto do detalhe já está na tela */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [pdi.id, pdi.status]);
+
   function mudarFoco(i: number, campoNome: keyof Foco, valor: string) {
     setConteudo((c) => {
       const focos = c.focos.map((f, idx) =>
@@ -523,6 +605,94 @@ function DetalhePdi({
           <p style={{ margin: "6px 0", fontSize: 14 }}>{conteudo.resumo}</p>
         )}
       </div>
+
+      {pdi.status === "homologado" && (
+        <div style={{ borderTop: "1px solid #eee", paddingTop: 12, marginTop: 12 }}>
+          <strong>Acompanhamento do colaborador</strong>
+          <p style={{ margin: "2px 0 8px", fontSize: 12, color: "#888" }}>
+            O que a pessoa registrou no portal dela: se aceitou o plano e como cada
+            ação evoluiu.
+          </p>
+
+          <div
+            style={{
+              display: "inline-block",
+              fontSize: 13,
+              fontWeight: 600,
+              padding: "4px 12px",
+              borderRadius: 8,
+              marginBottom: 8,
+              ...(pdi.aceito_em
+                ? { background: "#eef7f0", color: "#2f5b3a" }
+                : { background: "#fff8e1", color: "#8a6d3b" }),
+            }}
+          >
+            {pdi.aceito_em
+              ? `✓ Aceito pelo colaborador em ${formatarDia(pdi.aceito_em)}`
+              : "Aguardando o aceite do colaborador"}
+          </div>
+
+          {acompanhamento.length === 0 ? (
+            <p style={{ fontSize: 13, color: "#888", margin: 0 }}>
+              Nenhuma ação publicada ainda.
+            </p>
+          ) : (
+            acompanhamento.map((a) => (
+              <div
+                key={a.id}
+                style={{ borderTop: "1px dashed #eee", paddingTop: 8, marginTop: 8 }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <span style={{ fontSize: 14, flex: 1 }}>{a.descricao}</span>
+                  <PillAcao status={a.status} />
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: acaoAtrasada(a) ? "#b91c1c" : "#888",
+                    marginTop: 2,
+                  }}
+                >
+                  Prazo: {formatarDia(a.prazo)}
+                  {acaoAtrasada(a) ? " — em atraso" : ""}
+                </div>
+                {a.andamento.length > 0 && (
+                  <ul
+                    style={{
+                      listStyle: "none",
+                      padding: 0,
+                      margin: "8px 0 0",
+                      borderLeft: "2px solid #e2e5ea",
+                    }}
+                  >
+                    {a.andamento.map((reg) => (
+                      <li
+                        key={reg.id}
+                        style={{ padding: "4px 0 4px 10px", marginLeft: 2 }}
+                      >
+                        <div style={{ fontSize: 11, color: "#888" }}>
+                          {formatarInstante(reg.criado_em)} · {reg.autor_nome}
+                          {reg.status_novo
+                            ? ` → ${ROTULO_ACAO[reg.status_novo] ?? reg.status_novo}`
+                            : ""}
+                        </div>
+                        <div style={{ fontSize: 13 }}>{reg.texto}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {erro && <p style={{ color: "#a33" }}>{erro}</p>}
       {aviso && <p style={{ color: "#2e7d32", fontWeight: 600 }}>{aviso}</p>}
