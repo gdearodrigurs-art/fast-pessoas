@@ -24,6 +24,7 @@ interface CicloParaPdi {
   matricula: string;
   faixa_rotulo: string;
   ja_tem_pdi: boolean;
+  prazo: string;
 }
 interface Acao {
   descricao: string;
@@ -381,7 +382,8 @@ function FormularioGerar({
           <option value="">Escolha um ciclo…</option>
           {ciclos.map((c) => (
             <option key={c.ciclo_id} value={c.ciclo_id} disabled={c.ja_tem_pdi}>
-              {c.colaborador_nome} (mat. {c.matricula}) — {c.faixa_rotulo}
+              {c.colaborador_nome} (mat. {c.matricula}) — {c.faixa_rotulo} · prazo{" "}
+              {formatarDia(c.prazo)}
               {c.ja_tem_pdi ? " · já tem PDI" : ""}
             </option>
           ))}

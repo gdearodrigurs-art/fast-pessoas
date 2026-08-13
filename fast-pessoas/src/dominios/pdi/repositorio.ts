@@ -54,6 +54,8 @@ export interface CicloParaPdi {
   matricula: string;
   faixa_rotulo: string;
   ja_tem_pdi: boolean;
+  /** Prazo do ciclo — distingue quando a mesma pessoa tem mais de um ciclo. */
+  prazo: string;
 }
 
 /**
@@ -71,9 +73,10 @@ export async function listarCiclosParaPdi(
     matricula: string;
     faixa_rotulo: string;
     ja_tem_pdi: boolean;
+    prazo: string;
   }>(
     `SELECT ca.id AS ciclo_id, c.nome_completo AS colaborador_nome, c.matricula,
-            f.rotulo AS faixa_rotulo,
+            f.rotulo AS faixa_rotulo, ca.prazo::text AS prazo,
             EXISTS (SELECT 1 FROM rh.pdi p
                      WHERE p.ciclo_id = ca.id AND p.status <> 'cancelado') AS ja_tem_pdi
        FROM rh.ciclo_avaliacao ca
@@ -92,6 +95,7 @@ export async function listarCiclosParaPdi(
     matricula: l.matricula,
     faixa_rotulo: l.faixa_rotulo,
     ja_tem_pdi: l.ja_tem_pdi,
+    prazo: l.prazo,
   }));
 }
 
