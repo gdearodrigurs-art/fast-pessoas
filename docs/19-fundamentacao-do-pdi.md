@@ -61,19 +61,24 @@ formato SBI, como percepção a validar, com classificação por direção e pro
 caráter; voz de coautoria em 2ª pessoa; proibição explícita de clichê/anglicismo e de promessa de
 promoção.
 
-## Fase B — estrutura rica (PLANEJADA)
+## Fase B — estrutura rica (FEITA, 13/08/2026 — commit `3afe44a`)
 
-O maior ganho vem de dar **campos** à IA, não só melhor prosa. Escopo:
+Deu **campos** ao plano. Decisão do dono: os campos são **OPCIONAIS** — a IA preenche, o RH/DP pode
+deixar em branco ou limpar; o motor **avisa, nunca bloqueia**.
 
-- **Schema de saída** (`esquemas.ts` + `ESQUEMA_SAIDA_PDI`): a ação ganha `modalidade`
-  (70/experiência · 20/feedback · 10/formação), `indicador` (verificável por terceiro), `apoio`
-  (quem apoia) e `tipo` (ampliar força | endereçar lacuna); o foco ganha `nivel_atual` e
-  `nivel_desejado`; o ponto cego vira estruturado (`direcao` super/sub/alinhado + texto SBI).
-- **Motor de validação** (`calculo.ts`): passa a **recusar/avisar** PDI mal formado — foco só de
-  curso (100% no "10"), ação sem indicador, adjetivo de caráter no ponto cego, ausência de ação de
-  força.
-- **Telas** (`/pdi` do gestor e `/meu-pdi` do colaborador): renderizar a estrutura rica.
-- **Provas**: estender `provas/pdi/` para cobrir os novos campos e as recusas do motor.
+- **Schema** (`esquemas.ts` + `ESQUEMA_SAIDA_PDI`): a ação ganhou `modalidade`
+  (experiência 70 · feedback 20 · formação 10), `indicador` (verificável por terceiro), `apoio`
+  (quem apoia) e `tipo` (ampliar força | endereçar lacuna); o foco ganhou `nivel_atual` e
+  `nivel_desejado`; o ponto cego virou objeto `{competencia, direcao(super/sub/alinhado), texto}`,
+  com preprocess que tolera a forma antiga (string) de PDIs já gravados. Todos opcionais no zod;
+  o `ESQUEMA_SAIDA_PDI` os exige (a IA sempre preenche).
+- **Motor** (`calculo.ts`): **inverteu a filosofia antiga** (que penalizava focar numa força).
+  Agora AVISA — sem nenhuma ação de força, foco só de formação, ação sem indicador, e ponto cego
+  com adjetivo de caráter (Kluger & DeNisi / SBI). A checagem de forma pula campo em branco.
+- **Tela** `/pdi`: renderiza e edita os campos novos; pontos cegos tolerantes a objeto/string. O
+  `/meu-pdi` não mudou (lê a ação publicada, não o `conteudo`).
+- **Provas**: `tests/pdi.test.ts` estendido (+7): schema, coerção da forma antiga, e os avisos
+  novos. 203 testes passam; tsc/lint 0.
 
 ## Fase C — instrução administrável pela tela (PLANEJADA) — eixo 9
 
