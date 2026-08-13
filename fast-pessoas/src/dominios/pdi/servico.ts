@@ -4,6 +4,7 @@ import {
   contemPiiObvio,
   limparContextoLivre,
 } from "../../lib/desidentificar";
+import { registrarAlteracao } from "../../lib/auditoria";
 import { ErroHttp } from "../../lib/sessao";
 import type { PayloadSessao } from "../identidade/esquemas";
 import type { MemoriaCalculo } from "../avaliacao/calculo";
@@ -20,6 +21,7 @@ import {
 } from "./calculo";
 import {
   esquemaConteudoPdi,
+  type AtualizarInstrucao,
   type ConteudoPdi,
   type EntrevistaPdi,
 } from "./esquemas";
@@ -38,11 +40,15 @@ import {
   contextoDoCiclo,
   homologar,
   inserirPdi,
+  instrucaoAtiva,
   listarCiclosParaPdi,
+  listarInstrucoes,
   listarPdis,
   materializarAcoes,
   registrarLeituraPdi,
+  salvarInstrucao,
   submeter,
+  type VersaoInstrucao,
 } from "./repositorio";
 
 // Quem pode o quê. "amplo" = tem avaliacao.resultado.ver (dp/diretoria): vê/gera
@@ -189,8 +195,11 @@ export async function gerarPdi(
     );
   }
 
+  // A instrução vem da versão ATIVA no banco (editável pela tela do RH, Fase C);
+  // se ninguém salvou nenhuma, cai no texto do código.
+  const instrucao = (await instrucaoAtiva()) ?? INSTRUCAO_PDI;
   const resposta = await chamarClaudeEstruturado({
-    system: INSTRUCAO_PDI,
+    system: instrucao,
     user,
     schema: ESQUEMA_SAIDA_PDI,
   });
@@ -350,4 +359,59 @@ export async function listarPainel(sessao: PayloadSessao) {
     ciclos,
     pode: { gerar: pode.gerar, homologar: pode.homologar },
   };
+}
+
+// ------------------------------------------------------------------ instrução da IA (Fase C)
+
+export interface InstrucaoView {
+  /** O texto em vigor (a versão ativa do banco, ou o padrão do código). */
+  texto: string;
+  /** true = veio de uma versão salva; false = é o padrão do código (fallback). */
+  do_banco: boolean;
+  /** O texto do código, para o botão "restaurar padrão". */
+  padrao_codigo: string;
+  historico: VersaoInstrucao[];
+}
+
+/** O playbook em vigor + o histórico de versões. O route gateia (pdi.homologar). */
+export async function verInstrucao(): Promise<InstrucaoView> {
+  const [ativa, historico] = await Promise.all([
+    instrucaoAtiva(),
+    listarInstrucoes(),
+  ]);
+  return {
+    texto: ativa ?? INSTRUCAO_PDI,
+    do_banco: ativa !== null,
+    padrao_codigo: INSTRUCAO_PDI,
+    historico,
+  };
+}
+
+/** Grava uma versão nova da instrução (desativa a anterior) e deixa rastro. */
+export async function atualizarInstrucao(
+  sessao: PayloadSessao,
+  dados: AtualizarInstrucao
+): Promise<{ id: number }> {
+  const id = await comTransacao(sessao.usuario_id, async (cliente) => {
+    const novoId = await salvarInstrucao(cliente, {
+      texto: dados.texto,
+      nota: dados.nota && dados.nota.length > 0 ? dados.nota : null,
+      usuarioId: sessao.usuario_id,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: "rh.pdi_instrucao",
+      registroId: String(novoId),
+      diff: {
+        Instrução: {
+          de: "versão anterior",
+          para: `nova versão #${novoId} da instrução do PDI`,
+        },
+      },
+    });
+    return novoId;
+  });
+  return { id };
 }

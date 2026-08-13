@@ -179,3 +179,18 @@ export type GerarPdi = z.infer<typeof esquemaGerarPdi>;
 
 /** Ajuste do gestor: o conteúdo editado (mesma forma que a IA devolve). */
 export const esquemaAjustarPdi = esquemaConteudoPdi;
+
+/**
+ * Nova versão da instrução da IA (Fase C). O piso de 50 caracteres é um freio de
+ * sanidade — a instrução real tem alguns milhares; ninguém salva algo vazio por
+ * engano. A nota é o "por que mudou", opcional, para o histórico.
+ */
+export const esquemaAtualizarInstrucao = z.object({
+  texto: z
+    .string()
+    .trim()
+    .min(50, "A instrução parece curta demais — confira antes de salvar.")
+    .max(20000, "Instrução acima do limite de 20.000 caracteres."),
+  nota: z.string().trim().max(500).optional(),
+});
+export type AtualizarInstrucao = z.infer<typeof esquemaAtualizarInstrucao>;

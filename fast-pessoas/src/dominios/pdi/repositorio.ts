@@ -376,3 +376,58 @@ export async function registrarLeituraPdi(
     [dados.usuarioId, dados.registroId]
   );
 }
+
+// ------------------------------------------------------------------ instrução da IA (Fase C)
+// A instrução ("playbook") que a IA usa para escrever o PDI, versionada e
+// editável pela tela (eixo 9). Só uma versão fica ativa; o serviço lê a ativa e,
+// se a tabela estiver vazia, cai no texto do código (fallback).
+
+export interface VersaoInstrucao {
+  id: number;
+  nota: string | null;
+  autor_nome: string;
+  ativa: boolean;
+  criada_em: string;
+}
+
+/** O texto da instrução ATIVA, ou null se a tabela está vazia (aí vale o código). */
+export async function instrucaoAtiva(): Promise<string | null> {
+  const linhas = await consultar<{ texto: string }>(
+    `SELECT texto FROM rh.pdi_instrucao WHERE ativa ORDER BY id DESC LIMIT 1`
+  );
+  return linhas.length > 0 ? linhas[0].texto : null;
+}
+
+/** Histórico de versões (sem o texto, que é grande), da mais nova para a antiga. */
+export async function listarInstrucoes(): Promise<VersaoInstrucao[]> {
+  const linhas = await consultar<Record<string, unknown>>(
+    `SELECT i.id, i.nota, i.ativa, i.criada_em::text AS criada_em,
+            COALESCE(u.nome, '—') AS autor_nome
+       FROM rh.pdi_instrucao i
+       LEFT JOIN sistema.usuario u ON u.id = i.criada_por
+      ORDER BY i.id DESC
+      LIMIT 50`
+  );
+  return linhas.map((l) => ({
+    id: Number(l.id),
+    nota: l.nota === null ? null : String(l.nota),
+    autor_nome: String(l.autor_nome),
+    ativa: Boolean(l.ativa),
+    criada_em: String(l.criada_em),
+  }));
+}
+
+/** Grava uma versão nova e ATIVA, desativando a anterior na mesma transação. */
+export async function salvarInstrucao(
+  cliente: PoolClient,
+  dados: { texto: string; nota: string | null; usuarioId: number }
+): Promise<number> {
+  await cliente.query(`UPDATE rh.pdi_instrucao SET ativa = false WHERE ativa`);
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.pdi_instrucao (texto, nota, ativa, criada_por)
+     VALUES ($1, $2, true, $3)
+     RETURNING id`,
+    [dados.texto, dados.nota, dados.usuarioId]
+  );
+  return Number(rows[0].id);
+}

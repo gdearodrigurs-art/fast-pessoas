@@ -1,6 +1,7 @@
 "use client";
 
 import { CSSProperties, FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { Cabecalho } from "@/app/cabecalho";
 import {
   FOCOS_PRIORITARIOS,
@@ -251,6 +252,13 @@ export function PainelPdi() {
           A IA rascunha a partir da avaliação; o gestor ajusta; o RH homologa e o
           plano vira ações no portal do colaborador.
         </p>
+        {painel?.pode.homologar && (
+          <p style={{ marginTop: 0 }}>
+            <Link href="/pdi/instrucao" style={{ fontSize: 14 }}>
+              ⚙️ Editar a instrução da IA (o playbook do PDI)
+            </Link>
+          </p>
+        )}
 
         {erro && <div style={{ ...cartao, borderColor: "#e0a4a4", color: "#a33" }}>{erro}</div>}
         {carregando && <p>Carregando…</p>}
