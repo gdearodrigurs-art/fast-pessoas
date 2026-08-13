@@ -2,9 +2,10 @@
 //
 // O motor não conhece indicador nenhum: lê o memoria_calculo da avaliação e
 // (1) ordena as competências da mais fraca para a mais forte e (2) valida os
-// focos que a IA propôs. Aqui provamos as três checagens de sanidade do nível 2
-// (competência inventada, foco numa área forte, área mais fraca ignorada) e que
-// tudo é relativo à distribuição da própria pessoa — sem limiar chumbado.
+// focos e pontos cegos que a IA/gestor propôs — sempre AVISANDO, nunca
+// bloqueando. Desde a Fase B (docs/19) a régua segue a pesquisa: focar numa
+// FORÇA é desejável; avisa-se o contrário — plano só de lacunas, foco só de
+// curso, ação sem indicador, e ponto cego com adjetivo de caráter.
 //
 // Nada toca banco nem API: o motor é puro, cabe no portão rápido.
 
@@ -21,6 +22,8 @@ import {
 import {
   esquemaConteudoPdi,
   esquemaEntrevistaPdi,
+  type AcaoPdi,
+  type FocoPdi,
 } from "../src/dominios/pdi/esquemas";
 import {
   contemPiiObvio,
@@ -103,6 +106,23 @@ function memoriaExemplo(): MemoriaCalculo {
   };
 }
 
+/** Uma ação "limpa" (todos os campos preenchidos); os testes sobrescrevem o que precisam. */
+function acaoLimpa(over: Partial<AcaoPdi> = {}): AcaoPdi {
+  return {
+    descricao: "fazer algo concreto",
+    prazo_sugerido: "60 dias",
+    modalidade: "experiencia",
+    indicador: "evidência observável por um terceiro",
+    apoio: "gestor",
+    tipo: "ampliar_forca",
+    ...over,
+  };
+}
+
+function foco(competencia: string, acoes: AcaoPdi[] = [acaoLimpa()]): FocoPdi {
+  return { competencia, porque: "porque", objetivo: "objetivo", acoes };
+}
+
 test("selecionarCandidatos ordena da mais fraca para a mais forte", () => {
   const candidatos = selecionarCandidatos(memoriaExemplo());
   assert.deepEqual(
@@ -134,29 +154,62 @@ test("indicador não observado fica fora dos candidatos", () => {
   );
 });
 
-test("validarFocos: foco na área forte E área fraca ignorada geram aviso", () => {
+test("validarFocos: área mais fraca ignorada avisa; focar numa força não", () => {
   const avisos = validarFocos(memoriaExemplo(), [
-    { competencia: "Conhecimento técnico do cargo" }, // nota 5, acima da mediana 4
+    foco("Conhecimento técnico do cargo"), // nota 5, a mais forte
   ]);
-  const tipos = avisos.map((a) => a.tipo).sort();
-  assert.deepEqual(tipos, ["area_fraca_ignorada", "foco_em_forte"]);
+  // A régua antiga (foco_em_forte) morreu: focar numa força é desejável.
+  assert.deepEqual(
+    avisos.map((a) => a.tipo),
+    ["area_fraca_ignorada"]
+  );
 });
 
 test("validarFocos: competência inventada é sinalizada", () => {
   const avisos = validarFocos(memoriaExemplo(), [
-    { competencia: "Inteligência emocional avançada" }, // não existe no modelo
+    foco("Inteligência emocional avançada"), // não existe no modelo
   ]);
   assert.ok(avisos.some((a) => a.tipo === "competencia_desconhecida"));
 });
 
-test("validarFocos: focar a área mais fraca não gera aviso", () => {
+test("validarFocos: focar a área mais fraca (plano limpo) não gera aviso", () => {
   const avisos = validarFocos(memoriaExemplo(), [
-    { competencia: "Assiduidade" }, // casa com "Assiduidade e compromisso" (nota 2)
+    foco("Assiduidade"), // casa com "Assiduidade e compromisso" (nota 2)
   ]);
   assert.deepEqual(avisos, []);
 });
 
-test("validarFocos: sem respostas, sem avisos (nada a validar)", () => {
+test("validarFocos: plano só de lacunas avisa (começar pelas forças)", () => {
+  const avisos = validarFocos(memoriaExemplo(), [
+    foco("Assiduidade", [acaoLimpa({ tipo: "enderecar_lacuna" })]),
+  ]);
+  assert.ok(avisos.some((a) => a.tipo === "sem_foco_de_forca"));
+});
+
+test("validarFocos: foco só de formação avisa", () => {
+  const avisos = validarFocos(memoriaExemplo(), [
+    foco("Assiduidade", [acaoLimpa({ modalidade: "formacao" })]),
+  ]);
+  assert.ok(avisos.some((a) => a.tipo === "foco_so_curso"));
+});
+
+test("validarFocos: ação sem indicador avisa", () => {
+  const avisos = validarFocos(memoriaExemplo(), [
+    foco("Assiduidade", [acaoLimpa({ indicador: "" })]),
+  ]);
+  assert.ok(avisos.some((a) => a.tipo === "acao_sem_indicador"));
+});
+
+test("validarFocos: campo em branco pula a checagem de forma (o humano pode limpar)", () => {
+  const avisos = validarFocos(memoriaExemplo(), [
+    foco("Assiduidade", [acaoLimpa({ modalidade: undefined, tipo: undefined })]),
+  ]);
+  const tipos = avisos.map((a) => a.tipo);
+  assert.ok(!tipos.includes("sem_foco_de_forca"));
+  assert.ok(!tipos.includes("foco_so_curso"));
+});
+
+test("validarFocos: sem respostas, plano limpo, sem avisos", () => {
   const memoria = memoriaExemplo();
   for (const p of memoria.pilares) {
     for (const i of p.indicadores) {
@@ -164,7 +217,7 @@ test("validarFocos: sem respostas, sem avisos (nada a validar)", () => {
       i.nao_observado = true;
     }
   }
-  assert.deepEqual(validarFocos(memoria, [{ competencia: "Qualquer" }]), []);
+  assert.deepEqual(validarFocos(memoria, [foco("Qualquer")]), []);
 });
 
 test("esquemaConteudoPdi aceita um plano válido e preenche pontos_cegos", () => {
@@ -180,6 +233,51 @@ test("esquemaConteudoPdi aceita um plano válido e preenche pontos_cegos", () =>
     resumo: "Plano focado no ponto mais fraco.",
   });
   assert.deepEqual(analisado.pontos_cegos, []);
+});
+
+test("esquemaConteudoPdi: ponto cego objeto novo e string antiga convivem (coerção)", () => {
+  const r = esquemaConteudoPdi.parse({
+    focos: [foco("Assiduidade e compromisso")],
+    pontos_cegos: [
+      {
+        competencia: "Assiduidade",
+        direcao: "superavaliado",
+        texto: "em reuniões você decide antes de ouvir os pares",
+      },
+      "forma antiga em string simples",
+    ],
+    resumo: "ok",
+  });
+  assert.equal(r.pontos_cegos.length, 2);
+  assert.equal(r.pontos_cegos[1].texto, "forma antiga em string simples");
+  assert.equal(r.pontos_cegos[1].competencia, "");
+});
+
+test("esquemaAcaoPdi: modalidade vazia vira ausência; enum inválido é rejeitado", () => {
+  const ok = esquemaConteudoPdi.parse({
+    focos: [
+      {
+        competencia: "X",
+        porque: "y",
+        objetivo: "z",
+        acoes: [{ descricao: "abc", prazo_sugerido: "30d", modalidade: "" }],
+      },
+    ],
+    resumo: "r",
+  });
+  assert.equal(ok.focos[0].acoes[0].modalidade, undefined);
+  const bad = esquemaConteudoPdi.safeParse({
+    focos: [
+      {
+        competencia: "X",
+        porque: "y",
+        objetivo: "z",
+        acoes: [{ descricao: "abc", prazo_sugerido: "30d", modalidade: "curso" }],
+      },
+    ],
+    resumo: "r",
+  });
+  assert.equal(bad.success, false);
 });
 
 test("esquemaConteudoPdi rejeita plano sem focos ou ação vazia", () => {
@@ -290,14 +388,24 @@ test("validarPontosCegos: havia divergência e o PDI não trouxe cegos → aviso
   assert.equal(avisos[0].tipo, "ponto_cego_ignorado");
 });
 
-test("validarPontosCegos: com pontos cegos preenchidos, sem aviso", () => {
+test("validarPontosCegos: com pontos cegos (objeto) preenchidos, sem aviso", () => {
   const divs = divergenciasAutoLider(memoriaExemplo(), [
     respostaAuto("Assiduidade e compromisso", "Dever", 5),
   ]);
   assert.deepEqual(
-    validarPontosCegos(divs, ["o colaborador superestima a assiduidade"]),
+    validarPontosCegos(divs, [
+      { texto: "em reuniões você costuma decidir antes de ouvir os pares" },
+    ]),
     []
   );
+});
+
+test("validarPontosCegos: ponto cego com adjetivo de caráter é sinalizado", () => {
+  const avisos = validarPontosCegos(
+    [],
+    [{ texto: "você é arrogante nas reuniões" }]
+  );
+  assert.ok(avisos.some((a) => a.tipo === "ponto_cego_como_traco"));
 });
 
 test("validarPontosCegos: sem divergências, nunca gera aviso", () => {

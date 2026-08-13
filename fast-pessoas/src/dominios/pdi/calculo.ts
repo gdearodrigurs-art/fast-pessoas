@@ -1,5 +1,6 @@
 import type { MemoriaCalculo } from "../avaliacao/calculo";
 import type { Recomendacao } from "../avaliacao/esquemas";
+import type { FocoPdi } from "./esquemas";
 
 /**
  * MOTOR GENÉRICO DO PDI (nível 2) — não sabe nada sobre indicador específico.
@@ -43,11 +44,35 @@ export interface Candidatos {
 
 export type TipoAviso =
   | "competencia_desconhecida"
-  | "foco_em_forte"
   | "area_fraca_ignorada"
+  | "sem_foco_de_forca"
+  | "foco_so_curso"
+  | "acao_sem_indicador"
   | "ponto_cego_ignorado"
+  | "ponto_cego_como_traco"
   | "pares_abaixo_do_piso"
   | "desidentificacao";
+
+/**
+ * Adjetivos de CARÁTER que não deveriam descrever um ponto cego — ponto cego é
+ * comportamento observável, não rótulo de personalidade (Kluger & DeNisi; SBI).
+ * Sem acento: `normalizar()` já tira os diacríticos antes de comparar.
+ */
+const ADJETIVOS_DE_CARATER = [
+  "arrogante",
+  "autoritario",
+  "preguicoso",
+  "desorganizado",
+  "inseguro",
+  "incompetente",
+  "teimoso",
+  "egoista",
+  "imaturo",
+  "grosseiro",
+  "prepotente",
+  "relaxado",
+  "irresponsavel",
+];
 
 export interface AvisoPdi {
   tipo: TipoAviso;
@@ -114,62 +139,87 @@ export function selecionarCandidatos(memoria: MemoriaCalculo): Candidatos {
   };
 }
 
-/** Mediana simples (usa o elemento superior do meio em contagem par). */
-function mediana(valores: number[]): number {
-  const ordenados = [...valores].sort((a, b) => a - b);
-  return ordenados[Math.floor(ordenados.length / 2)];
-}
-
 /**
- * Confere os focos que a IA propôs contra os dados da avaliação. Devolve avisos
- * (nunca bloqueia): competência que não existe no modelo, foco sobre uma área
- * já forte (acima da mediana), e a competência mais fraca deixada de fora.
+ * Confere os focos que a IA/gestor propôs. Devolve avisos, NUNCA bloqueia. A
+ * pesquisa (docs/19) inverteu a régua antiga: focar numa força é DESEJÁVEL, não
+ * suspeito. Hoje os avisos são: competência inventada, a mais fraca ignorada por
+ * completo, plano sem nenhuma ação de força, foco só de formação e ação sem
+ * indicador. As checagens de forma pulam quando o campo está em branco — o
+ * humano (RH/DP) pode ter limpado de propósito.
  */
 export function validarFocos(
   memoria: MemoriaCalculo,
-  focos: { competencia: string }[]
+  focos: FocoPdi[]
 ): AvisoPdi[] {
   const avisos: AvisoPdi[] = [];
   const respondidos = indicadoresRespondidos(memoria);
-  if (respondidos.length === 0) {
-    return avisos;
-  }
 
-  const nomesDoModelo = [
-    ...respondidos.map((i) => i.nome),
-    ...memoria.pilares.map((p) => p.nome),
-  ];
-  const medianaNota = mediana(respondidos.map((i) => i.nota));
+  if (respondidos.length > 0) {
+    const nomesDoModelo = [
+      ...respondidos.map((i) => i.nome),
+      ...memoria.pilares.map((p) => p.nome),
+    ];
 
-  // (a) competência inventada — não casa com nenhum indicador nem pilar.
-  for (const foco of focos) {
-    const conhecida = nomesDoModelo.some((nome) => casa(foco.competencia, nome));
-    if (!conhecida) {
+    // (a) competência inventada — não casa com nenhum indicador nem pilar.
+    for (const foco of focos) {
+      const conhecida = nomesDoModelo.some((nome) =>
+        casa(foco.competencia, nome)
+      );
+      if (!conhecida) {
+        avisos.push({
+          tipo: "competencia_desconhecida",
+          mensagem: `O foco "${foco.competencia}" não corresponde a nenhuma competência do modelo desta avaliação — confira.`,
+        });
+      }
+    }
+
+    // (b) a competência mais fraca foi ignorada por completo? Começar pelas
+    // forças é ok; não tocar na mais fraca merece um aviso.
+    const maisFraco = [...respondidos].sort((a, b) => a.nota - b.nota)[0];
+    const enderecada = focos.some((foco) =>
+      casa(foco.competencia, maisFraco.nome)
+    );
+    if (!enderecada) {
       avisos.push({
-        tipo: "competencia_desconhecida",
-        mensagem: `O foco "${foco.competencia}" não corresponde a nenhuma competência do modelo desta avaliação — confira.`,
+        tipo: "area_fraca_ignorada",
+        mensagem: `A competência mais fraca ("${maisFraco.nome}", nota ${maisFraco.nota}) não virou foco — verifique se foi proposital.`,
       });
     }
   }
 
-  // (b) foco numa competência já forte (nota acima da mediana da pessoa).
-  for (const foco of focos) {
-    const indicador = respondidos.find((i) => casa(foco.competencia, i.nome));
-    if (indicador && indicador.nota > medianaNota) {
-      avisos.push({
-        tipo: "foco_em_forte",
-        mensagem: `O foco "${foco.competencia}" recai sobre uma competência de nota ${indicador.nota} (acima da mediana ${medianaNota}) — confirme se é intencional.`,
-      });
-    }
-  }
+  const todasAcoes = focos.flatMap((f) => f.acoes);
 
-  // (c) a competência mais fraca virou foco de alguém?
-  const maisFraco = [...respondidos].sort((a, b) => a.nota - b.nota)[0];
-  const enderecada = focos.some((foco) => casa(foco.competencia, maisFraco.nome));
-  if (!enderecada) {
+  // (c) começar pelas forças: nenhuma ação amplia força (todas endereçam lacuna).
+  const comTipo = todasAcoes.filter((a) => a.tipo);
+  if (comTipo.length > 0 && comTipo.every((a) => a.tipo === "enderecar_lacuna")) {
     avisos.push({
-      tipo: "area_fraca_ignorada",
-      mensagem: `A competência mais fraca ("${maisFraco.nome}", nota ${maisFraco.nota}) não virou foco — verifique se foi proposital.`,
+      tipo: "sem_foco_de_forca",
+      mensagem:
+        "Nenhuma ação amplia uma força — o plano ficou só de lacunas. Começar pelas forças costuma engajar mais; confirme se é proposital.",
+    });
+  }
+
+  // (d) foco só de formação (100% no "10" do 70-20-10).
+  for (const foco of focos) {
+    const modalidades = foco.acoes
+      .map((a) => a.modalidade)
+      .filter((m): m is NonNullable<typeof m> => Boolean(m));
+    if (modalidades.length > 0 && modalidades.every((m) => m === "formacao")) {
+      avisos.push({
+        tipo: "foco_so_curso",
+        mensagem: `O foco "${foco.competencia}" tem só ações de formação (curso). A maior parte do desenvolvimento vem de desafio real e feedback — considere uma ação de experiência.`,
+      });
+    }
+  }
+
+  // (e) ação sem indicador de sucesso observável.
+  const semIndicador = todasAcoes.filter(
+    (a) => !a.indicador || a.indicador.trim() === ""
+  ).length;
+  if (semIndicador > 0) {
+    avisos.push({
+      tipo: "acao_sem_indicador",
+      mensagem: `${semIndicador} ação(ões) sem indicador de sucesso observável — sem ele fica difícil saber se a ação foi cumprida.`,
     });
   }
 
@@ -231,22 +281,35 @@ export function divergenciasAutoLider(
 }
 
 /**
- * Aviso de sanidade: havia divergências auto × líder para comentar, mas a IA
- * devolveu os pontos cegos vazios. Não bloqueia — só chama a atenção do humano
- * para o insumo que a máquina deixou passar.
+ * Avisos sobre os pontos cegos (nunca bloqueia): (a) havia divergência auto ×
+ * líder mas o PDI não trouxe nenhum ponto cego; (b) um ponto cego usa adjetivo
+ * de caráter em vez de comportamento observável (Kluger & DeNisi; SBI).
  */
 export function validarPontosCegos(
   divergencias: Divergencia[],
-  pontosCegos: string[]
+  pontosCegos: { texto: string }[]
 ): AvisoPdi[] {
-  if (divergencias.length === 0 || pontosCegos.length > 0) return [];
-  const maior = divergencias[0];
-  const sentido =
-    maior.gap > 0 ? "se avaliou acima" : "se avaliou abaixo";
-  return [
-    {
+  const avisos: AvisoPdi[] = [];
+
+  if (divergencias.length > 0 && pontosCegos.length === 0) {
+    const maior = divergencias[0];
+    const sentido = maior.gap > 0 ? "se avaliou acima" : "se avaliou abaixo";
+    avisos.push({
       tipo: "ponto_cego_ignorado",
       mensagem: `Havia divergência entre a autoavaliação e o líder (ex.: "${maior.competencia}", o colaborador ${sentido} do líder por ${Math.abs(maior.gap)} ponto(s)), mas o PDI não trouxe pontos cegos — confira.`,
-    },
-  ];
+    });
+  }
+
+  for (const pc of pontosCegos) {
+    const texto = normalizar(pc.texto);
+    const adjetivo = ADJETIVOS_DE_CARATER.find((adj) => texto.includes(adj));
+    if (adjetivo) {
+      avisos.push({
+        tipo: "ponto_cego_como_traco",
+        mensagem: `Um ponto cego usa "${adjetivo}" — isso soa como julgamento de personalidade. Prefira descrever o comportamento observável e seu efeito.`,
+      });
+    }
+  }
+
+  return avisos;
 }

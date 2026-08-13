@@ -77,30 +77,95 @@ export const esquemaEntrevistaPdi = z.object({
 
 export type EntrevistaPdi = z.infer<typeof esquemaEntrevistaPdi>;
 
+// ------------------------------------------------------------------ vocabulário da estrutura rica
+// Campos que dão forma às ações e aos pontos cegos (Fase B). Todos OPCIONAIS: a
+// IA preenche, o RH/DP pode deixar em branco ou limpar. Fundamentação em docs/19.
+
+/** Modalidade da ação no modelo 70-20-10 (o peso deve ficar em experiência). */
+export const MODALIDADES_ACAO = ["experiencia", "feedback", "formacao"] as const;
+export type ModalidadeAcao = (typeof MODALIDADES_ACAO)[number];
+export const ROTULOS_MODALIDADE_ACAO: Record<ModalidadeAcao, string> = {
+  experiencia: "Experiência no trabalho (70)",
+  feedback: "Feedback / mentoria (20)",
+  formacao: "Formação (10)",
+};
+
+/** A ação amplia uma força já demonstrada ou endereça uma lacuna. */
+export const TIPOS_ACAO = ["ampliar_forca", "enderecar_lacuna"] as const;
+export type TipoAcao = (typeof TIPOS_ACAO)[number];
+export const ROTULOS_TIPO_ACAO: Record<TipoAcao, string> = {
+  ampliar_forca: "Ampliar força",
+  enderecar_lacuna: "Endereçar lacuna",
+};
+
+/** Direção da divergência num ponto cego (auto × líder × pares). */
+export const DIRECOES_PONTO_CEGO = [
+  "superavaliado",
+  "subavaliado",
+  "alinhado",
+] as const;
+export type DirecaoPontoCego = (typeof DIRECOES_PONTO_CEGO)[number];
+export const ROTULOS_DIRECAO_PONTO_CEGO: Record<DirecaoPontoCego, string> = {
+  superavaliado: "Você se avaliou acima",
+  subavaliado: "Força não reconhecida",
+  alinhado: "Percepções alinhadas",
+};
+
 // ------------------------------------------------------------------ contrato da IA
 // O JSON que a IA devolve (structured outputs). Validado no serviço mesmo com
-// structured outputs — a saída da IA é dado externo, nunca confiança cega.
+// structured outputs — a saída da IA é dado externo, nunca confiança cega. Os
+// campos da estrutura rica são OPCIONAIS aqui (o humano pode limpar; "" e null
+// viram ausência); o motor avisa quando faltam, mas nunca bloqueia.
 
 export const esquemaAcaoPdi = z.object({
   descricao: z.string().trim().min(3).max(2000),
   prazo_sugerido: z.string().trim().max(200),
+  modalidade: z.preprocess(
+    (v) => (v === "" || v === null ? undefined : v),
+    z.enum(MODALIDADES_ACAO).optional()
+  ),
+  indicador: z.string().trim().max(1000).optional(),
+  apoio: z.string().trim().max(500).optional(),
+  tipo: z.preprocess(
+    (v) => (v === "" || v === null ? undefined : v),
+    z.enum(TIPOS_ACAO).optional()
+  ),
 });
 
 export const esquemaFocoPdi = z.object({
   competencia: z.string().trim().min(1).max(200),
   porque: z.string().trim().min(1).max(2000),
   objetivo: z.string().trim().min(1).max(2000),
+  nivel_atual: z.string().trim().max(200).optional(),
+  nivel_desejado: z.string().trim().max(200).optional(),
   acoes: z.array(esquemaAcaoPdi).min(1).max(6),
 });
 
+/**
+ * Ponto cego estruturado. Aceita também a forma antiga (string simples) via
+ * preprocess — vira `{ texto }` — para não quebrar PDIs já gravados.
+ */
+export const esquemaPontoCegoPdi = z.preprocess(
+  (v) => (typeof v === "string" ? { texto: v } : v),
+  z.object({
+    competencia: z.string().trim().max(200).optional().default(""),
+    direcao: z.preprocess(
+      (v) => (v === "" || v === null ? undefined : v),
+      z.enum(DIRECOES_PONTO_CEGO).optional()
+    ),
+    texto: z.string().trim().min(1).max(500),
+  })
+);
+
 export const esquemaConteudoPdi = z.object({
   focos: z.array(esquemaFocoPdi).min(1).max(6),
-  pontos_cegos: z.array(z.string().trim().max(500)).max(10).default([]),
+  pontos_cegos: z.array(esquemaPontoCegoPdi).max(10).default([]),
   resumo: z.string().trim().min(1).max(4000),
 });
 
 export type AcaoPdi = z.infer<typeof esquemaAcaoPdi>;
 export type FocoPdi = z.infer<typeof esquemaFocoPdi>;
+export type PontoCegoPdi = z.infer<typeof esquemaPontoCegoPdi>;
 export type ConteudoPdi = z.infer<typeof esquemaConteudoPdi>;
 
 // ------------------------------------------------------------------ requisições da API

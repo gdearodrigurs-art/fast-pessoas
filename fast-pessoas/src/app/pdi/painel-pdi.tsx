@@ -5,10 +5,15 @@ import { Cabecalho } from "@/app/cabecalho";
 import {
   FOCOS_PRIORITARIOS,
   HORIZONTES_PDI,
+  MODALIDADES_ACAO,
+  ROTULOS_DIRECAO_PONTO_CEGO,
   ROTULOS_FOCO_PRIORITARIO,
+  ROTULOS_MODALIDADE_ACAO,
   ROTULOS_STATUS_PDI,
+  ROTULOS_TIPO_ACAO,
   ROTULOS_TIPO_PDI,
   StatusPdi,
+  TIPOS_ACAO,
   TIPOS_PDI,
 } from "@/dominios/pdi/esquemas";
 
@@ -22,16 +27,28 @@ interface CicloParaPdi {
 interface Acao {
   descricao: string;
   prazo_sugerido: string;
+  modalidade?: string;
+  indicador?: string;
+  apoio?: string;
+  tipo?: string;
 }
 interface Foco {
   competencia: string;
   porque: string;
   objetivo: string;
+  nivel_atual?: string;
+  nivel_desejado?: string;
   acoes: Acao[];
+}
+interface PontoCego {
+  competencia?: string;
+  direcao?: string;
+  texto: string;
 }
 interface Conteudo {
   focos: Foco[];
-  pontos_cegos: string[];
+  // Aceita a forma nova (objeto) e a antiga (string) de PDIs já gravados.
+  pontos_cegos: (PontoCego | string)[];
   resumo: string;
 }
 interface Aviso {
@@ -163,6 +180,14 @@ const botao: CSSProperties = {
   fontSize: 14,
 };
 const botaoNeutro: CSSProperties = { ...botao, background: "#e2e5ea", color: "#333" };
+const tagAcao: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  padding: "1px 8px",
+  borderRadius: 999,
+  background: "#eef1f4",
+  color: "#475569",
+};
 
 function Badge({ status }: { status: StatusPdi }) {
   return (
@@ -559,17 +584,87 @@ function DetalhePdi({
               foco.objetivo
             )}
           </p>
-          <ul style={{ margin: "4px 0", paddingLeft: 18, fontSize: 14 }}>
+          {(editando || foco.nivel_atual || foco.nivel_desejado) && (
+            <p style={{ margin: "4px 0", fontSize: 13, color: "#555" }}>
+              <em>Nível: </em>
+              {editando ? (
+                <>
+                  <input
+                    style={{ ...campo, maxWidth: 200, display: "inline-block" }}
+                    placeholder="nível atual"
+                    value={foco.nivel_atual ?? ""}
+                    onChange={(e) => mudarFoco(fi, "nivel_atual", e.target.value)}
+                  />
+                  {" → "}
+                  <input
+                    style={{ ...campo, maxWidth: 200, display: "inline-block" }}
+                    placeholder="nível desejado"
+                    value={foco.nivel_desejado ?? ""}
+                    onChange={(e) => mudarFoco(fi, "nivel_desejado", e.target.value)}
+                  />
+                </>
+              ) : (
+                <>
+                  {foco.nivel_atual || "—"} → {foco.nivel_desejado || "—"}
+                </>
+              )}
+            </p>
+          )}
+          <ul style={{ margin: "4px 0", paddingLeft: 18, fontSize: 14, listStyle: "none" }}>
             {foco.acoes.map((a, ai) => (
-              <li key={ai}>
+              <li key={ai} style={{ marginBottom: editando ? 12 : 10 }}>
                 {editando ? (
-                  <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                    <input style={campo} value={a.descricao} onChange={(e) => mudarAcao(fi, ai, "descricao", e.target.value)} />
-                    <input style={{ ...campo, maxWidth: 160 }} value={a.prazo_sugerido} onChange={(e) => mudarAcao(fi, ai, "prazo_sugerido", e.target.value)} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input style={campo} placeholder="o que fazer (concreto)" value={a.descricao} onChange={(e) => mudarAcao(fi, ai, "descricao", e.target.value)} />
+                      <input style={{ ...campo, maxWidth: 160 }} placeholder="prazo" value={a.prazo_sugerido} onChange={(e) => mudarAcao(fi, ai, "prazo_sugerido", e.target.value)} />
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <select style={{ ...campo, maxWidth: 220 }} value={a.modalidade ?? ""} onChange={(e) => mudarAcao(fi, ai, "modalidade", e.target.value)}>
+                        <option value="">modalidade…</option>
+                        {MODALIDADES_ACAO.map((m) => (
+                          <option key={m} value={m}>{ROTULOS_MODALIDADE_ACAO[m]}</option>
+                        ))}
+                      </select>
+                      <select style={{ ...campo, maxWidth: 170 }} value={a.tipo ?? ""} onChange={(e) => mudarAcao(fi, ai, "tipo", e.target.value)}>
+                        <option value="">força/lacuna…</option>
+                        {TIPOS_ACAO.map((t) => (
+                          <option key={t} value={t}>{ROTULOS_TIPO_ACAO[t]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <input style={campo} placeholder="indicador de sucesso (observável por um terceiro)" value={a.indicador ?? ""} onChange={(e) => mudarAcao(fi, ai, "indicador", e.target.value)} />
+                    <input style={campo} placeholder="quem apoia / fonte de feedback" value={a.apoio ?? ""} onChange={(e) => mudarAcao(fi, ai, "apoio", e.target.value)} />
                   </div>
                 ) : (
                   <>
-                    {a.descricao} <span style={{ color: "#888" }}>({a.prazo_sugerido})</span>
+                    <div>
+                      {a.descricao} <span style={{ color: "#888" }}>({a.prazo_sugerido})</span>
+                    </div>
+                    {(a.modalidade || a.tipo) && (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "3px 0" }}>
+                        {a.modalidade && (
+                          <span style={tagAcao}>
+                            {ROTULOS_MODALIDADE_ACAO[a.modalidade as keyof typeof ROTULOS_MODALIDADE_ACAO] ?? a.modalidade}
+                          </span>
+                        )}
+                        {a.tipo && (
+                          <span style={tagAcao}>
+                            {ROTULOS_TIPO_ACAO[a.tipo as keyof typeof ROTULOS_TIPO_ACAO] ?? a.tipo}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {a.indicador && (
+                      <div style={{ fontSize: 12, color: "#555" }}>
+                        <em>Indicador:</em> {a.indicador}
+                      </div>
+                    )}
+                    {a.apoio && (
+                      <div style={{ fontSize: 12, color: "#555" }}>
+                        <em>Apoio:</em> {a.apoio}
+                      </div>
+                    )}
                   </>
                 )}
               </li>
@@ -586,9 +681,29 @@ function DetalhePdi({
             não nota.
           </p>
           <ul style={{ margin: "6px 0", paddingLeft: 18, fontSize: 14 }}>
-            {conteudo.pontos_cegos.map((p, i) => (
-              <li key={i}>{p}</li>
-            ))}
+            {conteudo.pontos_cegos.map((p, i) => {
+              const texto = typeof p === "string" ? p : p.texto;
+              const competencia = typeof p === "string" ? "" : p.competencia;
+              const direcao = typeof p === "string" ? "" : p.direcao;
+              const rotuloDir = direcao
+                ? ROTULOS_DIRECAO_PONTO_CEGO[
+                    direcao as keyof typeof ROTULOS_DIRECAO_PONTO_CEGO
+                  ] ?? direcao
+                : "";
+              return (
+                <li key={i} style={{ marginBottom: 4 }}>
+                  {(competencia || rotuloDir) && (
+                    <span style={{ fontSize: 12, color: "#888" }}>
+                      {competencia}
+                      {competencia && rotuloDir ? " · " : ""}
+                      {rotuloDir}
+                      {": "}
+                    </span>
+                  )}
+                  {texto}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
