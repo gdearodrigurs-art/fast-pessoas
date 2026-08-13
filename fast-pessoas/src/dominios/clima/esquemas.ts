@@ -57,3 +57,15 @@ export const esquemaFiltroIndividual = z
   );
 
 export type FiltroIndividual = z.infer<typeof esquemaFiltroIndividual>;
+
+// Administração das perguntas do check-in (0075). Criar, editar e reformular
+// levam só o texto; aposentar não tem corpo.
+export const esquemaTextoPergunta = z.object({
+  texto: z
+    .string()
+    .trim()
+    .min(1, "O texto da pergunta é obrigatório")
+    .max(500, "A pergunta deve ter no máximo 500 caracteres"),
+});
+
+export type TextoPergunta = z.infer<typeof esquemaTextoPergunta>;

@@ -370,3 +370,132 @@ export async function registrarLeituraSensivel(
     [entrada.usuarioId, entrada.chavePermissao, entrada.recurso, entrada.registroId]
   );
 }
+
+// ------------------------------------------------------------------ administração das perguntas (0075)
+
+export interface PerguntaAdmin {
+  id: number;
+  texto: string;
+  ordem: number;
+  status: "rascunho" | "ativa" | "encerrada";
+  inicio_vigencia: string | null;
+  fim_vigencia: string | null;
+  /** Versão anterior que esta reformula (a série); null = pergunta nova. */
+  continua_de: number | null;
+  /** Quantas respostas já apontam para esta versão (0 = texto ainda editável). */
+  respostas: number;
+}
+
+export async function listarPerguntasAdmin(): Promise<PerguntaAdmin[]> {
+  const linhas = await consultar<{
+    id: string;
+    texto: string;
+    ordem: number;
+    status: "rascunho" | "ativa" | "encerrada";
+    inicio_vigencia: string | null;
+    fim_vigencia: string | null;
+    continua_de: string | null;
+    respostas: number;
+  }>(
+    `SELECT pv.id, pv.texto, pv.ordem, pv.status,
+            pv.inicio_vigencia::text AS inicio_vigencia,
+            pv.fim_vigencia::text AS fim_vigencia,
+            pv.continua_de,
+            (SELECT COUNT(*) FROM rh_clima.checkin_resposta r
+              WHERE r.pergunta_versao_id = pv.id)::int AS respostas
+       FROM rh_clima.pergunta_versao pv
+      ORDER BY pv.ordem, pv.id`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    continua_de: linha.continua_de === null ? null : Number(linha.continua_de),
+  }));
+}
+
+export interface PerguntaParaMutacao {
+  id: number;
+  texto: string;
+  ordem: number;
+  status: "rascunho" | "ativa" | "encerrada";
+}
+
+export async function buscarPerguntaParaMutacao(
+  cliente: PoolClient,
+  id: number
+): Promise<PerguntaParaMutacao | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    texto: string;
+    ordem: number;
+    status: "rascunho" | "ativa" | "encerrada";
+  }>(
+    `SELECT id, texto, ordem, status
+       FROM rh_clima.pergunta_versao
+      WHERE id = $1
+      FOR UPDATE`,
+    [id]
+  );
+  return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+/** Próxima ordem livre entre as perguntas ATIVAS (o índice é único só nelas). */
+export async function proximaOrdemAtiva(cliente: PoolClient): Promise<number> {
+  const { rows } = await cliente.query<{ proxima: number }>(
+    `SELECT COALESCE(MAX(ordem), 0) + 1 AS proxima
+       FROM rh_clima.pergunta_versao WHERE status = 'ativa'`
+  );
+  return rows[0].proxima;
+}
+
+export async function contarRespostasDaPergunta(
+  cliente: PoolClient,
+  id: number
+): Promise<number> {
+  const { rows } = await cliente.query<{ total: number }>(
+    `SELECT COUNT(*)::int AS total FROM rh_clima.checkin_resposta
+      WHERE pergunta_versao_id = $1`,
+    [id]
+  );
+  return rows[0].total;
+}
+
+/** Cria uma pergunta já ATIVA — o check-in não tem etapa de rascunho. */
+export async function criarPerguntaAtiva(
+  cliente: PoolClient,
+  dados: { texto: string; ordem: number; continua_de: number | null }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh_clima.pergunta_versao (texto, ordem, status, inicio_vigencia, continua_de)
+     VALUES ($1, $2, 'ativa', rh.hoje(), $3)
+     RETURNING id`,
+    [dados.texto, dados.ordem, dados.continua_de]
+  );
+  return Number(rows[0].id);
+}
+
+export async function atualizarTextoPergunta(
+  cliente: PoolClient,
+  id: number,
+  texto: string
+): Promise<void> {
+  // O trigger pergunta_versao_proteger (0075) barra se já houver resposta.
+  await cliente.query(
+    `UPDATE rh_clima.pergunta_versao SET texto = $2 WHERE id = $1`,
+    [id, texto]
+  );
+}
+
+/** Encerra uma pergunta ATIVA. GREATEST protege o CHECK fim >= início. */
+export async function encerrarPergunta(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh_clima.pergunta_versao
+        SET status = 'encerrada',
+            fim_vigencia = GREATEST(inicio_vigencia, rh.hoje())
+      WHERE id = $1 AND status = 'ativa'`,
+    [id]
+  );
+}

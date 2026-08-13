@@ -22,9 +22,11 @@ export default async function PaginaPainelClima() {
   if (!(await temPermissao(sessao.usuario_id, "clima.agregado.ver"))) {
     redirect("/");
   }
-  const veIndividual = await temPermissao(
-    sessao.usuario_id,
-    "clima.resposta.individual.ver"
+  const [veIndividual, podePerguntas] = await Promise.all([
+    temPermissao(sessao.usuario_id, "clima.resposta.individual.ver"),
+    temPermissao(sessao.usuario_id, "clima.pergunta.administrar"),
+  ]);
+  return (
+    <PainelCliente veIndividual={veIndividual} podePerguntas={podePerguntas} />
   );
-  return <PainelCliente veIndividual={veIndividual} />;
 }

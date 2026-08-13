@@ -73,7 +73,13 @@ function listarDias(inicio: string, fim: string): string[] {
   return dias;
 }
 
-export function PainelCliente({ veIndividual }: { veIndividual: boolean }) {
+export function PainelCliente({
+  veIndividual,
+  podePerguntas,
+}: {
+  veIndividual: boolean;
+  podePerguntas: boolean;
+}) {
   const [agregado, setAgregado] = useState<AgregadoClima | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -117,6 +123,11 @@ export function PainelCliente({ veIndividual }: { veIndividual: boolean }) {
         {veIndividual && (
           <Link className={acaoCabecalho} href="/clima/individual">
             Respostas individuais
+          </Link>
+        )}
+        {podePerguntas && (
+          <Link className={acaoCabecalho} href="/clima/perguntas">
+            Gerir perguntas
           </Link>
         )}
       </Cabecalho>
