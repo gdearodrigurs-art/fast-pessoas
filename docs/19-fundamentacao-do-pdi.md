@@ -80,11 +80,21 @@ deixar em branco ou limpar; o motor **avisa, nunca bloqueia**.
 - **Provas**: `tests/pdi.test.ts` estendido (+7): schema, coerção da forma antiga, e os avisos
   novos. 203 testes passam; tsc/lint 0.
 
-## Fase C — instrução administrável pela tela (PLANEJADA) — eixo 9
+## Fase C — instrução administrável pela tela (FEITA, 13/08/2026 — commit `6e8a894`) — eixo 9
 
-Tirar `INSTRUCAO_PDI` do código: migration com tabela versionada (ex.: `rh.pdi_instrucao`, com
-vigência/versão), tela de admin do RH para editar, e o serviço lendo a instrução vigente do banco
-com **fallback** ao texto do código. Assim o RH afina o "playbook" sem depender de deploy.
+`INSTRUCAO_PDI` saiu de dentro do código. **Migration 0073** cria `rh.pdi_instrucao`, versionada
+(só uma ativa, via índice parcial único; prova inline na migration). O `gerarPdi` lê a versão
+ativa do banco, com **fallback** ao texto do código quando a tabela está vazia. Domínio:
+`instrucaoAtiva`/`listarInstrucoes`/`salvarInstrucao` (repositório), `verInstrucao`/
+`atualizarInstrucao` (serviço, com auditoria). Rota `GET`/`PUT /api/pdi/instrucao` gateada por
+`pdi.homologar`. Tela **`/pdi/instrucao`** (editor + histórico + "restaurar padrão do sistema"),
+com link a partir do `/pdi` para quem homologa. Smoke na 3001 (GET→PUT→GET→403 do gestor) e tabela
+limpa ao fim. Assim o RH afina o "playbook" sem depender de deploy.
+
+---
+
+**Status da iniciativa: A → B → C COMPLETA e provada** (commits `dd17d8f`, `3afe44a`, `6e8a894` na
+`revisao-geral`). Portões: tsc 0, lint 0, 203 testes. Migration até a 0073.
 
 ## Fontes (com nível de confiabilidade)
 
