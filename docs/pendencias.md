@@ -13,7 +13,7 @@
 | 2 | Saldo de banco de horas na transferência · ✅ RESOLVIDA via #1 | Guilherme | 31/07/2026 | fechamento contábil entre CNPJs |
 | 3 | Limite concessivo de férias: 11 ou 12 meses · ✅ RESOLVIDA | Guilherme | 30/07/2026 | alerta de "dobro" na tela do titular |
 | 4 | Folha: 5º dia corrido ou útil · ✅ RESOLVIDA (0064) | Guilherme | 30/07/2026 | indicador de prazo de fechamento |
-| 5 | Lista de rubricas e layout dos importadores · ⏳ PARCIAL (0069: catálogo seguro; falta importadores + decisões) | Diego | 29/07/2026 | folha completa, importação |
+| 5 | Lista de rubricas e layout dos importadores · ✅ ENCERRADA 13/08 (rubricas têm CRUD na tela; importador de ponto já existe; resto = config do DP / evolução) | Diego → Guilherme | 29/07/2026 | folha completa, importação |
 | 6 | Balde anônimo já gravado com corte errado · ✅ RESOLVIDA (0063) | Guilherme | 01/08/2026 | nada hoje; conta na implantação |
 | 7 | Benefício na transferência entre CNPJs: o critério ainda barra · ✅ RESOLVIDA via #1 | Guilherme | 06/08/2026 | quem perde benefício ao mudar de CNPJ |
 | 9 | Folha: quem conta como dependente para o IRRF · ✅ RESOLVIDA (0061) | Guilherme | 10/08/2026 | base do IRRF retido |
@@ -221,6 +221,33 @@ códigos reais no lugar dos placeholders — mas a execução vai **junto dos im
 códigos do motor; trocar edita o cálculo e exige re-verificação). **Importadores: o dono pediu para
 deixar como pendência**, não construir agora — é o que ainda trava a folha real. Detalhe em
 [docs/18](18-plano-de-rubricas-diego.md) §2a e §5.
+
+**ENCERRADA 13/08/2026 — decisão do dono, reenquadrando o escopo.** Verificado no código
+(não de memória) que o que parecia bloqueio é, na verdade, capacidade pronta + configuração
+de DP + evolução opcional. Deixa de ser "travado esperando terceiro":
+
+- **Rubricas — não é pendência.** O sistema tem CRUD completo pela tela `/folha/parametros`:
+  criar rubrica nova (`inserirRubrica`), editar e versionar por vigência (`inserirVersaoRubrica`).
+  O DP monta o catálogo real na tela — é entrada de dados, não código faltando. Ressalva: 4–5
+  códigos são "motorizados" (Salário Base, HE, DSR, Salário Família, INSS têm tipo de cálculo
+  preso ao motor); trocá-los pelos códigos do Diego mexe no cálculo e fica como **evolução da
+  folha** (segue documentado em [docs/18](18-plano-de-rubricas-diego.md)), não como bloqueio.
+- **Importador de ponto — já existe e é o único relevante agora.** `POST /api/ponto/importacoes`
+  + formulário na tela `/ponto` leem a planilha padrão de 4 colunas (`matricula ; data ; hora ;
+  tipo`), com apelidos de relógio e validação linha a linha. Os **demais importadores** (rubricas/
+  eventos de folha via arquivo, e o AFD binário oficial) ficam **fora de escopo agora**, por
+  decisão do dono.
+- **Ponto / REP-P — decisão: caminho A.** A Fast vai usar um **REP-P (ou relógio) de terceiro** e
+  **importar** os dados — o que o importador acima já suporta. Correção de conceito que ficou
+  registrada: REP-P **não** é homologado pelo INMETRO (isso é o REP-C); um REP-P exige só registro
+  do programa no INPI (Portaria 671/2021, art. 91), então não há "lista oficial" a consultar. O
+  caminho B (o próprio Fast Pessoas ser o REP-P — registro no INPI + geração de AFD/AFDT, NSR
+  sequencial, comprovante ao trabalhador) fica como **evolução futura**, se um dia.
+- **PDI** — completo e provado (portal do colaborador + visão do gestor); nunca teve linha aqui,
+  citado só para fechar o quadro.
+
+Resultado: nenhuma pendência bloqueada por nós. O que sobra do plano do Diego não se perde — vira
+evolução da folha em [docs/18](18-plano-de-rubricas-diego.md), fora da lista de bloqueios.
 
 ---
 
