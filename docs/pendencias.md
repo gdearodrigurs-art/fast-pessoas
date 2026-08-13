@@ -20,6 +20,8 @@
 | 10 | Contato do candidato: leitura entra na trilha? · ✅ RESOLVIDA (decidido: não auditar) | Guilherme | 10/08/2026 | rastro LGPD de dado de terceiro |
 | 11 | Replay de TOTP: código válido reutilizável na janela · ✅ RESOLVIDA (0060 + bateria de persona) | Guilherme | 10/08/2026 | endurecimento do 2FA |
 | 12 | Vínculo "temporário" não tem família de modelo de admissão · ✅ RESOLVIDA (decidido: não usa) | Guilherme | 10/08/2026 | checklist próprio de temporário |
+| 13 | Padrão Modelo — **recrutamento**: quem escolhe o modelo · quando trava · Pesquisa social · ⏳ ABERTA | Guilherme | 13/08/2026 | a 3ª fatia do Padrão Modelo (processo seletivo versionado) |
+| 14 | Padrão Modelo — **clima**: qual universo de pergunta (check-in × pesquisa) · ⏳ ABERTA | Guilherme | 13/08/2026 | a 4ª fatia do Padrão Modelo (perguntas: catálogo/continuidade) |
 
 ---
 
@@ -594,3 +596,103 @@ trata como CLT.** Portanto o modelo de checklist NÃO ganha a família 'temporá
 comentário em `admissao/esquemas.ts` (TIPOS_VINCULO_MODELO) apontando aqui. Se um dia a Fast
 passar a usar o vínculo, reabrir: migration estendendo o CHECK da 0058 + a família na tela.
 **RESOLVIDO.**
+
+---
+
+## 13 · Padrão Modelo — fatia RECRUTAMENTO: 3 decisões antes de construir
+
+**Contexto:** o Padrão Modelo já foi aplicado 2× (admissão/0058 por tipo de vínculo, avaliação/0074
+por cargo). Recrutamento é a fatia **mais estrutural** das quatro: ao contrário das outras, **não
+existe a entidade "modelo"** — `rh.etapa_selecao_versao` (`0012:72-97`) funde catálogo e modelo, com
+dois índices GLOBAIS (`0012:89-92`) que impõem um processo seletivo único para a empresa inteira, e a
+candidatura **não congela** nada — o kanban relê a lista viva a cada movimento (`recrutamento/repositorio.ts:155-172`).
+Construir a fatia = **criar** a peça "modelo" (que as outras já tinham) + a etapa "Pesquisa social" +
+o relatório dT por etapa. Tudo o mais (movimentação append-only carimbada, banda salarial congelada,
+admissão disparada no aceite) já existe e se reaproveita.
+
+### 13a · Quem escolhe o modelo de processo: a VAGA ou o CARGO?
+
+**Minha recomendação: a VAGA escolhe, com o modelo GERAL pré-selecionado.**
+
+**A favor:** um processo de *vendedor de loja* e uma contratação de *gerente* do mesmo cargo podem
+querer ritos diferentes (executive search ≠ balconista) — o recorte por cargo não captura isso, e a
+vaga já é o ponto natural de decisão. Foi o que os docs modelaram ("a vaga guarda a versão do modelo",
+`docs/16:547`). Custo: um campo a mais na criação da vaga.
+
+**Contra / alternativa mais barata:** recortar por **cargo** (zero clique, reusa a 0074 quase igual)
+seria mais consistente com a avaliação — mas perde a flexibilidade que o recrutamento pede.
+
+### 13b · Vaga aberta pode trocar de modelo depois? *(decisão já aberta em docs/17:125)*
+
+**Minha recomendação: só enquanto a vaga não tiver NENHUMA candidatura** — que é a sua própria
+sugestão em `docs/16:555`.
+
+**A favor:** simples de explicar e de implementar (um `COUNT(*)` de candidaturas antes de permitir a
+troca), evita pipeline misto, e é coerente com a banda salarial, que já congela na abertura
+(`recrutamento/servico.ts:361-367`). Assim que o 1º candidato entra, o modelo trava.
+
+### 13c · "Pesquisa social" (consulta antes da oferta, o L1)
+
+**Minha recomendação: uma ETAPA comum do catálogo, opcional por modelo, posicionada antes da Oferta,
+com resultado aprovado/não + anexo.** Hoje não há anexo em lugar nenhum do recrutamento
+(`parecer_selecao` não tem coluna de arquivo, `0012:182-195`) nem desfecho binário por etapa.
+
+**A favor:** tratá-la como etapa (não como gate separado) mantém as 3 peças limpas e deixa o dT
+medi-la como qualquer outra. Opcional porque nem toda vaga exige consulta.
+**Sub-decisão de privacidade:** quem vê o resultado/anexo? Recomendo restrito a `rs.gerir`/`rs.ver`
+com trilha de leitura, no mesmo molde do valor da oferta e do parecer.
+
+**Se fechar só o essencial primeiro:** 13a + 13b destravam o modelo versionado (o núcleo). 13c
+(Pesquisa social) e o relatório dT por etapa vêm logo atrás — o dT não tem decisão de esquema
+pendente (o dado já existe em `movimentacao_candidatura.em`; regra: mediana, não média; fechadas +
+abertas hoje; agrupar por cargo, nunca por `vaga.titulo`).
+
+**Por que subo em vez de decidir:** 13a e 13b definem o desenho do schema (imutável depois) e são
+escolha de negócio (como a Fast quer conduzir seleções). 13c mistura privacidade de dado de terceiro.
+
+---
+
+## 14 · Padrão Modelo — fatia CLIMA: qual universo de pergunta, antes de tudo
+
+**Contexto e a ambiguidade central:** a linha da fatia (`docs/17:74` — "clima — perguntas: catálogo,
+continuidade, regra de edição") **não diz de qual pergunta fala**, e existem DOIS universos separados
+no schema `rh_clima`:
+- **Check-in diário** (`rh_clima.pergunta_versao`, `0004:14-52`): pergunta standalone, **versionada**
+  com vigência, respondida todo dia — mas **sem tela/rota/chave** para administrar (semeada na
+  migration e nunca mais tocada). É o buraco literal que você registrou em `docs/16:400-415`.
+- **Pesquisa estruturada** (`rh_clima.pergunta_pesquisa`, `0022:92-127`): tipos ricos (escala, NPS,
+  texto, escolha), mas **zero reaproveitamento** — cada pesquisa digita as suas do zero.
+
+Nenhum dos dois tem "catálogo reaproveitável" nem "continuidade entre edições". E você **já desenhou**
+a continuidade + a regra de edição à mão, para o CHECK-IN, em `docs/16:417-464`.
+
+### 14a · Qual universo é a fatia?
+
+**Minha recomendação: comece SÓ pelo check-in diário.** É o buraco literal, o desenho já é seu, e o
+custo é mínimo: uma coluna `continua_de` + relaxar um trigger + uma tela/rota/chave — **zero tabela
+nova, zero migração de dado** (as 2 perguntas atuais ficam com o campo vazio, `docs/16:440`). A
+pesquisa estruturada não está bloqueada por isto (o RH já monta cada pesquisa livremente hoje).
+
+### 14b · A regra de edição — você já sentenciou; confirma?
+
+Você escreveu (`docs/16:421-464`): o texto muda **enquanto não houver NENHUMA resposta** (substitui
+"só em rascunho"); **reformular** = versão nova apontando para a anterior e encerra a anterior no
+mesmo ato; **aposentar** = encerra sem continuidade; **assunto novo** = versão nova sem continuidade.
+
+**Minha recomendação: adotar exatamente como você escreveu.** Uma regra só ("existe resposta?"), uma
+coluna só (`continua_de BIGINT REFERENCES pergunta_versao(id) UNIQUE`, para a série não virar um Y).
+Relaxar o trigger `pergunta_versao_proteger` (`0004:44`) de "rascunho" para "sem resposta".
+
+### 14c · Quer um CATÁLOGO reaproveitável entre pesquisas (banco de perguntas)?
+
+**Minha recomendação: NÃO fazer banco compartilhado agora.** A cadeia `continua_de` já dá a série e a
+comparação entre edições, sem tabela nova. Um banco compartilhado convida o cruzamento que o
+anonimato proíbe: uma pergunta reusada entre uma pesquisa **anônima** e uma **identificada** abriria
+brecha de reidentificação. É o "bom que funciona" — e mantém o piso *k* intocado.
+
+**Invariante que NÃO pode quebrar:** catálogo/continuidade vivem na camada de **definição** da
+pergunta; a camada de **resposta** (onde o piso *k* de anonimato mora — `pesquisas/esquemas.ts:114-164`)
+não muda. O *k* continua valendo **por edição, por recorte, por pergunta** — nunca diluído na série.
+
+**Por que subo em vez de decidir:** 14a escolhe o escopo (check-in × pesquisa × os dois), que muda o
+que se constrói; 14b/14c você já esboçou mas não confirmou como decisão fechada.
