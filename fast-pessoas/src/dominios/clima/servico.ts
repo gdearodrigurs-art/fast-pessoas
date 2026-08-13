@@ -352,26 +352,41 @@ export async function criarPergunta(
   sessao: PayloadSessao,
   dados: TextoPergunta
 ): Promise<{ id: number }> {
-  return comTransacao(sessao.usuario_id, async (cliente) => {
-    const ordem = await proximaOrdemAtiva(cliente);
-    const id = await criarPerguntaAtiva(cliente, {
-      texto: dados.texto,
-      ordem,
-      continua_de: null,
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const ordem = await proximaOrdemAtiva(cliente);
+      const id = await criarPerguntaAtiva(cliente, {
+        texto: dados.texto,
+        ordem,
+        continua_de: null,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_PERGUNTA,
+        registroId: String(id),
+        diff: {
+          Texto: { de: null, para: dados.texto },
+          Ordem: { de: null, para: String(ordem) },
+        },
+      });
+      return { id };
     });
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "criacao",
-      tabela: TABELA_PERGUNTA,
-      registroId: String(id),
-      diff: {
-        Texto: { de: null, para: dados.texto },
-        Ordem: { de: null, para: String(ordem) },
-      },
-    });
-    return { id };
-  });
+  } catch (erro) {
+    // Dois "assunto novo" concorrentes leem o mesmo MAX(ordem) e colidem no
+    // índice parcial pergunta_versao_ordem_ativa (23505). O dado fica íntegro
+    // (o índice barrou o segundo INSERT); traduzimos para 409 amigável em vez
+    // do 500 cru. Reformular não sofre disso (reusa a ordem da anterior,
+    // serializado pelo FOR UPDATE).
+    if (violacaoUnica(erro) === "pergunta_versao_ordem_ativa") {
+      throw new ErroHttp(
+        409,
+        "Outra pergunta foi criada ao mesmo tempo — recarregue e tente de novo."
+      );
+    }
+    throw erro;
+  }
 }
 
 /** Editar: só enquanto não houver resposta (o trigger é a trava dura). */
