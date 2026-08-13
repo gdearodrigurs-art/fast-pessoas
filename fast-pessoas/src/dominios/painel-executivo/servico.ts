@@ -35,6 +35,7 @@ import {
   type CardBloqueado,
   type CardClima,
   type CardCustoPessoal,
+  type CardDesenvolvimento,
   type CardDiversidade,
   type CardHeadcount,
   type CardPerformance,
@@ -775,19 +776,14 @@ async function montarPerformance(
   };
 }
 
-/** ROI de treinamento: card honesto. Não existe fonte — e o painel diz isso. */
-function montarRoiTreinamento(): CardSemFonte {
-  return {
-    disponivel: false,
-    bloqueio: "sem_fonte",
-    motivo:
-      "Depende do módulo de Treinamento & Desenvolvimento, que hoje vive no " +
-      "Sults: o Fast Pessoas não tem custo de treinamento, horas de trilha nem " +
-      "participação por curso. Sem esses três números não existe ROI — e um ROI " +
-      "estimado num painel de diretoria vira decisão errada. Quando T&D entrar " +
-      "(ou for integrado), o cálculo natural é ganho medido (queda de turnover e " +
-      "de retrabalho na área treinada) sobre custo do programa.",
-  };
+/**
+ * Desenvolvimento das pessoas — vive no PDI (decisão do dono, 13/08/2026, que
+ * encerrou o T&D no Sults como dependência). Mostra planos homologados e o
+ * andamento das ações; substitui o antigo "ROI de treinamento" sem fonte.
+ */
+async function montarDesenvolvimento(): Promise<CardDesenvolvimento> {
+  const d = await repositorio.desenvolvimentoPdi();
+  return { disponivel: true, ...d };
 }
 
 // ------------------------------------------------------------------ orquestração
@@ -818,6 +814,7 @@ export async function montarPainelExecutivo(
     diversidade,
     clima,
     performance,
+    desenvolvimento,
   ] = await Promise.all([
     montarHeadcount(hoje, primeiroMes, mesCorrente),
     montarTurnover(inicio12m, hoje, primeiroMes, mesCorrente),
@@ -828,6 +825,7 @@ export async function montarPainelExecutivo(
     montarDiversidade(sessao, hoje, primeiroMes, mesCorrente),
     montarClima(hoje, primeiroMes, mesCorrente),
     montarPerformance(sessao),
+    montarDesenvolvimento(),
   ]);
 
   return {
@@ -842,6 +840,6 @@ export async function montarPainelExecutivo(
     diversidade,
     clima,
     performance,
-    roi_treinamento: montarRoiTreinamento(),
+    desenvolvimento,
   };
 }

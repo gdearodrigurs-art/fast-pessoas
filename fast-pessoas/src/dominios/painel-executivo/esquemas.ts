@@ -89,6 +89,19 @@ export interface CardSemFonte {
   motivo: string;
 }
 
+/**
+ * Desenvolvimento das pessoas — vive no PDI. Substitui o antigo "ROI de
+ * treinamento" (que dependia do T&D no Sults): agora há fonte de verdade.
+ */
+export interface CardDesenvolvimento {
+  disponivel: true;
+  planos_ativos: number;
+  pessoas: number;
+  acoes_total: number;
+  acoes_concluidas: number;
+  acoes_andamento: number;
+}
+
 export interface CardHeadcount {
   periodo: string;
   conta: string;
@@ -246,7 +259,7 @@ export interface PainelExecutivo {
   diversidade: CardDiversidade;
   clima: CardClima;
   performance: CardPerformance;
-  roi_treinamento: CardSemFonte;
+  desenvolvimento: CardDesenvolvimento;
 }
 
 // ------------------------------------------------------------------ rótulos
@@ -305,5 +318,5 @@ export function dataCurta(iso: string): string {
 //    12h tratados como se não existissem. Derivar o dia esperado da escala
 //    (rh.escala_colaborador) é conta do motor do ponto; consumi-la aqui melhora
 //    o denominador sem mudar a fórmula.
-//  • ROI DE TREINAMENTO: depende do módulo de T&D (hoje no Sults). O card diz
-//    isso na tela em vez de inventar número — ver `roi_treinamento`.
+//  • DESENVOLVIMENTO: o T&D vive no PDI (decisão do dono, 13/08/2026). O card
+//    mostra planos ativos e o andamento das ações — ver `desenvolvimento`.

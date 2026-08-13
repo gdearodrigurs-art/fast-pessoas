@@ -62,6 +62,14 @@ interface CardSemFonte {
   bloqueio: "sem_fonte";
   motivo: string;
 }
+interface CardDesenvolvimento {
+  disponivel: true;
+  planos_ativos: number;
+  pessoas: number;
+  acoes_total: number;
+  acoes_concluidas: number;
+  acoes_andamento: number;
+}
 
 interface CardCustoPessoal {
   disponivel: true;
@@ -185,7 +193,7 @@ interface Painel {
     }[];
     sem_serie: string;
   };
-  roi_treinamento: CardSemFonte;
+  desenvolvimento: CardDesenvolvimento;
 }
 
 // ------------------------------------------------------------------ peças
@@ -911,12 +919,22 @@ export function PainelExecutivoTela() {
               <Conta texto={painel.performance.conta} />
             </Cartao>
 
-            {/* -------------------------------------------------- ROI de T&D */}
-            <CartaoIndisponivel
-              titulo="ROI de treinamento"
-              selo="Sem fonte"
-              motivo={painel.roi_treinamento.motivo}
-            />
+            {/* -------------------------------------------------- desenvolvimento (PDI) */}
+            <Cartao titulo="Desenvolvimento (PDI)">
+              <span className={estilos.valor}>
+                {inteiro(painel.desenvolvimento.planos_ativos)}
+              </span>
+              <span className={estilos.valorSecundario}>
+                plano(s) ativo(s) · {inteiro(painel.desenvolvimento.pessoas)}{" "}
+                pessoa(s)
+              </span>
+              <span className={estilos.valorSecundario}>
+                {inteiro(painel.desenvolvimento.acoes_concluidas)}/
+                {inteiro(painel.desenvolvimento.acoes_total)} ações concluídas ·{" "}
+                {inteiro(painel.desenvolvimento.acoes_andamento)} em andamento
+              </span>
+              <Conta texto="Planos de desenvolvimento homologados e o andamento das ações — o T&D vive no Meu PDI." />
+            </Cartao>
           </div>
         )}
       </main>

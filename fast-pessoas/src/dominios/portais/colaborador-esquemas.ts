@@ -318,16 +318,16 @@ export const ROTULOS_STATUS_PDI: Record<string, string> = {
 };
 
 /**
- * Bloco 8 do pedido da analista: treinamentos. O texto é a resposta honesta —
- * o LMS é o Sults (seção 7 do documento de feedback: fronteira Fast Pessoas ×
- * Sults é decisão de escopo pendente). Enquanto não houver integração, o
- * portal DIZ isso em vez de mostrar uma lista vazia que parece defeito.
+ * Bloco 8 do pedido da analista: treinamentos. Decisão do dono (13/08/2026): o
+ * DESENVOLVIMENTO passa a viver no PDI (Meu PDI) — planejar, agir e acompanhar.
+ * O Sults deixa de ser dependência: vira, no máximo, repositório de conteúdo que
+ * uma ação de formação referencia por link. O texto aponta o colaborador pro PDI.
  */
 export const EXPLICACAO_TREINAMENTOS =
-  "O histórico de treinamentos ainda não vive aqui: hoje as trilhas, provas e " +
-  "certificados são registrados no Sults. Quando a integração for definida, " +
-  "este bloco passa a mostrar os seus treinamentos concluídos e os obrigatórios " +
-  "em aberto. Até então, consulte o Sults ou abra uma solicitação para o RH.";
+  "Seu desenvolvimento agora vive no Meu PDI: é lá que ficam o plano combinado " +
+  "com o seu gestor, as ações (inclusive as de formação) e o andamento de cada " +
+  "uma. Cursos e certificados de conteúdo externo, quando houver, são referenciados " +
+  "pela ação de formação do próprio PDI.";
 
 // ------------------------------------------------------------------ derivações
 

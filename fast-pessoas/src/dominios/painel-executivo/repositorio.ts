@@ -133,6 +133,43 @@ export async function headcountEm(data: string): Promise<number> {
 }
 
 /**
+ * Desenvolvimento (PDI): planos homologados e o andamento das ações. Substitui o
+ * antigo "ROI de treinamento" — agora que o T&D vive no PDI, há fonte de verdade.
+ * Visão de empresa (o painel é de diretoria/DP); as ações vivem em rh.acao_aberta.
+ */
+export async function desenvolvimentoPdi(): Promise<{
+  planos_ativos: number;
+  pessoas: number;
+  acoes_total: number;
+  acoes_concluidas: number;
+  acoes_andamento: number;
+}> {
+  const linhas = await consultar<{
+    planos_ativos: number;
+    pessoas: number;
+    acoes_total: number;
+    acoes_concluidas: number;
+    acoes_andamento: number;
+  }>(
+    `SELECT
+       (SELECT count(*) FROM rh.pdi WHERE status = 'homologado')::int AS planos_ativos,
+       (SELECT count(DISTINCT pessoa_id) FROM rh.pdi WHERE status = 'homologado')::int AS pessoas,
+       count(*)::int AS acoes_total,
+       count(*) FILTER (WHERE a.status = 'concluida')::int AS acoes_concluidas,
+       count(*) FILTER (WHERE a.status = 'em_andamento')::int AS acoes_andamento
+     FROM rh.acao_aberta a`
+  );
+  const l = linhas[0];
+  return {
+    planos_ativos: l?.planos_ativos ?? 0,
+    pessoas: l?.pessoas ?? 0,
+    acoes_total: l?.acoes_total ?? 0,
+    acoes_concluidas: l?.acoes_concluidas ?? 0,
+    acoes_andamento: l?.acoes_andamento ?? 0,
+  };
+}
+
+/**
  * Quebra do headcount por unidade NA DATA — inclusive o NOME da unidade.
  *
  * O nome sai de `rh.estabelecimento_versao_em(estabelecimento_id, $1)`, nunca da
