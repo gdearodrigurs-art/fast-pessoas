@@ -201,6 +201,16 @@ export function PainelModelosAvaliacao() {
     [painel, familiaSel]
   );
 
+  // Abas do seletor: as famílias que já têm modelo + a família recém-escolhida
+  // no dropdown "+ Cargo…" (sintética, ainda sem modelo) — senão ela ficaria
+  // sem aba destacada e o único indício seria o título do editor.
+  const abas =
+    painel &&
+    familia &&
+    !painel.familias.some((f) => f.cargo_id === familia.cargo_id)
+      ? [...painel.familias, familia]
+      : (painel?.familias ?? []);
+
   const entrada = useMemo(
     () => (form ? paraEntrada(form, familiaSel) : null),
     [form, familiaSel]
@@ -373,7 +383,7 @@ export function PainelModelosAvaliacao() {
           <>
             {/* ---------------- seletor de família (Geral + cargos) ---------------- */}
             <div className={estilos.seletorFamilia}>
-              {painel.familias.map((f) => (
+              {abas.map((f) => (
                 <button
                   key={String(f.cargo_id ?? "geral")}
                   type="button"
