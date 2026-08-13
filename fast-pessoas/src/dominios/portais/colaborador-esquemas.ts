@@ -311,7 +311,8 @@ export const ANDAMENTO_CICLO: Record<StatusCiclo, string> = {
 };
 
 export const ROTULOS_STATUS_PDI: Record<string, string> = {
-  aberta: "Em andamento",
+  aberta: "Pendente",
+  em_andamento: "Em andamento",
   concluida: "Concluída",
   cancelada: "Cancelada",
 };
@@ -420,3 +421,28 @@ export const esquemaMeuDependenteEdicao = z
   });
 
 export type MeuDependenteEdicao = z.infer<typeof esquemaMeuDependenteEdicao>;
+
+// ------------------------------------------------- Meu PDI: aceite + andamento
+//
+// Também sem `colaborador_id` (nem `acao_id`): o aceite e o registro de andamento
+// saem da sessão + do id na ROTA, escopados pelo vínculo do dono. O corpo só traz
+// o que a pessoa escreve.
+
+/** Os três estados que o COLABORADOR pode marcar. Cancelar é ato do gestor/RH. */
+export const ESTADOS_ANDAMENTO_COLABORADOR = [
+  "aberta",
+  "em_andamento",
+  "concluida",
+] as const;
+
+export const esquemaRegistrarAndamento = z.object({
+  texto: z
+    .string()
+    .trim()
+    .min(1, "Escreva o que avançou")
+    .max(2000, "No máximo 2000 caracteres"),
+  /** Ausente = só um recado no log, sem mover o estado da ação. */
+  status_novo: z.enum(ESTADOS_ANDAMENTO_COLABORADOR).optional(),
+});
+
+export type RegistrarAndamento = z.infer<typeof esquemaRegistrarAndamento>;

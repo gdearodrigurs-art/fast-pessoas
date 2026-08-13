@@ -16,6 +16,7 @@
  * que um id venha da requisição.
  */
 
+import type { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
 import type { StatusCiclo, TipoCiclo } from "../avaliacao/esquemas";
 
@@ -142,4 +143,192 @@ export async function listarPdiDoColaborador(
     ...linha,
     id: Number(linha.id),
   }));
+}
+
+// ------------------------------------------------------------------ Meu PDI (aceite + andamento)
+// O lado da PESSOA: aceitar o plano homologado e reportar o andamento de cada
+// ação (três estados + um log append-only). Tudo escopado por `colaboradorId`
+// (o vínculo DA SESSÃO): um PDI é "meu" se tem ação do meu vínculo.
+
+export interface RegistroAndamento {
+  id: number;
+  texto: string;
+  status_novo: string | null;
+  autor_nome: string;
+  criado_em: string;
+}
+
+export interface AcaoComAndamento {
+  id: number;
+  descricao: string;
+  prazo: string;
+  status: string;
+  dias_ate_prazo: number;
+  andamento: RegistroAndamento[];
+}
+
+export interface MeuPdi {
+  id: number;
+  resumo: string;
+  homologado_em: string;
+  aceito_em: string | null;
+  acoes: AcaoComAndamento[];
+}
+
+/** A pessoa dona da sessão. O PDI segue a PESSOA, não o vínculo atual. */
+export async function pessoaIdDoUsuario(
+  usuarioId: number
+): Promise<number | null> {
+  const [linha] = await consultar<{ pessoa_id: string | null }>(
+    "SELECT pessoa_id FROM sistema.usuario WHERE id = $1",
+    [usuarioId]
+  );
+  return linha?.pessoa_id ? Number(linha.pessoa_id) : null;
+}
+
+/** O PDI HOMOLOGADO mais recente da pessoa, com o aceite e as ações + log. */
+export async function buscarMeuPdi(
+  pessoaId: number
+): Promise<MeuPdi | null> {
+  // Escopo pela PESSOA (não pelo vínculo atual): o PDI é da pessoa, e ela pode
+  // ter sido transferida — as ações ficam no vínculo em que o plano nasceu
+  // (eixo 1). rh.pdi.pessoa_id é o dono estável.
+  const [pdi] = await consultar<{
+    id: string;
+    resumo: string | null;
+    homologado_em: string;
+    aceito_em: string | null;
+  }>(
+    `SELECT p.id, p.conteudo->>'resumo' AS resumo,
+            p.homologado_em::text AS homologado_em,
+            p.aceito_em::text AS aceito_em
+       FROM rh.pdi p
+      WHERE p.status = 'homologado' AND p.pessoa_id = $1
+      ORDER BY p.homologado_em DESC, p.id DESC
+      LIMIT 1`,
+    [pessoaId]
+  );
+  if (!pdi) return null;
+  const pdiId = Number(pdi.id);
+
+  const acoes = await consultar<{
+    id: string;
+    descricao: string;
+    prazo: string;
+    status: string;
+    dias_ate_prazo: number;
+  }>(
+    `SELECT a.id, a.descricao, a.prazo::text AS prazo, a.status,
+            (a.prazo - ${HOJE_SP})::int AS dias_ate_prazo
+       FROM rh.acao_aberta a
+      WHERE a.pdi_id = $1
+      ORDER BY (a.status = 'concluida'), a.prazo, a.id`,
+    [pdiId]
+  );
+
+  const registros = await consultar<{
+    id: string;
+    acao_aberta_id: string;
+    texto: string;
+    status_novo: string | null;
+    autor_nome: string;
+    criado_em: string;
+  }>(
+    `SELECT an.id, an.acao_aberta_id, an.texto, an.status_novo,
+            u.nome AS autor_nome, an.criado_em::text AS criado_em
+       FROM rh.acao_andamento an
+       JOIN rh.acao_aberta a ON a.id = an.acao_aberta_id
+       JOIN sistema.usuario u ON u.id = an.autor_usuario_id
+      WHERE a.pdi_id = $1
+      ORDER BY an.criado_em, an.id`,
+    [pdiId]
+  );
+  const porAcao = new Map<number, RegistroAndamento[]>();
+  for (const r of registros) {
+    const chave = Number(r.acao_aberta_id);
+    const lista = porAcao.get(chave) ?? [];
+    lista.push({
+      id: Number(r.id),
+      texto: r.texto,
+      status_novo: r.status_novo,
+      autor_nome: r.autor_nome,
+      criado_em: r.criado_em,
+    });
+    porAcao.set(chave, lista);
+  }
+
+  return {
+    id: pdiId,
+    resumo: pdi.resumo ?? "",
+    homologado_em: pdi.homologado_em,
+    aceito_em: pdi.aceito_em,
+    acoes: acoes.map((a) => ({
+      id: Number(a.id),
+      descricao: a.descricao,
+      prazo: a.prazo,
+      status: a.status,
+      dias_ate_prazo: a.dias_ate_prazo,
+      andamento: porAcao.get(Number(a.id)) ?? [],
+    })),
+  };
+}
+
+/**
+ * Registra o aceite do plano. Escopo no próprio SQL: só um PDI homologado, ainda
+ * não aceito, que tenha ação do vínculo da sessão. 0 linhas = não é dela / não
+ * homologado / já aceito — o serviço traduz.
+ */
+export async function aceitarPdi(
+  cliente: PoolClient,
+  pdiId: number,
+  pessoaId: number,
+  usuarioId: number
+): Promise<number> {
+  const r = await cliente.query(
+    `UPDATE rh.pdi SET aceito_por = $3, aceito_em = now()
+      WHERE id = $1 AND status = 'homologado' AND aceito_em IS NULL
+        AND pessoa_id = $2`,
+    [pdiId, pessoaId, usuarioId]
+  );
+  return r.rowCount ?? 0;
+}
+
+/** A ação TRAVADA, se for da PESSOA (qualquer vínculo dela). null = não é (404). */
+export async function buscarAcaoDaPessoa(
+  cliente: PoolClient,
+  acaoId: number,
+  pessoaId: number
+): Promise<{ id: number; status: string } | null> {
+  const { rows } = await cliente.query<{ id: string; status: string }>(
+    `SELECT a.id, a.status FROM rh.acao_aberta a
+       JOIN rh.colaborador c ON c.id = a.colaborador_id
+      WHERE a.id = $1 AND c.pessoa_id = $2 FOR UPDATE OF a`,
+    [acaoId, pessoaId]
+  );
+  if (rows.length === 0) return null;
+  return { id: Number(rows[0].id), status: rows[0].status };
+}
+
+/** Acrescenta um registro no log (append-only) e, se houver status_novo, move o estado da ação. */
+export async function registrarAndamentoAcao(
+  cliente: PoolClient,
+  dados: {
+    acaoId: number;
+    autorUsuarioId: number;
+    texto: string;
+    statusNovo: string | null;
+  }
+): Promise<void> {
+  await cliente.query(
+    `INSERT INTO rh.acao_andamento
+       (acao_aberta_id, autor_usuario_id, texto, status_novo)
+     VALUES ($1, $2, $3, $4)`,
+    [dados.acaoId, dados.autorUsuarioId, dados.texto, dados.statusNovo]
+  );
+  if (dados.statusNovo) {
+    await cliente.query(`UPDATE rh.acao_aberta SET status = $2 WHERE id = $1`, [
+      dados.acaoId,
+      dados.statusNovo,
+    ]);
+  }
 }
