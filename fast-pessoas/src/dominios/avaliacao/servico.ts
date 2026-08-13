@@ -34,7 +34,7 @@ import {
   buscarCicloParaMutacao,
   buscarDecisao,
   buscarEstrutura,
-  buscarModeloAtivo,
+  buscarGeralAtivo,
   buscarModeloParaMutacao,
   buscarResultado,
   buscarResultadoComCliente,
@@ -46,7 +46,7 @@ import {
   contarParesEnviados,
   criarModeloRascunho,
   DecisaoGravada,
-  existeRascunho,
+  existeRascunhoDaFamilia,
   garantirAvaliacao,
   gerarCiclosExperiencia,
   inserirDecisao,
@@ -58,6 +58,7 @@ import {
   listarCandidatosPares,
   listarCiclos,
   listarCiclosDoAvaliador,
+  listarCargosParaModelo,
   listarModelos,
   listarParesDoCiclo,
   listarPendenciasSemGestor,
@@ -164,7 +165,6 @@ async function auditarCicloCriado(
   cliente: PoolClient,
   sessao: PayloadSessao,
   criado: CicloCriado,
-  modeloVersao: number,
   origem: string
 ): Promise<void> {
   await registrarAlteracao(cliente, {
@@ -181,7 +181,7 @@ async function auditarCicloCriado(
       Tipo: { de: null, para: ROTULOS_TIPO_CICLO[criado.tipo] },
       Avaliador: { de: null, para: criado.avaliador_nome },
       Prazo: { de: null, para: formatarData(criado.prazo) },
-      Modelo: { de: null, para: `v${modeloVersao} (congelado no ciclo)` },
+      Modelo: { de: null, para: `v${criado.modelo_versao} (congelado no ciclo)` },
       Origem: { de: null, para: origem },
     },
   });
@@ -217,7 +217,8 @@ async function notificarAvaliador(
 
 export interface PainelAvaliacoes {
   pode: PermissoesAvaliacao;
-  modelo_ativo: { versao: number; nome: string } | null;
+  /** Estado dos modelos: se há Geral ativo (piso) e quantos cargos têm o seu. */
+  modelos: { geral_ativo: boolean; cargos_com_modelo: number };
   /** Ciclos de experiência abertos automaticamente NESTA chamada. */
   ciclos_gerados_agora: number;
   /** Ciclos em que o usuário é o avaliador (null sem avaliacao.responder). */
@@ -230,17 +231,25 @@ export interface PainelAvaliacoes {
 
 /**
  * Painel do módulo. Antes de listar, gera LAZY os ciclos de experiência
- * devidos a partir de rh.processo_admissao (marcos 45/90) com o modelo
- * ATIVO congelado — sem modelo ativo nada é gerado (aviso na tela).
+ * devidos a partir de rh.processo_admissao (marcos 45/90), congelando em cada
+ * ciclo o modelo do CARGO da pessoa (fallback no Geral) — sem Geral ativo nada
+ * é gerado (aviso na tela).
  */
 export async function montarPainel(
   sessao: PayloadSessao,
   pode: PermissoesAvaliacao
 ): Promise<PainelAvaliacoes> {
-  const modeloAtivo = await buscarModeloAtivo();
+  const modelos = await listarModelos();
+  const geralAtivo =
+    modelos.find((m) => m.status === "ativa" && m.cargo_id === null) ?? null;
+  const cargosComModelo = new Set(
+    modelos
+      .filter((m) => m.status === "ativa" && m.cargo_id !== null)
+      .map((m) => m.cargo_id)
+  ).size;
   let geradosAgora = 0;
-  if (modeloAtivo) {
-    geradosAgora = await gerarExperienciaLazy(sessao, modeloAtivo);
+  if (geralAtivo) {
+    geradosAgora = await gerarExperienciaLazy(sessao);
   }
   const [minhas, ciclos, pendencias] = await Promise.all([
     pode.responder ? listarCiclosDoAvaliador(sessao.usuario_id) : null,
@@ -249,9 +258,10 @@ export async function montarPainel(
   ]);
   return {
     pode,
-    modelo_ativo: modeloAtivo
-      ? { versao: modeloAtivo.versao, nome: modeloAtivo.nome }
-      : null,
+    modelos: {
+      geral_ativo: geralAtivo !== null,
+      cargos_com_modelo: cargosComModelo,
+    },
     ciclos_gerados_agora: geradosAgora,
     minhas,
     ciclos,
@@ -259,19 +269,15 @@ export async function montarPainel(
   };
 }
 
-async function gerarExperienciaLazy(
-  sessao: PayloadSessao,
-  modeloAtivo: ModeloResumo
-): Promise<number> {
+async function gerarExperienciaLazy(sessao: PayloadSessao): Promise<number> {
   try {
     return await comTransacao(sessao.usuario_id, async (cliente) => {
-      const criados = await gerarCiclosExperiencia(cliente, modeloAtivo.id);
+      const criados = await gerarCiclosExperiencia(cliente);
       for (const criado of criados) {
         await auditarCicloCriado(
           cliente,
           sessao,
           criado,
-          modeloAtivo.versao,
           "Geração automática (marcos 45/90 do contrato de experiência)"
         );
         await notificarAvaliador(cliente, sessao, criado);
@@ -302,21 +308,20 @@ export async function abrirLote(
   if (prazo < hojeSaoPaulo()) {
     throw new ErroHttpCampo(400, "O prazo não pode estar no passado.", "prazo");
   }
-  const modeloAtivo = await buscarModeloAtivo();
-  if (!modeloAtivo) {
+  const geralAtivo = await buscarGeralAtivo();
+  if (!geralAtivo) {
     throw new ErroHttp(
       409,
-      "Não há versão ativa do modelo de avaliação. Ative um modelo antes de abrir ciclos."
+      "Defina e ative o modelo GERAL de avaliação antes de abrir ciclos — ele é o piso que cobre quem não tem modelo do próprio cargo."
     );
   }
   const criados = await comTransacao(sessao.usuario_id, async (cliente) => {
-    const lista = await abrirLoteDesempenho(cliente, modeloAtivo.id, prazo);
+    const lista = await abrirLoteDesempenho(cliente, prazo);
     for (const criado of lista) {
       await auditarCicloCriado(
         cliente,
         sessao,
         criado,
-        modeloAtivo.versao,
         `Abertura em lote (prazo ${formatarData(prazo)})`
       );
       await notificarAvaliador(cliente, sessao, criado);
@@ -1367,21 +1372,68 @@ export async function cancelarCiclo(
 
 // ------------------------------------------------------------------ administração do modelo
 
-export interface PainelModelos {
+export interface FamiliaModeloView {
+  /** null = Geral (o piso/fallback); senão o cargo desta família. */
+  cargo_id: number | null;
+  rotulo: string;
+  /** Todas as versões desta família, mais nova primeiro (para o histórico). */
   modelos: ModeloResumo[];
   ativa: EstruturaCongelada | null;
   rascunho: EstruturaCongelada | null;
 }
 
+export interface PainelModelos {
+  /** Geral primeiro, depois um por cargo que já tem modelo (ordenado por nome). */
+  familias: FamiliaModeloView[];
+  /** Cargos com versão ativa que ainda NÃO têm modelo — alimentam o seletor. */
+  cargos_sem_modelo: { id: number; nome: string }[];
+}
+
 export async function montarPainelModelos(): Promise<PainelModelos> {
-  const modelos = await listarModelos();
-  const ativa = modelos.find((m) => m.status === "ativa");
-  const rascunho = modelos.find((m) => m.status === "rascunho");
-  const [estruturaAtiva, estruturaRascunho] = await Promise.all([
-    ativa ? buscarEstrutura(ativa.id) : null,
-    rascunho ? buscarEstrutura(rascunho.id) : null,
+  const [modelos, cargos] = await Promise.all([
+    listarModelos(),
+    listarCargosParaModelo(),
   ]);
-  return { modelos, ativa: estruturaAtiva, rascunho: estruturaRascunho };
+  // Uma família por valor distinto de cargo_id; o Geral (null) sempre presente.
+  const chaves = new Set<number | null>(modelos.map((m) => m.cargo_id));
+  chaves.add(null);
+  const familias = await Promise.all(
+    Array.from(chaves).map(async (cargoId) => {
+      const daFamilia = modelos.filter((m) => m.cargo_id === cargoId);
+      const ativa = daFamilia.find((m) => m.status === "ativa") ?? null;
+      const rascunho = daFamilia.find((m) => m.status === "rascunho") ?? null;
+      const [estruturaAtiva, estruturaRascunho] = await Promise.all([
+        ativa ? buscarEstrutura(ativa.id) : null,
+        rascunho ? buscarEstrutura(rascunho.id) : null,
+      ]);
+      const rotulo =
+        cargoId === null
+          ? "Geral"
+          : (daFamilia.find((m) => m.cargo_nome !== null)?.cargo_nome ??
+            cargos.find((c) => c.id === cargoId)?.nome ??
+            `Cargo #${cargoId}`);
+      return {
+        cargo_id: cargoId,
+        rotulo,
+        modelos: daFamilia,
+        ativa: estruturaAtiva,
+        rascunho: estruturaRascunho,
+      };
+    })
+  );
+  // Geral primeiro; os cargos por nome.
+  familias.sort((a, b) =>
+    a.cargo_id === null
+      ? -1
+      : b.cargo_id === null
+        ? 1
+        : a.rotulo.localeCompare(b.rotulo)
+  );
+  const comModelo = new Set(
+    modelos.filter((m) => m.cargo_id !== null).map((m) => m.cargo_id)
+  );
+  const cargosSemModelo = cargos.filter((c) => !comModelo.has(c.id));
+  return { familias, cargos_sem_modelo: cargosSemModelo };
 }
 
 /** Nova versão SEMPRE nasce rascunho — só uma em rascunho por vez. */
@@ -1389,16 +1441,20 @@ export async function criarRascunhoModelo(
   sessao: PayloadSessao,
   estrutura: EstruturaModeloEntrada
 ): Promise<{ id: number; versao: number }> {
-  const jaExiste = await existeRascunho();
+  const jaExiste = await existeRascunhoDaFamilia(estrutura.cargo_id);
   if (jaExiste !== null) {
     throw new ErroHttp(
       409,
-      "Já existe uma versão em rascunho — edite ou ative a existente antes de criar outra."
+      "Já existe uma versão em rascunho para esta família (Geral ou cargo) — edite ou ative a existente antes de criar outra."
     );
   }
   try {
     return await comTransacao(sessao.usuario_id, async (cliente) => {
-      const criado = await criarModeloRascunho(cliente, estrutura.nome);
+      const criado = await criarModeloRascunho(
+        cliente,
+        estrutura.nome,
+        estrutura.cargo_id
+      );
       await substituirEstrutura(cliente, criado.id, estrutura);
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
@@ -1407,6 +1463,13 @@ export async function criarRascunhoModelo(
         tabela: TABELA_MODELO,
         registroId: String(criado.id),
         diff: {
+          Família: {
+            de: null,
+            para:
+              estrutura.cargo_id === null
+                ? "Geral"
+                : `Cargo #${estrutura.cargo_id}`,
+          },
           Versão: { de: null, para: `v${criado.versao} (rascunho)` },
           Nome: { de: null, para: estrutura.nome },
           Pilares: {

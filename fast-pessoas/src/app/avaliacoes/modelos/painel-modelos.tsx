@@ -12,7 +12,7 @@ import {
 } from "@/dominios/avaliacao/esquemas";
 import comum from "../comum.module.css";
 import { formatarData } from "../formato";
-import { Estrutura, PainelModelos } from "../tipos";
+import { Estrutura, FamiliaModelo, PainelModelos } from "../tipos";
 import estilos from "./page.module.css";
 
 interface IndicadorForm {
@@ -62,12 +62,16 @@ function paraFormulario(estrutura: Estrutura): Formulario {
 }
 
 /** Converte o formulário para o payload da API (números; NaN vira 0). */
-function paraEntrada(form: Formulario): EstruturaModeloEntrada {
+function paraEntrada(
+  form: Formulario,
+  cargoId: number | null
+): EstruturaModeloEntrada {
   const numero = (valor: string) => {
     const n = Number(valor);
     return Number.isFinite(n) ? n : 0;
   };
   return {
+    cargo_id: cargoId,
     nome: form.nome,
     pilares: form.pilares.map((pilar) => ({
       nome: pilar.nome,
@@ -85,6 +89,10 @@ function paraEntrada(form: Formulario): EstruturaModeloEntrada {
       recomendacao: faixa.recomendacao,
     })),
   };
+}
+
+function novoIndicador(): IndicadorForm {
+  return { nome: "", descricao: "", peso: "10" };
 }
 
 function EstruturaLeitura({ estrutura }: { estrutura: Estrutura }) {
@@ -130,11 +138,32 @@ function EstruturaLeitura({ estrutura }: { estrutura: Estrutura }) {
   );
 }
 
+/** A família selecionada, ou uma vazia (cargo recém-escolhido sem modelo). */
+function familiaSelecionada(
+  painel: PainelModelos,
+  cargoId: number | null
+): FamiliaModelo {
+  const achada = painel.familias.find((f) => f.cargo_id === cargoId);
+  if (achada) return achada;
+  const cargo = painel.cargos_sem_modelo.find((c) => c.id === cargoId);
+  return {
+    cargo_id: cargoId,
+    rotulo:
+      cargoId === null ? "Geral" : (cargo?.nome ?? `Cargo #${cargoId}`),
+    modelos: [],
+    ativa: null,
+    rascunho: null,
+  };
+}
+
 export function PainelModelosAvaliacao() {
   const [painel, setPainel] = useState<PainelModelos | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [versao, setVersao] = useState(0);
+
+  // null = a família GERAL (o piso/fallback). Senão, o cargo escolhido.
+  const [familiaSel, setFamiliaSel] = useState<number | null>(null);
 
   const [form, setForm] = useState<Formulario | null>(null);
   const [salvando, setSalvando] = useState(false);
@@ -142,6 +171,7 @@ export function PainelModelosAvaliacao() {
   const [erroAcao, setErroAcao] = useState<string | null>(null);
   const [avisoSalvo, setAvisoSalvo] = useState<string | null>(null);
 
+  // Carrega o painel (refaz quando `versao` muda: após salvar/ativar).
   useEffect(() => {
     let ativo = true;
     (async () => {
@@ -150,12 +180,8 @@ export function PainelModelosAvaliacao() {
         const dados = await resposta.json().catch(() => ({}));
         if (!ativo) return;
         if (resposta.ok) {
-          const carregado = dados as PainelModelos;
-          setPainel(carregado);
+          setPainel(dados as PainelModelos);
           setErro(null);
-          setForm(
-            carregado.rascunho ? paraFormulario(carregado.rascunho) : null
-          );
         } else {
           setErro(dados.erro ?? "Não foi possível carregar os modelos.");
         }
@@ -170,7 +196,15 @@ export function PainelModelosAvaliacao() {
     };
   }, [versao]);
 
-  const entrada = useMemo(() => (form ? paraEntrada(form) : null), [form]);
+  const familia = useMemo(
+    () => (painel ? familiaSelecionada(painel, familiaSel) : null),
+    [painel, familiaSel]
+  );
+
+  const entrada = useMemo(
+    () => (form ? paraEntrada(form, familiaSel) : null),
+    [form, familiaSel]
+  );
   const problemas = useMemo(
     () => (entrada ? validarAtivacao(entrada) : []),
     [entrada]
@@ -181,9 +215,19 @@ export function PainelModelosAvaliacao() {
     setForm((atual) => (atual ? mutar(atual) : atual));
   }
 
+  // Trocar de família fecha o editor (não carrega edições de uma para outra);
+  // o rascunho da nova família se abre pelo botão "Continuar rascunho".
+  function selecionarFamilia(cargoId: number | null) {
+    setFamiliaSel(cargoId);
+    setForm(null);
+    setErroAcao(null);
+    setAvisoSalvo(null);
+  }
+
   function iniciarNovaVersao() {
-    const base: Formulario = painel?.ativa
-      ? paraFormulario(painel.ativa)
+    if (!familia) return;
+    const base: Formulario = familia.ativa
+      ? paraFormulario(familia.ativa)
       : {
           nome: "",
           pilares: [{ nome: "", peso: "100", indicadores: [novoIndicador()] }],
@@ -196,25 +240,18 @@ export function PainelModelosAvaliacao() {
             },
           ],
         };
-    setForm({
-      ...base,
-      nome: painel?.ativa ? `${painel.ativa.nome}` : base.nome,
-    });
+    setForm(base);
     setErroAcao(null);
     setAvisoSalvo(null);
   }
 
-  function novoIndicador(): IndicadorForm {
-    return { nome: "", descricao: "", peso: "10" };
-  }
-
   async function salvarRascunho(): Promise<boolean> {
-    if (!entrada) return false;
+    if (!entrada || !familia) return false;
     setSalvando(true);
     setErroAcao(null);
     setAvisoSalvo(null);
     try {
-      const existente = painel?.rascunho;
+      const existente = familia.rascunho;
       const resposta = await fetch(
         existente
           ? `/api/avaliacoes/modelos/${existente.modelo_versao_id}`
@@ -244,7 +281,8 @@ export function PainelModelosAvaliacao() {
   }
 
   async function ativar() {
-    if (!painel?.rascunho) {
+    if (!familia) return;
+    if (!familia.rascunho) {
       // Primeiro salva (cria o rascunho), depois o RH ativa na recarga.
       const ok = await salvarRascunho();
       if (ok) {
@@ -260,7 +298,7 @@ export function PainelModelosAvaliacao() {
       const salvo = await salvarRascunho();
       if (!salvo) return;
       const resposta = await fetch(
-        `/api/avaliacoes/modelos/${painel.rascunho.modelo_versao_id}/ativar`,
+        `/api/avaliacoes/modelos/${familia.rascunho.modelo_versao_id}/ativar`,
         { method: "POST" }
       );
       const dados = await resposta.json().catch(() => ({}));
@@ -277,8 +315,10 @@ export function PainelModelosAvaliacao() {
     }
   }
 
-  const somaPilares =
-    entrada?.pilares.reduce((s, p) => s + p.peso, 0) ?? 0;
+  const somaPilares = entrada?.pilares.reduce((s, p) => s + p.peso, 0) ?? 0;
+  const geralSemModelo =
+    painel !== null &&
+    !painel.familias.some((f) => f.cargo_id === null && f.ativa !== null);
 
   return (
     <div className={estilos.pagina}>
@@ -291,34 +331,99 @@ export function PainelModelosAvaliacao() {
       <main className={estilos.conteudo}>
         <div className={estilos.linhaTitulo}>
           <h1>Modelos de avaliação</h1>
-          {painel && !form && (
-            <button
-              className={comum.botaoPrimario}
-              type="button"
-              onClick={iniciarNovaVersao}
-            >
-              + Nova versão
-            </button>
+          {familia && !form && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {familia.rascunho && (
+                <button
+                  className={comum.botaoSecundario}
+                  type="button"
+                  onClick={() =>
+                    setForm(
+                      familia.rascunho
+                        ? paraFormulario(familia.rascunho)
+                        : null
+                    )
+                  }
+                >
+                  Continuar rascunho v{familia.rascunho.versao}
+                </button>
+              )}
+              <button
+                className={comum.botaoPrimario}
+                type="button"
+                onClick={iniciarNovaVersao}
+              >
+                + Nova versão
+              </button>
+            </div>
           )}
         </div>
         <p className={estilos.subtitulo}>
-          Pilares, indicadores, pesos e faixas são DADO versionado: a versão
-          ativa é imutável — corrigir é criar e ativar uma nova versão, que
-          vale só para ciclos abertos depois dela. Sem recálculo retroativo.
+          O modelo varia por <b>cargo</b>: o <b>Geral</b> é o piso que cobre quem
+          não tem modelo próprio; crie um por cargo só onde a régua muda. Pilares,
+          indicadores, pesos e faixas são DADO versionado — a versão ativa é
+          imutável; corrigir é criar e ativar uma nova versão, que vale só para
+          ciclos abertos depois dela. Sem recálculo retroativo.
         </p>
 
         {erro && <p className={estilos.erro}>{erro}</p>}
         {carregando && !painel && <p className={estilos.vazio}>Carregando…</p>}
 
-        {painel && (
+        {painel && familia && (
           <>
+            {/* ---------------- seletor de família (Geral + cargos) ---------------- */}
+            <div className={estilos.seletorFamilia}>
+              {painel.familias.map((f) => (
+                <button
+                  key={String(f.cargo_id ?? "geral")}
+                  type="button"
+                  className={
+                    f.cargo_id === familiaSel
+                      ? comum.botaoPrimario
+                      : comum.botaoSecundario
+                  }
+                  onClick={() => selecionarFamilia(f.cargo_id)}
+                >
+                  {f.rotulo}
+                  {f.ativa ? " ✓" : f.rascunho ? " ✎" : ""}
+                </button>
+              ))}
+              {painel.cargos_sem_modelo.length > 0 && (
+                <select
+                  className={comum.campo}
+                  style={{ width: "auto" }}
+                  value=""
+                  aria-label="Criar modelo para um cargo"
+                  onChange={(e) => {
+                    if (e.target.value)
+                      selecionarFamilia(Number(e.target.value));
+                  }}
+                >
+                  <option value="">+ Cargo…</option>
+                  {painel.cargos_sem_modelo.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.nome}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {geralSemModelo && (
+              <div className={comum.avisoInfo}>
+                <b>Nenhum modelo Geral ativo.</b> Sem o Geral, nenhum ciclo de
+                avaliação pode ser aberto — ele é o piso que cobre quem não tem
+                modelo do próprio cargo. Comece por ele.
+              </div>
+            )}
+
             {/* ---------------- editor (rascunho/nova versão) ---------------- */}
             {form && entrada && (
               <section>
                 <h2 className={estilos.tituloArea}>
-                  {painel.rascunho
-                    ? `Rascunho — v${painel.rascunho.versao}`
-                    : "Nova versão (rascunho)"}
+                  {familia.rascunho
+                    ? `Rascunho — ${familia.rotulo} v${familia.rascunho.versao}`
+                    : `Nova versão (rascunho) — ${familia.rotulo}`}
                 </h2>
 
                 <label className={comum.rotuloCampo} htmlFor="nome-modelo">
@@ -700,8 +805,8 @@ export function PainelModelosAvaliacao() {
                     type="button"
                     onClick={() => {
                       setForm(
-                        painel.rascunho
-                          ? paraFormulario(painel.rascunho)
+                        familia.rascunho
+                          ? paraFormulario(familia.rascunho)
                           : null
                       );
                       setErroAcao(null);
@@ -731,7 +836,7 @@ export function PainelModelosAvaliacao() {
                   >
                     {ativando
                       ? "Ativando…"
-                      : painel.rascunho
+                      : familia.rascunho
                         ? "Ativar esta versão"
                         : "Criar rascunho"}
                   </button>
@@ -741,31 +846,34 @@ export function PainelModelosAvaliacao() {
 
             {/* ---------------- versão vigente (read-only) ---------------- */}
             <h2 className={estilos.tituloArea}>
-              {painel.ativa
-                ? `Versão vigente — v${painel.ativa.versao} · ${painel.ativa.nome}`
-                : "Nenhuma versão ativa"}
+              {familia.ativa
+                ? `Versão vigente (${familia.rotulo}) — v${familia.ativa.versao} · ${familia.ativa.nome}`
+                : `Nenhuma versão ativa para ${familia.rotulo}`}
             </h2>
-            {painel.ativa ? (
+            {familia.ativa ? (
               <>
                 <div className={comum.avisoInfo}>
                   Versão ativa é <b>somente leitura</b> — mudanças viram uma
                   nova versão e valem apenas para ciclos abertos depois dela.
                 </div>
-                <EstruturaLeitura estrutura={painel.ativa} />
+                <EstruturaLeitura estrutura={familia.ativa} />
               </>
             ) : (
               <p className={estilos.vazio}>
-                Sem modelo ativo, nenhum ciclo pode ser aberto. Crie e ative
-                uma versão.
+                {familia.cargo_id === null
+                  ? "Sem o modelo Geral, nenhum ciclo pode ser aberto. Crie e ative uma versão."
+                  : "Este cargo ainda usa o modelo Geral. Crie um modelo próprio só se a régua dele precisa ser diferente."}
               </p>
             )}
 
-            {/* ---------------- histórico ---------------- */}
-            {painel.modelos.length > 0 && (
+            {/* ---------------- histórico da família ---------------- */}
+            {familia.modelos.length > 0 && (
               <>
-                <h2 className={estilos.tituloArea}>Histórico de versões</h2>
+                <h2 className={estilos.tituloArea}>
+                  Histórico de versões — {familia.rotulo}
+                </h2>
                 <ul className={estilos.listaVersoes}>
-                  {painel.modelos.map((modelo) => (
+                  {familia.modelos.map((modelo) => (
                     <li key={modelo.id}>
                       v{modelo.versao} · {modelo.nome} —{" "}
                       {modelo.status === "ativa"

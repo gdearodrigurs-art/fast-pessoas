@@ -42,7 +42,7 @@ export interface PendenciaSemGestor {
 
 export interface Painel {
   pode: Permissoes;
-  modelo_ativo: { versao: number; nome: string } | null;
+  modelos: { geral_ativo: boolean; cargos_com_modelo: number };
   ciclos_gerados_agora: number;
   minhas: CicloResumo[] | null;
   ciclos: CicloResumo[] | null;
@@ -95,12 +95,26 @@ export interface ModeloResumo {
   status: "rascunho" | "ativa" | "encerrada";
   inicio_vigencia: string;
   fim_vigencia: string | null;
+  /** null = modelo GERAL (fallback); senão o cargo desta família. */
+  cargo_id: number | null;
+  cargo_nome: string | null;
 }
 
-export interface PainelModelos {
+export interface FamiliaModelo {
+  /** null = Geral (o piso/fallback); senão o cargo desta família. */
+  cargo_id: number | null;
+  rotulo: string;
+  /** Todas as versões desta família, mais nova primeiro. */
   modelos: ModeloResumo[];
   ativa: Estrutura | null;
   rascunho: Estrutura | null;
+}
+
+export interface PainelModelos {
+  /** Geral primeiro, depois um por cargo que já tem modelo. */
+  familias: FamiliaModelo[];
+  /** Cargos com versão ativa que ainda não têm modelo (alimenta o seletor). */
+  cargos_sem_modelo: { id: number; nome: string }[];
 }
 
 // ------------------------------------------------------------------ detalhe do ciclo

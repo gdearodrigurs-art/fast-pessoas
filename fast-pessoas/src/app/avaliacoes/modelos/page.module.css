@@ -28,6 +28,14 @@
   color: #6b6763;
 }
 
+.seletorFamilia {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 20px;
+}
+
 .vazio {
   color: #6b6763;
   font-style: italic;

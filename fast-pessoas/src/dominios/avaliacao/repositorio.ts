@@ -26,6 +26,10 @@ export interface ModeloResumo {
   status: "rascunho" | "ativa" | "encerrada";
   inicio_vigencia: string;
   fim_vigencia: string | null;
+  /** null = modelo GERAL (fallback); senão o cargo a que este modelo se aplica. */
+  cargo_id: number | null;
+  /** Nome do cargo (versão ativa) quando cargo_id não é nulo; null no Geral. */
+  cargo_nome: string | null;
 }
 
 export async function listarModelos(): Promise<ModeloResumo[]> {
@@ -36,19 +40,53 @@ export async function listarModelos(): Promise<ModeloResumo[]> {
     status: "rascunho" | "ativa" | "encerrada";
     inicio_vigencia: string;
     fim_vigencia: string | null;
+    cargo_id: string | null;
+    cargo_nome: string | null;
   }>(
-    `SELECT id, versao, nome, status,
-            inicio_vigencia::text AS inicio_vigencia,
-            fim_vigencia::text AS fim_vigencia
-       FROM rh.modelo_avaliacao_versao
-      ORDER BY versao DESC`
+    // Nome do cargo pela versão ATIVA do cargo (o rótulo que vale hoje); a
+    // família ordena por COALESCE(cargo_id,0) — o Geral (0) primeiro.
+    `SELECT m.id, m.versao, m.nome, m.status,
+            m.inicio_vigencia::text AS inicio_vigencia,
+            m.fim_vigencia::text AS fim_vigencia,
+            m.cargo_id, cv.nome AS cargo_nome
+       FROM rh.modelo_avaliacao_versao m
+       LEFT JOIN LATERAL (
+         SELECT nome FROM rh.cargo_versao
+          WHERE cargo_id = m.cargo_id AND status = 'ativa'
+          LIMIT 1
+       ) cv ON TRUE
+      ORDER BY COALESCE(m.cargo_id, 0), m.versao DESC`
   );
-  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    cargo_id: linha.cargo_id === null ? null : Number(linha.cargo_id),
+  }));
 }
 
-export async function buscarModeloAtivo(): Promise<ModeloResumo | null> {
+/**
+ * O modelo GERAL ativo (cargo_id IS NULL) — o fallback obrigatório. Sem ele,
+ * quem não tem modelo do próprio cargo ficaria sem modelo; por isso a abertura
+ * de ciclos (lote e experiência) exige que ele exista.
+ */
+export async function buscarGeralAtivo(): Promise<ModeloResumo | null> {
   const modelos = await listarModelos();
-  return modelos.find((m) => m.status === "ativa") ?? null;
+  return (
+    modelos.find((m) => m.status === "ativa" && m.cargo_id === null) ?? null
+  );
+}
+
+/** Cargos com versão ativa (id + nome) — alimenta o seletor da tela de modelos. */
+export async function listarCargosParaModelo(): Promise<
+  { id: number; nome: string }[]
+> {
+  const linhas = await consultar<{ id: string; nome: string }>(
+    `SELECT c.id, cv.nome
+       FROM rh.cargo c
+       JOIN rh.cargo_versao cv ON cv.cargo_id = c.id AND cv.status = 'ativa'
+      ORDER BY cv.nome`
+  );
+  return linhas.map((linha) => ({ id: Number(linha.id), nome: linha.nome }));
 }
 
 /**
@@ -154,35 +192,57 @@ export async function buscarModeloParaMutacao(
     status: "rascunho" | "ativa" | "encerrada";
     inicio_vigencia: string;
     fim_vigencia: string | null;
+    cargo_id: string | null;
   }>(
     `SELECT id, versao, nome, status,
             inicio_vigencia::text AS inicio_vigencia,
-            fim_vigencia::text AS fim_vigencia
+            fim_vigencia::text AS fim_vigencia,
+            cargo_id
        FROM rh.modelo_avaliacao_versao
       WHERE id = $1
       FOR UPDATE`,
     [id]
   );
-  return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+  return rows.length
+    ? {
+        ...rows[0],
+        id: Number(rows[0].id),
+        cargo_id: rows[0].cargo_id === null ? null : Number(rows[0].cargo_id),
+        cargo_nome: null,
+      }
+    : null;
 }
 
-export async function existeRascunho(): Promise<number | null> {
+/** Rascunho da FAMÍLIA (Geral ou um cargo) — um por família (0074). */
+export async function existeRascunhoDaFamilia(
+  cargoId: number | null
+): Promise<number | null> {
   const linhas = await consultar<{ id: string }>(
-    `SELECT id FROM rh.modelo_avaliacao_versao WHERE status = 'rascunho'`
+    `SELECT id FROM rh.modelo_avaliacao_versao
+      WHERE status = 'rascunho'
+        AND COALESCE(cargo_id, 0) = COALESCE($1, 0)`,
+    [cargoId]
   );
   return linhas.length ? Number(linhas[0].id) : null;
 }
 
 export async function criarModeloRascunho(
   cliente: PoolClient,
-  nome: string
+  nome: string,
+  cargoId: number | null
 ): Promise<{ id: number; versao: number }> {
+  // Numeração de versão POR FAMÍLIA (COALESCE(cargo_id,0)) — o Geral e cada
+  // cargo têm a sua sequência, como o índice único da 0074.
   const { rows } = await cliente.query<{ id: string; versao: number }>(
-    `INSERT INTO rh.modelo_avaliacao_versao (versao, nome, status, inicio_vigencia)
-     SELECT COALESCE(MAX(versao), 0) + 1, $1, 'rascunho', ${HOJE_SP}
+    // $2::bigint em ambos os usos: sem o cast, o Postgres deduz o mesmo
+    // parâmetro como bigint (coluna cargo_id) e integer (comparado ao literal 0
+    // no COALESCE), e recusa com 42P08 "integer versus bigint".
+    `INSERT INTO rh.modelo_avaliacao_versao (versao, nome, status, inicio_vigencia, cargo_id)
+     SELECT COALESCE(MAX(versao), 0) + 1, $1, 'rascunho', ${HOJE_SP}, $2::bigint
        FROM rh.modelo_avaliacao_versao
+      WHERE COALESCE(cargo_id, 0) = COALESCE($2::bigint, 0)
      RETURNING id, versao`,
-    [nome]
+    [nome, cargoId]
   );
   return { id: Number(rows[0].id), versao: rows[0].versao };
 }
@@ -241,7 +301,11 @@ export async function substituirEstrutura(
   }
 }
 
-/** Encerra a versão ativa (se houver) e ativa o rascunho — ordem importa. */
+/**
+ * Encerra a versão ativa DA MESMA FAMÍLIA (se houver) e ativa o rascunho — ordem
+ * importa. Escopo por COALESCE(cargo_id,0) de propósito: ativar o modelo de um
+ * cargo NÃO pode encerrar o de outro cargo nem o Geral (0074).
+ */
 export async function ativarModelo(
   cliente: PoolClient,
   modeloVersaoId: number
@@ -250,7 +314,11 @@ export async function ativarModelo(
     `UPDATE rh.modelo_avaliacao_versao
         SET status = 'encerrada', fim_vigencia = ${HOJE_SP}
       WHERE status = 'ativa'
-      RETURNING id`
+        AND COALESCE(cargo_id, 0) = (
+          SELECT COALESCE(cargo_id, 0)
+            FROM rh.modelo_avaliacao_versao WHERE id = $1)
+      RETURNING id`,
+    [modeloVersaoId]
   );
   await cliente.query(
     `UPDATE rh.modelo_avaliacao_versao
@@ -493,6 +561,8 @@ export interface CicloCriado {
   avaliador_usuario_id: number | null;
   tipo: TipoCiclo;
   prazo: string;
+  /** Versão do modelo CONGELADA neste ciclo (por cargo/Geral) — para o audit. */
+  modelo_versao: number;
 }
 
 async function detalharCriados(
@@ -508,14 +578,16 @@ async function detalharCriados(
     avaliador_usuario_id: string | null;
     tipo: TipoCiclo;
     prazo: string;
+    modelo_versao: number;
   }>(
     `SELECT ca.id, c.nome_completo AS colaborador_nome, c.matricula,
             g.nome_completo AS avaliador_nome,
             g.usuario_id AS avaliador_usuario_id,
-            ca.tipo, ca.prazo::text AS prazo
+            ca.tipo, ca.prazo::text AS prazo, m.versao AS modelo_versao
        FROM rh.ciclo_avaliacao ca
        JOIN rh.colaborador c ON c.id = ca.colaborador_id
        JOIN rh.colaborador g ON g.id = ca.avaliador_colaborador_id
+       JOIN rh.modelo_avaliacao_versao m ON m.id = ca.modelo_versao_id
       WHERE ca.id = ANY($1::bigint[])
       ORDER BY ca.id`,
     [ids]
@@ -575,6 +647,27 @@ const JOIN_GESTOR_VIGENTE = (aliasLiderado: string) => `
      LIMIT 1
   ) gv ON TRUE`;
 
+// Resolve, POR COLABORADOR, o modelo a CONGELAR no ciclo: a versão ATIVA do
+// cargo vigente da pessoa, com fallback no GERAL (cargo_id IS NULL). ORDER BY
+// cargo_id NULLS LAST + LIMIT 1 = o do cargo quando existe, senão o Geral (0074,
+// mesmo gesto do buscarChecklistAtivo da admissão). Quem não tem posição vigente
+// cai direto no Geral. O guard do serviço garante um Geral ativo, então isto
+// nunca resolve NULL (modelo_versao_id é NOT NULL).
+const RESOLVER_MODELO = (aliasColaborador: string) => `(
+    SELECT m.id
+      FROM rh.modelo_avaliacao_versao m
+     WHERE m.status = 'ativa'
+       AND (m.cargo_id IS NULL
+            OR m.cargo_id = (
+              SELECT cv.cargo_id
+                FROM rh.posicao_colaborador pc
+                JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+               WHERE pc.colaborador_id = ${aliasColaborador}
+                 AND pc.fim_vigencia IS NULL
+               LIMIT 1))
+     ORDER BY m.cargo_id NULLS LAST
+     LIMIT 1)`;
+
 /**
  * Geração LAZY dos ciclos de experiência a partir de rh.processo_admissao
  * (contrato de experiência, prazos dos dias 45/90 já calculados na admissão):
@@ -586,14 +679,13 @@ const JOIN_GESTOR_VIGENTE = (aliasLiderado: string) => `
  * pendência no painel (listarPendenciasSemGestor).
  */
 export async function gerarCiclosExperiencia(
-  cliente: PoolClient,
-  modeloVersaoId: number
+  cliente: PoolClient
 ): Promise<CicloCriado[]> {
   const { rows: criados45 } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.ciclo_avaliacao
        (colaborador_id, tipo, modelo_versao_id, avaliador_colaborador_id, prazo, origem)
-     SELECT p.colaborador_id, 'experiencia_45', $1, gv.gestor_colaborador_id,
-            p.prazo_experiencia_1, 'admissao'
+     SELECT p.colaborador_id, 'experiencia_45', ${RESOLVER_MODELO("p.colaborador_id")},
+            gv.gestor_colaborador_id, p.prazo_experiencia_1, 'admissao'
        FROM rh.processo_admissao p
        JOIN rh.colaborador c ON c.id = p.colaborador_id AND c.status <> 'desligado'
        ${JOIN_GESTOR_VIGENTE("p.colaborador_id")}
@@ -604,15 +696,14 @@ export async function gerarCiclosExperiencia(
                          WHERE ca.colaborador_id = p.colaborador_id
                            AND ca.tipo = 'experiencia_45'
                            AND ca.status <> 'cancelado')
-     RETURNING id`,
-    [modeloVersaoId]
+     RETURNING id`
   );
 
   const { rows: criados90 } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.ciclo_avaliacao
        (colaborador_id, tipo, modelo_versao_id, avaliador_colaborador_id, prazo, origem)
-     SELECT p.colaborador_id, 'experiencia_90', $1, gv.gestor_colaborador_id,
-            p.prazo_experiencia_2, 'admissao'
+     SELECT p.colaborador_id, 'experiencia_90', ${RESOLVER_MODELO("p.colaborador_id")},
+            gv.gestor_colaborador_id, p.prazo_experiencia_2, 'admissao'
        FROM rh.processo_admissao p
        JOIN rh.colaborador c ON c.id = p.colaborador_id AND c.status <> 'desligado'
        ${JOIN_GESTOR_VIGENTE("p.colaborador_id")}
@@ -636,8 +727,7 @@ export async function gerarCiclosExperiencia(
                       WHERE c45.colaborador_id = p.colaborador_id
                         AND c45.tipo = 'experiencia_45'
                         AND d.decisao IN ('nao_renovar','desligar'))))
-     RETURNING id`,
-    [modeloVersaoId]
+     RETURNING id`
   );
 
   const ids = [...criados45, ...criados90].map((linha) => Number(linha.id));
@@ -691,13 +781,13 @@ export async function listarPendenciasSemGestor(): Promise<PendenciaSemGestor[]>
  */
 export async function abrirLoteDesempenho(
   cliente: PoolClient,
-  modeloVersaoId: number,
   prazo: string
 ): Promise<CicloCriado[]> {
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.ciclo_avaliacao
        (colaborador_id, tipo, modelo_versao_id, avaliador_colaborador_id, prazo, origem)
-     SELECT c.id, 'desempenho', $1, gv.gestor_colaborador_id, $2::date, 'lote'
+     SELECT c.id, 'desempenho', ${RESOLVER_MODELO("c.id")},
+            gv.gestor_colaborador_id, $1::date, 'lote'
        FROM rh.colaborador c
        ${JOIN_GESTOR_VIGENTE("c.id")}
       WHERE c.status = 'ativo'
@@ -706,7 +796,7 @@ export async function abrirLoteDesempenho(
                            AND ca.tipo = 'desempenho'
                            AND ca.status NOT IN ('decidido','cancelado'))
      RETURNING id`,
-    [modeloVersaoId, prazo]
+    [prazo]
   );
   const ids = rows.map((linha) => Number(linha.id));
   await criarAvaliacoes(cliente, ids);

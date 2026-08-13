@@ -218,6 +218,9 @@ const esquemaFaixaEntrada = z.object({
 });
 
 export const esquemaEstruturaModelo = z.object({
+  // Família do modelo (0074): null = Geral (o piso/fallback); senão o cargo a
+  // que este modelo se aplica. Ausente = Geral, o padrão seguro.
+  cargo_id: z.number().int().positive().nullable().default(null),
   nome: z.string().trim().min(1, "Nome do modelo é obrigatório").max(200),
   pilares: z
     .array(esquemaPilarEntrada)
@@ -256,7 +259,7 @@ export interface ProblemaAtivacao {
  * sem furo nem sobreposição. Lista vazia = pode ativar.
  */
 export function validarAtivacao(
-  estrutura: EstruturaModeloEntrada
+  estrutura: Pick<EstruturaModeloEntrada, "nome" | "pilares" | "faixas">
 ): ProblemaAtivacao[] {
   const problemas: ProblemaAtivacao[] = [];
   const somaPilares = estrutura.pilares.reduce((s, p) => s + p.peso, 0);
