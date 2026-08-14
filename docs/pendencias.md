@@ -650,6 +650,42 @@ abertas hoje; agrupar por cargo, nunca por `vaga.titulo`).
 **Por que subo em vez de decidir:** 13a e 13b definem o desenho do schema (imutável depois) e são
 escolha de negócio (como a Fast quer conduzir seleções). 13c mistura privacidade de dado de terceiro.
 
+### 13 · Estado da construção (atualizado 2026-08-14)
+
+Decisões 13a (a VAGA escolhe, GERAL pré-selecionado) e 13b (trocar só sem candidatura) foram
+confirmadas pelo dono e **construídas**:
+
+- **Estágio 1** (migration `0076`): entidades `rh.modelo_selecao_versao` + `rh.modelo_selecao_etapa`,
+  índice de um-padrão-ativo, série `continua_de`, seed do GERAL "Processo padrão" com as etapas
+  ativas de hoje. Aditivo, sem mexer no pipeline.
+- **Estágio 2** (migration `0077` + serviço): a vaga ganhou `modelo_versao_id` (congela o modelo na
+  abertura); a candidatura anda pelas etapas DO MODELO (`buscarEtapasDoModelo`), não mais pela lista
+  global. Rewire de ESCRITA (criar/mover candidatura).
+- **Rewire de LEITURA** (commit `9ce037e`): o kanban desenha as colunas pelas etapas do modelo da
+  vaga (`listarEtapasDoModelo`), e `ehUltima` sai da ordem da coluna — não mais do
+  `candidatura.etapa_ordem` (escala global, órfã). Fecha o achado [média] da revisão do Estágio 2.
+- **Estágio 3** (commit `ebcdf7b`): administração de modelos — `criarModelo` (nasce ativo,
+  não-padrão; exige etapa de oferta, sem duplicata, etapas do catálogo), `listarModelos`, rota
+  `GET/POST /api/recrutamento/modelos` (rs.gerir) e tela `/recrutamento/modelos` + seletor de modelo
+  no diálogo de nova vaga. Provado ao vivo (modelo enxuto Triagem→Oferta; kanban de vaga nesse modelo
+  = 2 colunas, não as 4 globais).
+
+**Fica PENDENTE (follow-ups, nesta ordem de valor):**
+
+1. **13b na tela — trocar o modelo de uma vaga aberta sem candidatura.** O domínio já suporta a regra
+   (basta um `COUNT(*)` de candidaturas = 0 antes de trocar), mas hoje **não há endpoint de edição de
+   vaga** (`vagas/[id]/route.ts` só tem GET). Como o modelo é escolhido na criação (e vaga nova não
+   tem candidatura), a decisão 13a está satisfeita; 13b (trocar depois) precisa de um PATCH de vaga.
+2. **Reformular / encerrar modelo.** Hoje o modelo é **imutável** (cria-se um novo para mudar o
+   desenho) e não há como aposentar um alternativo obsoleto. Quando isso entrar, seguir o molde do
+   clima/0075 (encerra a versão anterior, cria nova ativa com `continua_de`) — e **então** proteger
+   `rh.modelo_selecao_etapa` com trigger (hoje o gap é inalcançável porque não há edição de etapas;
+   a revisão do Estágio 2 marcou isso como caveat só-para-quando-a-edição-existir).
+3. **13c · Pesquisa social** — bloqueada por falta de infra de anexo no recrutamento (`parecer_selecao`
+   não tem coluna de arquivo). Decisão de esquema/privacidade ainda aberta.
+4. **Relatório dT por etapa** — sem decisão de esquema pendente (mediana, fechadas+abertas, agrupar
+   por cargo). É só construir.
+
 ---
 
 ## 14 · Padrão Modelo — fatia CLIMA: qual universo de pergunta, antes de tudo
