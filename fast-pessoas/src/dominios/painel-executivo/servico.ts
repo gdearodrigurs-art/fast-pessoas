@@ -23,6 +23,11 @@ import {
   type Genero,
 } from "../colaboradores/esquemas";
 import { lerMinimoPorRecorte } from "../colaboradores/repositorio";
+import { listarOpcoesDeFiltroEstrutura } from "../estrutura/repositorio";
+import type {
+  FiltroEstrutura,
+  OpcoesFiltroEstrutura,
+} from "../estrutura/esquemas";
 import { calcularEnps } from "../pesquisas/servico";
 import type { PayloadSessao } from "../identidade/esquemas";
 import {
@@ -112,6 +117,66 @@ function primeiroDiaDoMes(iso: string): string {
 
 function periodo(inicio: string, fim: string): string {
   return `de ${dataCurta(inicio)} a ${dataCurta(fim)}`;
+}
+
+// ------------------------------------------------------------------ recorte
+
+type Recorte = PainelExecutivo["recorte"];
+
+/**
+ * Traduz os ids do filtro em RÓTULOS, usando as opções já carregadas (mesma
+ * fonte dos seletores). Devolve `null` quando o filtro veio vazio — e é esse
+ * `null` que a tela lê como "não recortado". Id sem rótulo (uma unidade sem
+ * ninguém lotado hoje não aparece nas opções) cai para "#<id>", para o selo não
+ * mentir dizendo "todos".
+ */
+function descreverRecorte(
+  filtro: FiltroEstrutura,
+  opcoes: OpcoesFiltroEstrutura
+): Recorte {
+  if (
+    filtro.empresa_id === undefined &&
+    filtro.estabelecimento_id === undefined &&
+    filtro.centro_custo_id === undefined
+  ) {
+    return null;
+  }
+  const rotulo = (
+    lista: { id: number; nome: string }[],
+    id: number | undefined
+  ): string | null =>
+    id === undefined ? null : (lista.find((o) => o.id === id)?.nome ?? `#${id}`);
+  return {
+    empresa: rotulo(opcoes.empresas, filtro.empresa_id),
+    lotacao: rotulo(opcoes.lotacoes, filtro.estabelecimento_id),
+    centro_custo: rotulo(opcoes.centros_custo, filtro.centro_custo_id),
+  };
+}
+
+/** A procedência em uma linha, para prefixar a `conta` dos cards recortados. */
+function textoProcedencia(recorte: NonNullable<Recorte>): string {
+  const partes: string[] = [];
+  if (recorte.empresa) partes.push(`registro ${recorte.empresa}`);
+  if (recorte.lotacao) partes.push(`lotação ${recorte.lotacao}`);
+  if (recorte.centro_custo) partes.push(`centro de custo ${recorte.centro_custo}`);
+  return partes.join(" · ");
+}
+
+/**
+ * O tempo de contratação é o único card que recorta SÓ por lotação — a ponte
+ * vaga→admissão não tem registro nem centro de custo próprios. A `conta` diz
+ * isso, e diz também quando o filtro ativo não toca este card (nenhuma lotação
+ * escolhida), para o número não parecer recortado sem ter sido.
+ */
+function notaTempoContratacao(
+  filtro: FiltroEstrutura,
+  recorte: NonNullable<Recorte>
+): string {
+  return filtro.estabelecimento_id !== undefined
+    ? `Recorte parcial: este card recorta SÓ por lotação (${recorte.lotacao}); ` +
+        `registro e centro de custo não se aplicam à ponte vaga→admissão. `
+    : `Sem recorte neste card: a ponte vaga→admissão só recorta por lotação, e ` +
+        `nenhuma lotação foi escolhida. `;
 }
 
 // ------------------------------------------------------------------ séries e tendência
@@ -254,16 +319,17 @@ function suprimirRecortesPequenos(
 async function montarHeadcount(
   hoje: string,
   primeiroMes: string,
-  mesCorrente: string
+  mesCorrente: string,
+  filtro: FiltroEstrutura
 ): Promise<CardHeadcount> {
   const anoAtras = somarMeses(hoje, -12);
   const [ativos, ativosAntes, porUnidade, porVinculo, serieBruta] =
     await Promise.all([
-      repositorio.headcountEm(hoje),
-      repositorio.headcountEm(anoAtras),
-      repositorio.headcountPorUnidade(hoje),
-      repositorio.headcountPorVinculo(hoje),
-      repositorio.serieHeadcount(primeiroMes, hoje),
+      repositorio.headcountEm(hoje, filtro),
+      repositorio.headcountEm(anoAtras, filtro),
+      repositorio.headcountPorUnidade(hoje, filtro),
+      repositorio.headcountPorVinculo(hoje, filtro),
+      repositorio.serieHeadcount(primeiroMes, hoje, filtro),
     ]);
 
   const unidades: LinhaContagem[] = porUnidade.map((linha) => ({
@@ -283,6 +349,10 @@ async function montarHeadcount(
       `A quebra por unidade usa a lotação vigente na data.`,
     ativos,
     por_unidade: unidades,
+    // Sob filtro ativo isto cai a ~0 por consequência esperada, não por caso
+    // especial: `headcountEm` filtrado já exige lotação casada, então quase todo
+    // ativo aparece também na quebra por unidade. Sem filtro, é o de sempre —
+    // quem não tem lotação vigente hoje.
     sem_lotacao: ativos - comLotacao,
     por_vinculo: porVinculo.map((linha) => ({
       rotulo: ROTULOS_VINCULO[linha.rotulo] ?? linha.rotulo,
@@ -310,11 +380,12 @@ async function montarTurnover(
   inicio: string,
   fim: string,
   primeiroMes: string,
-  mesCorrente: string
+  mesCorrente: string,
+  filtro: FiltroEstrutura
 ): Promise<CardTurnover> {
   const [bruto, serieBruta] = await Promise.all([
-    repositorio.turnoverJanela(inicio, fim),
-    repositorio.serieDesligamentos(primeiroMes, fim),
+    repositorio.turnoverJanela(inicio, fim, filtro),
+    repositorio.serieDesligamentos(primeiroMes, fim, filtro),
   ]);
   const medio = (bruto.hc_inicio + bruto.hc_fim) / 2;
   const percentual = medio > 0 ? arredondar((bruto.desligados / medio) * 100, 2) : 0;
@@ -351,7 +422,8 @@ async function montarTurnover(
 async function montarCustoPessoal(
   sessao: PayloadSessao,
   podeVerFolha: boolean,
-  mesCorrente: string
+  mesCorrente: string,
+  filtro: FiltroEstrutura
 ): Promise<CardCustoPessoal | CardBloqueado | CardSemFonte> {
   if (!podeVerFolha) {
     return {
@@ -388,11 +460,11 @@ async function montarCustoPessoal(
   });
 
   const [total, porUnidade, serieBruta] = await Promise.all([
-    repositorio.totalCompetencia(competencia.id),
+    repositorio.totalCompetencia(competencia.id, filtro),
     // Sem data: o rateio deriva a referência da própria competência (a mesma
     // que `competencia.referencia` calcula para o texto da conta).
-    repositorio.custoPorUnidade(competencia.id),
-    repositorio.serieCustoFechado(MESES_SERIE),
+    repositorio.custoPorUnidade(competencia.id, filtro),
+    repositorio.serieCustoFechado(MESES_SERIE, filtro),
   ]);
 
   const proventos = numero(total.proventos);
@@ -459,11 +531,12 @@ async function montarCustoPessoal(
 
 async function montarTempoContratacao(
   inicio: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura
 ): Promise<CardTempoContratacao> {
   const [casos, perna] = await Promise.all([
-    repositorio.temposContratacao(inicio, fim),
-    repositorio.pernaRecrutamento(inicio, fim),
+    repositorio.temposContratacao(inicio, fim, filtro),
+    repositorio.pernaRecrutamento(inicio, fim, filtro),
   ]);
   const medio =
     casos.length > 0
@@ -502,9 +575,10 @@ async function montarTempoContratacao(
 async function montarAbsenteismo(
   primeiroMes: string,
   fim: string,
-  mesCorrente: string
+  mesCorrente: string,
+  filtro: FiltroEstrutura
 ): Promise<CardAbsenteismo> {
-  const linhas = await repositorio.absenteismoMensal(primeiroMes, fim);
+  const linhas = await repositorio.absenteismoMensal(primeiroMes, fim, filtro);
   const previstos = linhas.reduce((soma, linha) => soma + linha.previstos, 0);
   const ausentes = linhas.reduce((soma, linha) => soma + linha.ausentes, 0);
   const percentual = previstos > 0 ? arredondar((ausentes / previstos) * 100, 2) : 0;
@@ -549,11 +623,12 @@ async function montarPromocoes(
   inicio: string,
   fim: string,
   primeiroMes: string,
-  mesCorrente: string
+  mesCorrente: string,
+  filtro: FiltroEstrutura
 ): Promise<CardPromocoes> {
   const [movimentacoes, serieBruta] = await Promise.all([
-    repositorio.movimentacoesAplicadas(inicio, fim),
-    repositorio.seriePromocoes(primeiroMes, fim),
+    repositorio.movimentacoesAplicadas(inicio, fim, filtro),
+    repositorio.seriePromocoes(primeiroMes, fim, filtro),
   ]);
   const conta = (tipo: string) =>
     movimentacoes.find((linha) => linha.tipo === tipo)?.quantidade ?? 0;
@@ -586,7 +661,8 @@ async function montarDiversidade(
   sessao: PayloadSessao,
   hoje: string,
   primeiroMes: string,
-  mesCorrente: string
+  mesCorrente: string,
+  filtro: FiltroEstrutura
 ): Promise<CardDiversidade> {
   await repositorio.registrarLeituraSensivel({
     usuarioId: sessao.usuario_id,
@@ -597,11 +673,11 @@ async function montarDiversidade(
 
   const [total, generos, idades, cobertura, serieBruta, minimoPorRecorte] =
     await Promise.all([
-      repositorio.headcountEm(hoje),
-      repositorio.contarPorGenero(hoje),
-      repositorio.contarPorIdade(hoje),
-      repositorio.coberturaNascimento(hoje),
-      repositorio.serieGenero(primeiroMes, hoje),
+      repositorio.headcountEm(hoje, filtro),
+      repositorio.contarPorGenero(hoje, filtro),
+      repositorio.contarPorIdade(hoje, filtro),
+      repositorio.coberturaNascimento(hoje, filtro),
+      repositorio.serieGenero(primeiroMes, hoje, filtro),
       lerMinimoPorRecorte(),
     ]);
 
@@ -792,9 +868,16 @@ async function montarDesenvolvimento(): Promise<CardDesenvolvimento> {
  * Monta o painel inteiro. `podeVerFolha` é decidido no banco (não no front) e
  * governa apenas o card de custo — todos os outros são iguais para diretoria,
  * dp e líder de T&D.
+ *
+ * `filtro` é o recorte dos três da estrutura (registro / lotação / centro de
+ * custo). Vazio = a leitura de sempre (empresa inteira). Só sete cards recortam:
+ * headcount, turnover, custo, tempo de contratação (só por lotação),
+ * absenteísmo, promoções e diversidade. Clima, performance e desenvolvimento
+ * NÃO recebem o filtro — anonimato (amostra pequena) e visão de empresa.
  */
 export async function montarPainelExecutivo(
-  sessao: PayloadSessao
+  sessao: PayloadSessao,
+  filtro: FiltroEstrutura = {}
 ): Promise<PainelExecutivo> {
   // Uma única leitura da data de negócio: o painel inteiro fala da mesma
   // janela, mesmo que a requisição atravesse a meia-noite.
@@ -815,22 +898,47 @@ export async function montarPainelExecutivo(
     clima,
     performance,
     desenvolvimento,
+    estruturaOpcoes,
   ] = await Promise.all([
-    montarHeadcount(hoje, primeiroMes, mesCorrente),
-    montarTurnover(inicio12m, hoje, primeiroMes, mesCorrente),
-    montarCustoPessoal(sessao, podeVerFolha, mesCorrente),
-    montarTempoContratacao(inicio12m, hoje),
-    montarAbsenteismo(primeiroMes, hoje, mesCorrente),
-    montarPromocoes(inicio12m, hoje, primeiroMes, mesCorrente),
-    montarDiversidade(sessao, hoje, primeiroMes, mesCorrente),
+    montarHeadcount(hoje, primeiroMes, mesCorrente, filtro),
+    montarTurnover(inicio12m, hoje, primeiroMes, mesCorrente, filtro),
+    montarCustoPessoal(sessao, podeVerFolha, mesCorrente, filtro),
+    montarTempoContratacao(inicio12m, hoje, filtro),
+    montarAbsenteismo(primeiroMes, hoje, mesCorrente, filtro),
+    montarPromocoes(inicio12m, hoje, primeiroMes, mesCorrente, filtro),
+    montarDiversidade(sessao, hoje, primeiroMes, mesCorrente, filtro),
     montarClima(hoje, primeiroMes, mesCorrente),
     montarPerformance(sessao),
     montarDesenvolvimento(),
+    // Opções dos seletores — reuso puro, ancorado em hoje (ver a limitação
+    // conhecida em listarOpcoesDeFiltroEstrutura e na evolução de esquemas.ts).
+    listarOpcoesDeFiltroEstrutura(),
   ]);
+
+  // Recorte já resolvido em rótulo, e a procedência colada na `conta` de cada
+  // card afetado — número de diretoria não sai sem dizer por onde recortou.
+  const recorte = descreverRecorte(filtro, estruturaOpcoes);
+  if (recorte) {
+    const proc = `Recorte: ${textoProcedencia(recorte)}. `;
+    headcount.conta = proc + headcount.conta;
+    turnover.conta = proc + turnover.conta;
+    absenteismo.conta = proc + absenteismo.conta;
+    promocoes.conta = proc + promocoes.conta;
+    diversidade.conta = proc + diversidade.conta;
+    if (custoPessoal.disponivel) {
+      custoPessoal.conta = proc + custoPessoal.conta;
+    }
+    // Tempo de contratação recorta só por lotação — nota própria (que também
+    // avisa quando o filtro ativo não toca este card).
+    tempoContratacao.conta =
+      notaTempoContratacao(filtro, recorte) + tempoContratacao.conta;
+  }
 
   return {
     hoje,
     janela_12m: { inicio: somarDias(inicio12m, 1), fim: hoje },
+    estrutura_opcoes: estruturaOpcoes,
+    recorte,
     headcount,
     turnover,
     custo_pessoal: custoPessoal,

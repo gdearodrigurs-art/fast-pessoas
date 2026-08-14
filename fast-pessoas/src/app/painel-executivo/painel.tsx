@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
+import {
+  FILTRO_ESTRUTURA_VAZIO,
+  FiltroEstrutura,
+  parametrosFiltroEstrutura,
+  type OpcoesFiltroEstrutura,
+  type ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
 import estilos from "./page.module.css";
 import {
   data as fData,
@@ -95,6 +102,12 @@ interface CardCustoPessoal {
 interface Painel {
   hoje: string;
   janela_12m: { inicio: string; fim: string };
+  estrutura_opcoes: OpcoesFiltroEstrutura;
+  recorte: {
+    empresa: string | null;
+    lotacao: string | null;
+    centro_custo: string | null;
+  } | null;
   headcount: {
     periodo: string;
     conta: string;
@@ -518,21 +531,44 @@ async function lerErro(resposta: Response): Promise<string> {
   return (dados as { erro?: string }).erro ?? "Não foi possível carregar o painel.";
 }
 
+/** Os campos preenchidos do recorte, em uma linha, para o selo ao lado do h1. */
+function textoRecorte(recorte: NonNullable<Painel["recorte"]>): string {
+  const partes: string[] = [];
+  if (recorte.empresa) partes.push(`registro ${recorte.empresa}`);
+  if (recorte.lotacao) partes.push(`lotação ${recorte.lotacao}`);
+  if (recorte.centro_custo) partes.push(`centro de custo ${recorte.centro_custo}`);
+  return partes.join(" · ");
+}
+
 export function PainelExecutivoTela() {
   const [painel, setPainel] = useState<Painel | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
+  // Os três nascem VAZIOS: em branco = empresa inteira, a leitura de sempre.
+  const [estrutura, setEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
+  const [opcoesEstrutura, setOpcoesEstrutura] =
+    useState<OpcoesFiltroEstrutura | null>(null);
 
-  const carregar = useCallback(async () => {
+  const carregar = useCallback(async (filtroAtual: ValorFiltroEstrutura) => {
     setCarregando(true);
     setErro(null);
     try {
-      const resposta = await fetch("/api/painel-executivo", { cache: "no-store" });
+      const consulta = parametrosFiltroEstrutura(filtroAtual).toString();
+      const resposta = await fetch(
+        `/api/painel-executivo${consulta ? `?${consulta}` : ""}`,
+        { cache: "no-store" }
+      );
       if (!resposta.ok) {
         setErro(await lerErro(resposta));
         return;
       }
-      setPainel((await resposta.json()) as Painel);
+      const dados = (await resposta.json()) as Painel;
+      setPainel(dados);
+      // As opções vêm da PRÓPRIA resposta (sem segundo fetch), como na lista de
+      // colaboradores.
+      setOpcoesEstrutura(dados.estrutura_opcoes ?? null);
     } catch {
       setErro("Falha de rede ao carregar o painel.");
     } finally {
@@ -541,22 +577,48 @@ export function PainelExecutivoTela() {
   }, []);
 
   // A busca fica dentro de um async IIFE: assim nenhum setState acontece
-  // sincronamente no corpo do efeito (mesmo padrão das outras telas).
+  // sincronamente no corpo do efeito (mesmo padrão das outras telas). Na
+  // montagem o filtro é vazio (constante, sem dep), como na lista de colaboradores.
   useEffect(() => {
     void (async () => {
-      await carregar();
+      await carregar(FILTRO_ESTRUTURA_VAZIO);
     })();
   }, [carregar]);
+
+  /** Mexer num dos três recarrega na hora — não faz sentido "aplicar" depois. */
+  function mudarEstrutura(novo: ValorFiltroEstrutura) {
+    setEstrutura(novo);
+    void carregar(novo);
+  }
 
   return (
     <div className={estilos.pagina}>
       <Cabecalho />
       <main className={estilos.conteudo}>
         <h1>Dashboard Executivo</h1>
+        {painel?.recorte && (
+          <div className={estilos.recorteSelo}>
+            Recortado por: <strong>{textoRecorte(painel.recorte)}</strong>
+          </div>
+        )}
         <p className={estilos.subtitulo}>
           Indicadores de pessoas para a diretoria — cada card mostra o valor, o
           período e a conta que o produziu.
         </p>
+
+        {/* Os três da estrutura, combináveis. Em branco = empresa inteira: com
+            nada escolhido o painel é exatamente o de sempre. As opções vêm da
+            própria resposta da API (sem segundo fetch). */}
+        <section className={estilos.filtroSecao}>
+          <h2>Recorte por registro, lotação e centro de custo</h2>
+          <FiltroEstrutura
+            prefixoId="painel"
+            opcoes={opcoesEstrutura}
+            valor={estrutura}
+            aoMudar={mudarEstrutura}
+            desabilitado={carregando}
+          />
+        </section>
 
         {painel && (
           <p className={estilos.referencia}>
@@ -565,7 +627,7 @@ export function PainelExecutivoTela() {
             <button
               type="button"
               className={estilos.recarregar}
-              onClick={() => void carregar()}
+              onClick={() => void carregar(estrutura)}
               disabled={carregando}
             >
               {carregando ? "Atualizando…" : "Atualizar"}
