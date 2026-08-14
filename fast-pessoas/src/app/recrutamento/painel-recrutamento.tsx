@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
@@ -11,6 +12,7 @@ import {
   StatusRequisicao,
   StatusVaga,
 } from "@/dominios/recrutamento/esquemas";
+import type { ModeloResumo } from "@/dominios/recrutamento/repositorio";
 import comum from "./comum.module.css";
 import { formatarData, formatarSalario, textoPrazo } from "./formato";
 import { KanbanVaga } from "./kanban-vaga";
@@ -96,16 +98,23 @@ export function PainelRecrutamento() {
       <main className={estilos.conteudo}>
         <div className={estilos.linhaTitulo}>
           <h1>Recrutamento e Seleção</h1>
-          {painel?.pode.requisicao_criar && (
-            <button
-              className={comum.botaoPrimario}
-              type="button"
-              onClick={() => setDialogoRequisicao(true)}
-              disabled={!painel.cargos || painel.cargos.length === 0}
-            >
-              + Nova requisição de vaga
-            </button>
-          )}
+          <div className={comum.acoes}>
+            {painel?.pode.gerir && (
+              <Link className={comum.botaoSecundario} href="/recrutamento/modelos">
+                Modelos de processo
+              </Link>
+            )}
+            {painel?.pode.requisicao_criar && (
+              <button
+                className={comum.botaoPrimario}
+                type="button"
+                onClick={() => setDialogoRequisicao(true)}
+                disabled={!painel.cargos || painel.cargos.length === 0}
+              >
+                + Nova requisição de vaga
+              </button>
+            )}
+          </div>
         </div>
         <p className={estilos.subtitulo}>
           Requisição → vaga → seleção no kanban → oferta → admissão. A seleção
@@ -677,6 +686,30 @@ function DialogoNovaVaga({
   const [prazoAlvo, setPrazoAlvo] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [modelos, setModelos] = useState<ModeloResumo[]>([]);
+  const [modeloId, setModeloId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/recrutamento/modelos");
+        if (!resposta.ok) return;
+        const corpo = await resposta.json().catch(() => ({}));
+        if (!ativo) return;
+        const lista: ModeloResumo[] = corpo.modelos ?? [];
+        setModelos(lista);
+        // GERAL pré-selecionado (decisão 13a); sem picker cai nele no servidor.
+        const padrao = lista.find((m) => m.padrao) ?? lista[0];
+        if (padrao) setModeloId(padrao.id);
+      } catch {
+        // Sem lista: a vaga usa o GERAL (padrão) — o servidor resolve.
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
@@ -690,6 +723,7 @@ function DialogoNovaVaga({
           requisicao_id: requisicao.id,
           titulo,
           prazo_alvo: prazoAlvo,
+          modelo_versao_id: modeloId ?? undefined,
         }),
       });
       const dados = await resposta.json().catch(() => ({}));
@@ -736,6 +770,26 @@ function DialogoNovaVaga({
             value={prazoAlvo}
             onChange={(e) => setPrazoAlvo(e.target.value)}
           />
+          {modelos.length > 1 && (
+            <>
+              <label className={comum.rotuloCampo} htmlFor="vaga-modelo">
+                Modelo de processo seletivo
+              </label>
+              <select
+                className={comum.campo}
+                id="vaga-modelo"
+                value={modeloId ?? ""}
+                onChange={(e) => setModeloId(Number(e.target.value))}
+              >
+                {modelos.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.nome}
+                    {m.padrao ? " (GERAL — padrão)" : ""}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           {erro && <p className={comum.erroAcao}>{erro}</p>}
           <div className={comum.acoesDialogo}>
             <button

@@ -27,6 +27,7 @@ import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
   CriacaoCandidato,
   CriacaoCandidatura,
+  CriacaoModelo,
   CriacaoOferta,
   CriacaoParecer,
   CriacaoRequisicao,
@@ -54,6 +55,7 @@ import {
   buscarCargoVersaoVigente,
   buscarEstabelecimentoVersaoAtiva,
   buscarEtapasDoModelo,
+  buscarModeloAtivo,
   buscarModeloPadrao,
   buscarFaixaVigente,
   buscarOfertaParaMutacao,
@@ -68,6 +70,8 @@ import {
   gravarDecisaoRequisicao,
   inserirCandidato,
   inserirCandidatura,
+  inserirEtapasNoModelo,
+  inserirModelo,
   inserirMovimentacao,
   inserirOferta,
   inserirParecer,
@@ -79,9 +83,11 @@ import {
   listarEstabelecimentosAtivos,
   listarEtapasAtivas,
   listarEtapasDoModelo,
+  listarModelos,
   listarPareceres,
   listarRequisicoes,
   listarVagas,
+  ModeloResumo,
   ParecerSelecao,
   responderOferta as gravarRespostaOferta,
   RequisicaoResumo,
@@ -94,6 +100,7 @@ const TABELA_CANDIDATO = "rh.candidato";
 const TABELA_CANDIDATURA = "rh.candidatura";
 const TABELA_PARECER = "rh.parecer_selecao";
 const TABELA_OFERTA = "rh.oferta";
+const TABELA_MODELO = "rh.modelo_selecao_versao";
 
 // ------------------------------------------------------------------ utilidades
 
@@ -360,15 +367,27 @@ export async function criarVaga(
           `O cargo ${requisicao.cargo_nome} não tem faixa salarial vigente — cadastre a faixa antes de abrir a vaga.`
         );
       }
-      // A vaga congela o modelo de processo PADRÃO na abertura (0077); a
-      // candidatura vai andar pelas etapas deste modelo. (O seletor de outros
-      // modelos vem no Estágio 3.)
-      const modeloVersaoId = await buscarModeloPadrao(cliente);
-      if (modeloVersaoId === null) {
-        throw new ErroHttp(
-          409,
-          "Não há modelo de processo seletivo padrão ativo — configure o modelo antes de abrir vagas."
-        );
+      // A vaga congela um modelo de processo na abertura (0077); a candidatura
+      // vai andar pelas etapas deste modelo. Quem abre pode escolher um modelo
+      // alternativo ativo; sem escolha, vale o GERAL (padrão).
+      let modeloVersaoId: number | null;
+      if (dados.modelo_versao_id !== undefined) {
+        modeloVersaoId = await buscarModeloAtivo(cliente, dados.modelo_versao_id);
+        if (modeloVersaoId === null) {
+          throw new ErroHttpCampo(
+            409,
+            "O modelo de processo escolhido não está ativo.",
+            "modelo_versao_id"
+          );
+        }
+      } else {
+        modeloVersaoId = await buscarModeloPadrao(cliente);
+        if (modeloVersaoId === null) {
+          throw new ErroHttp(
+            409,
+            "Não há modelo de processo seletivo padrão ativo — configure o modelo antes de abrir vagas."
+          );
+        }
       }
       const id = await inserirVaga(cliente, {
         requisicao_id: dados.requisicao_id,
@@ -410,6 +429,101 @@ export async function criarVaga(
     }
     throw erro;
   }
+}
+
+// ------------------------------------------------------------------ administração dos modelos de processo
+
+export interface PainelModelosSelecao {
+  modelos: ModeloResumo[];
+  /** Catálogo de etapas disponíveis para montar um modelo. */
+  catalogo: EtapaAtiva[];
+}
+
+/** Painel de administração dos modelos de processo — só quem gere a seleção. */
+export async function obterModelosSelecao(
+  pode: PermissoesRs
+): Promise<PainelModelosSelecao> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  const [modelos, catalogo] = await Promise.all([
+    listarModelos(),
+    listarEtapasAtivas(),
+  ]);
+  return { modelos, catalogo };
+}
+
+/**
+ * Cria um modelo de processo alternativo (nasce ATIVO, não-padrão). As etapas
+ * têm que ser do catálogo vigente, sem repetição, e conter ao menos uma etapa
+ * de OFERTA — senão a candidatura nunca alcançaria a proposta (é onde o valor
+ * é registrado). Os ids/ordem viram imutáveis: mudar o desenho = novo modelo.
+ */
+export async function criarModelo(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  dados: CriacaoModelo
+): Promise<number> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  const catalogo = await listarEtapasAtivas();
+  const porId = new Map(catalogo.map((etapa) => [etapa.id, etapa]));
+
+  const vistos = new Set<number>();
+  const escolhidas: EtapaAtiva[] = [];
+  for (const id of dados.etapa_ids) {
+    if (vistos.has(id)) {
+      throw new ErroHttpCampo(
+        400,
+        "A mesma etapa aparece duas vezes no modelo.",
+        "etapa_ids"
+      );
+    }
+    const etapa = porId.get(id);
+    if (!etapa) {
+      throw new ErroHttpCampo(
+        409,
+        "Uma das etapas escolhidas não existe ou não está ativa.",
+        "etapa_ids"
+      );
+    }
+    vistos.add(id);
+    escolhidas.push(etapa);
+  }
+  if (!escolhidas.some((etapa) => etapa.tipo === "oferta")) {
+    throw new ErroHttpCampo(
+      409,
+      "O modelo precisa conter uma etapa de oferta — é onde a proposta é registrada.",
+      "etapa_ids"
+    );
+  }
+
+  return await comTransacao(sessao.usuario_id, async (cliente) => {
+    const id = await inserirModelo(cliente, dados.nome);
+    await inserirEtapasNoModelo(cliente, id, dados.etapa_ids);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_MODELO,
+      registroId: String(id),
+      diff: {
+        Nome: { de: null, para: dados.nome },
+        Etapas: {
+          de: null,
+          para: escolhidas.map((etapa) => etapa.nome).join(" → "),
+        },
+      },
+    });
+    return id;
+  });
 }
 
 // ------------------------------------------------------------------ kanban da vaga

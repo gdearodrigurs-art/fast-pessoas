@@ -238,6 +238,93 @@ export async function buscarModeloPadrao(
   return rows.length ? Number(rows[0].id) : null;
 }
 
+// ------------------------------------------------------------------ administração dos modelos de processo
+
+export interface ModeloResumo {
+  id: number;
+  nome: string;
+  padrao: boolean;
+  status: string;
+  etapas: { nome: string; tipo: string; ordem: number }[];
+  /** Quantas vagas congelaram esta versão do modelo. */
+  vagas_usando: number;
+}
+
+/** Os modelos ATIVOS (o GERAL + os alternativos) com suas etapas e uso. */
+export async function listarModelos(): Promise<ModeloResumo[]> {
+  const linhas = await consultar<{
+    id: string;
+    nome: string;
+    padrao: boolean;
+    status: string;
+    vagas_usando: number;
+    etapas: { nome: string; tipo: string; ordem: number }[];
+  }>(
+    `SELECT m.id, m.nome, m.padrao, m.status,
+            (SELECT count(*) FROM rh.vaga v WHERE v.modelo_versao_id = m.id)::int
+              AS vagas_usando,
+            COALESCE(
+              json_agg(
+                json_build_object('nome', e.nome, 'tipo', e.tipo, 'ordem', me.ordem)
+                ORDER BY me.ordem
+              ) FILTER (WHERE me.id IS NOT NULL),
+              '[]'
+            ) AS etapas
+       FROM rh.modelo_selecao_versao m
+       LEFT JOIN rh.modelo_selecao_etapa me ON me.modelo_versao_id = m.id
+       LEFT JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id
+      WHERE m.status = 'ativa'
+      GROUP BY m.id
+      ORDER BY m.padrao DESC, m.nome`
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+/**
+ * Um modelo ASSINÁVEL por uma vaga nova: precisa existir e estar ATIVO. Devolve
+ * null quando não serve (inexistente, rascunho ou encerrado) — o serviço traduz.
+ */
+export async function buscarModeloAtivo(
+  cliente: PoolClient,
+  id: number
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `SELECT id FROM rh.modelo_selecao_versao
+      WHERE id = $1 AND status = 'ativa'`,
+    [id]
+  );
+  return rows.length ? Number(rows[0].id) : null;
+}
+
+/** Cria um modelo alternativo já ATIVO (não-padrão) e devolve o id. */
+export async function inserirModelo(
+  cliente: PoolClient,
+  nome: string
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.modelo_selecao_versao (nome, padrao, status, inicio_vigencia)
+     VALUES ($1, false, 'ativa', rh.hoje())
+     RETURNING id`,
+    [nome]
+  );
+  return Number(rows[0].id);
+}
+
+/** Grava a seleção e a ordem de etapas do modelo (ordem = posição na lista). */
+export async function inserirEtapasNoModelo(
+  cliente: PoolClient,
+  modeloVersaoId: number,
+  etapaIds: number[]
+): Promise<void> {
+  const ordens = etapaIds.map((_, indice) => indice + 1);
+  await cliente.query(
+    `INSERT INTO rh.modelo_selecao_etapa (modelo_versao_id, etapa_selecao_versao_id, ordem)
+     SELECT $1::bigint, t.etapa_id, t.ordem
+       FROM unnest($2::bigint[], $3::int[]) AS t(etapa_id, ordem)`,
+    [modeloVersaoId, etapaIds, ordens]
+  );
+}
+
 // ------------------------------------------------------------------ requisição de vaga
 
 export interface RequisicaoResumo {

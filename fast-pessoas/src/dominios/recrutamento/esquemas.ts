@@ -174,9 +174,20 @@ export const esquemaCriacaoVaga = z.object({
   requisicao_id: z.number().int().positive(),
   titulo: z.string().trim().min(1, "Informe o título da vaga").max(200),
   prazo_alvo: esquemaData,
+  /** Modelo de processo a congelar. Omitido: a vaga usa o GERAL (padrão). */
+  modelo_versao_id: z.number().int().positive().optional(),
 });
 
 export type CriacaoVaga = z.infer<typeof esquemaCriacaoVaga>;
+
+export const esquemaCriacaoModelo = z.object({
+  nome: z.string().trim().min(1, "Informe o nome do modelo").max(120),
+  etapa_ids: z
+    .array(z.number().int().positive())
+    .min(1, "Escolha ao menos uma etapa para o modelo"),
+});
+
+export type CriacaoModelo = z.infer<typeof esquemaCriacaoModelo>;
 
 export const esquemaCriacaoCandidato = z.object({
   nome: z.string().trim().min(3, "Informe o nome do candidato").max(200),
