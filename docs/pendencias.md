@@ -669,6 +669,14 @@ confirmadas pelo dono e **construídas**:
   `GET/POST /api/recrutamento/modelos` (rs.gerir) e tela `/recrutamento/modelos` + seletor de modelo
   no diálogo de nova vaga. Provado ao vivo (modelo enxuto Triagem→Oferta; kanban de vaga nesse modelo
   = 2 colunas, não as 4 globais).
+- **Revisão do Estágio 3** (commit `af988d9`): a oferta tem que ser a ÚLTIMA etapa (não só presente),
+  senão a candidatura avançada além dela fica num beco; e a criação da vaga passou a registrar o
+  modelo no rastro (eixo 8).
+- **Blindagem do invariante** (migration `0078`, commit a seguir): trigger deferido no banco força
+  "todo modelo de seleção ATIVO termina em etapa de oferta". Fecha o resíduo [médio-latente] que a
+  verificação achou — o modelo GERAL nasce por seed e pula o `criarModelo`, então dependia de
+  coincidência do catálogo; agora o banco garante para todo caminho (seed, tela, migration futura).
+  Provado: estado atual passa; modelo mau é barrado no commit; modelo bom (via API) segue criando.
 
 **Fica PENDENTE (follow-ups, nesta ordem de valor):**
 
