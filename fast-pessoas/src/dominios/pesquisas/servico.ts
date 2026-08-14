@@ -2,16 +2,22 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
-import { lerMinimoPorRecorte } from "../colaboradores/repositorio";
+import { lerMinimoPorRecorte, listarCargos } from "../colaboradores/repositorio";
+import { OpcoesFiltroEstrutura } from "../estrutura/esquemas";
+import { listarOpcoesDeFiltroEstrutura } from "../estrutura/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import {
   AcaoPesquisa,
+  alvoDaLinha,
+  alvoPreenchido,
   AtualizacaoPlano,
   CriacaoPesquisa,
   EnvioRespostas,
   FAIXA_NUMERICA,
+  pesquisaTemAlvo,
   pessoasDoRecorte,
   PlanoNovo,
+  recorteCasaAlvo,
   ROTULOS_STATUS_PLANO,
   ROTULOS_TIPO_PERGUNTA,
   ROTULOS_TIPO_PESQUISA,
@@ -31,6 +37,7 @@ import {
   contagensEscolha,
   contagensNps,
   contarAtivos,
+  contarElegiveis,
   encerrarPesquisa,
   inserirParticipacao,
   travarPesquisaParaResposta,
@@ -48,12 +55,17 @@ import {
   PerguntaLinha,
   PesquisaLinha,
   PlanoLinha,
+  recorteDoColaborador,
   recortesPorUnidade,
   ultimaContagemEnpsEncerrada,
   ultimaPesquisaEncerrada,
   UnidadeOpcao,
   UsuarioOpcao,
 } from "./repositorio";
+
+/** Fora do público-alvo: bloqueio de AUTORIZAÇÃO no servidor (eixo 7). */
+const FORA_DO_ALVO =
+  "Esta pesquisa é destinada a um público específico e você não faz parte dele.";
 
 /**
  * Serviço da pesquisa estruturada de clima.
@@ -245,8 +257,19 @@ export interface AbertaParaMim {
 
 export interface VisaoPesquisas {
   pode: PermissoesPesquisas;
-  /** Só para quem administra ou vê resultado; caso contrário, lista vazia. */
-  pesquisas: Array<PesquisaLinha & { tipo_rotulo: string; adesao: number | null }>;
+  /**
+   * Só para quem administra ou vê resultado; caso contrário, lista vazia.
+   * `participacoes` vem NULL (junto com `adesao`) quando a pesquisa TEM alvo e
+   * a adesão está abaixo do piso k — senão "3 participaram" num grupo pequeno
+   * desanonimiza. Pesquisa sem alvo mostra a contagem como sempre.
+   */
+  pesquisas: Array<
+    Omit<PesquisaLinha, "participacoes"> & {
+      tipo_rotulo: string;
+      participacoes: number | null;
+      adesao: number | null;
+    }
+  >;
   /** Pesquisas abertas para a pessoa da sessão responder. */
   minhas_abertas: AbertaParaMim[];
   colaborador_vinculado: boolean;
@@ -256,6 +279,9 @@ export interface VisaoPesquisas {
    * empresa configurou 20 é prometer errado no lugar onde a promessa importa.
    */
   minimo_amostra: number;
+  /** Catálogos do seletor de público-alvo — só para quem administra. */
+  opcoes_estrutura?: OpcoesFiltroEstrutura;
+  opcoes_cargo?: Array<{ id: number; nome: string }>;
 }
 
 export async function obterVisao(
@@ -267,32 +293,72 @@ export async function obterVisao(
     buscarColaboradorPorUsuario(sessao.usuario_id),
   ]);
   const podeVerLista = pode.administrar || pode.ver_resultado;
-  const [lista, ativos, abertas, minimoAmostra] = await Promise.all([
-    podeVerLista ? listarPesquisas() : Promise.resolve([]),
-    podeVerLista ? contarAtivos() : Promise.resolve(0),
-    pode.responder
-      ? listarAbertasParaColaborador(colaborador ? colaborador.id : null)
-      : Promise.resolve([]),
-    lerMinimoPorRecorte(),
-  ]);
+  const [lista, ativos, abertas, minimoAmostra, opcoesEstrutura, cargos] =
+    await Promise.all([
+      podeVerLista ? listarPesquisas() : Promise.resolve([]),
+      podeVerLista ? contarAtivos() : Promise.resolve(0),
+      pode.responder
+        ? listarAbertasParaColaborador(colaborador ? colaborador.id : null)
+        : Promise.resolve([]),
+      lerMinimoPorRecorte(),
+      // Catálogos do seletor de alvo — só quem cria pesquisa precisa deles.
+      pode.administrar ? listarOpcoesDeFiltroEstrutura() : Promise.resolve(null),
+      pode.administrar ? listarCargos() : Promise.resolve(null),
+    ]);
+
+  // Denominador da adesão por pesquisa: `ativos` quando alvo vazio (regressão
+  // idêntica); elegíveis (DISTINCT pessoa) quando há alvo. Só as MIRADAS custam
+  // uma consulta a mais — a esmagadora maioria (empresa toda) não custa nada.
+  const elegiveisPorPesquisa = new Map<number, number>();
+  await Promise.all(
+    lista
+      .filter((pesquisa) => pesquisaTemAlvo(pesquisa))
+      .map(async (pesquisa) => {
+        elegiveisPorPesquisa.set(
+          pesquisa.id,
+          await contarElegiveis(alvoDaLinha(pesquisa))
+        );
+      })
+  );
+
   return {
     pode,
-    pesquisas: lista.map((pesquisa) => ({
-      ...pesquisa,
-      tipo_rotulo: ROTULOS_TIPO_PESQUISA[pesquisa.tipo],
-      // Adesão é contagem de participantes, não conteúdo — não passa pelo
-      // k-anonimato (o que ele protege é a resposta, que segue oculta).
-      adesao:
-        ativos === 0
-          ? null
-          : arredondar((pesquisa.participacoes / ativos) * 100),
-    })),
+    pesquisas: lista.map((pesquisa) => {
+      const temAlvo = pesquisaTemAlvo(pesquisa);
+      const denominador = temAlvo
+        ? (elegiveisPorPesquisa.get(pesquisa.id) ?? 0)
+        : ativos;
+      // Sob alvo, a adesão respeita o k: "3 participaram" num grupo pequeno
+      // desanonimiza tanto quanto uma média. Sem alvo, adesão é contagem de
+      // participantes da casa inteira — visível como sempre (o k protege a
+      // resposta, que segue oculta).
+      const ocultarAdesao = temAlvo && pesquisa.participacoes < minimoAmostra;
+      return {
+        ...pesquisa,
+        tipo_rotulo: ROTULOS_TIPO_PESQUISA[pesquisa.tipo],
+        participacoes: ocultarAdesao ? null : pesquisa.participacoes,
+        adesao:
+          ocultarAdesao || denominador === 0
+            ? null
+            : arredondar((pesquisa.participacoes / denominador) * 100),
+      };
+    }),
     minhas_abertas: abertas.map((aberta) => ({
       ...aberta,
       tipo_rotulo: ROTULOS_TIPO_PESQUISA[aberta.tipo],
     })),
     colaborador_vinculado: colaborador !== null,
     minimo_amostra: minimoAmostra,
+    ...(opcoesEstrutura ? { opcoes_estrutura: opcoesEstrutura } : {}),
+    ...(cargos
+      ? {
+          opcoes_cargo: cargos
+            .filter((cargo): cargo is typeof cargo & { nome: string } =>
+              Boolean(cargo.nome)
+            )
+            .map((cargo) => ({ id: cargo.id, nome: cargo.nome })),
+        }
+      : {}),
   };
 }
 
@@ -302,6 +368,26 @@ export async function criarPesquisa(
   sessao: PayloadSessao,
   dados: CriacaoPesquisa
 ): Promise<PesquisaLinha> {
+  const alvo = dados.alvo;
+  // Recusa a criação de pesquisa MIRADA cujo público já nasce abaixo do piso:
+  // ela nunca poderia mostrar resultado nem adesão sem desanonimizar. Alvo
+  // vazio (empresa toda) nunca é recusado. Contagem no servidor (eixo 7).
+  if (alvoPreenchido(alvo)) {
+    const [elegiveis, minimo] = await Promise.all([
+      contarElegiveis(alvo),
+      lerMinimoPorRecorte(),
+    ]);
+    if (elegiveis < minimo) {
+      throw new ErroHttp(
+        422,
+        `O público-alvo tem ${elegiveis} ${
+          elegiveis === 1 ? "pessoa" : "pessoas"
+        }; o piso de anonimato é ${minimo}. Uma pesquisa mirada num grupo menor ` +
+          "que o piso nunca poderá mostrar resultado — amplie o recorte ou baixe o piso."
+      );
+    }
+  }
+
   const id = await comTransacao(sessao.usuario_id, async (cliente) => {
     const pesquisaId = await inserirPesquisa(cliente, {
       titulo: dados.titulo,
@@ -311,6 +397,10 @@ export async function criarPesquisa(
       fim: dados.fim,
       anonima: dados.anonima,
       criada_por: sessao.usuario_id,
+      empresa_id: alvo?.empresa_id ?? null,
+      estabelecimento_id: alvo?.estabelecimento_id ?? null,
+      centro_custo_id: alvo?.centro_custo_id ?? null,
+      cargo_id: alvo?.cargo_id ?? null,
     });
     let ordem = 1;
     for (const pergunta of dados.perguntas) {
@@ -338,6 +428,10 @@ export async function criarPesquisa(
           para: `${formatarData(dados.inicio)} a ${formatarData(dados.fim)}`,
         },
         Anônima: { de: null, para: dados.anonima ? "sim" : "não" },
+        "Público-alvo": {
+          de: null,
+          para: alvoPreenchido(alvo) ? "recorte específico" : "empresa toda",
+        },
         Perguntas: { de: null, para: String(dados.perguntas.length) },
       },
     });
@@ -454,6 +548,17 @@ export async function obterFormulario(
   }
   if (pesquisa.status !== "aberta") {
     throw new ErroHttp(409, "Esta pesquisa não está aberta para resposta.");
+  }
+  // Gate de elegibilidade no SERVIDOR (eixo 7): quem está fora do alvo não vê
+  // nem o formulário. Alvo vazio casa todos (regressão). Sem colaborador não há
+  // recorte para casar uma pesquisa mirada.
+  if (pesquisaTemAlvo(pesquisa)) {
+    const recorte = colaborador
+      ? await recorteDoColaborador(colaborador.id)
+      : null;
+    if (!recorte || !recorteCasaAlvo(pesquisa, recorte)) {
+      throw new ErroHttp(403, FORA_DO_ALVO);
+    }
   }
   const [perguntas, respondida, minimoAmostra] = await Promise.all([
     listarPerguntas(id),
@@ -640,6 +745,14 @@ export async function responder(
       "Sua conta não está vinculada a um colaborador — procure o RH."
     );
   }
+  // Gate de elegibilidade no SERVIDOR (eixo 7): tela escondida não basta, a
+  // gravação também recusa quem está fora do alvo. Alvo vazio casa todos.
+  if (pesquisaTemAlvo(pesquisa)) {
+    const recorte = await recorteDoColaborador(colaborador.id);
+    if (!recorteCasaAlvo(pesquisa, recorte)) {
+      throw new ErroHttp(403, FORA_DO_ALVO);
+    }
+  }
   const perguntas = await listarPerguntas(id);
   const preparadas = prepararRespostas(perguntas, envio);
 
@@ -731,7 +844,18 @@ export interface ResultadoUnidade {
 
 export interface ResultadoPesquisa {
   pesquisa: PesquisaLinha & { tipo_rotulo: string };
-  adesao: { participacoes: number; ativos: number; percentual: number | null };
+  /**
+   * `ativos` é o DENOMINADOR: colaboradores ativos quando alvo vazio, ou
+   * elegíveis (DISTINCT pessoa) quando há alvo. `participacoes`/`percentual`
+   * vêm NULL quando a pesquisa TEM alvo e a adesão está abaixo do piso k —
+   * `amostra_suficiente` é `false` só nesse caso. Sem alvo, sempre visível.
+   */
+  adesao: {
+    participacoes: number | null;
+    ativos: number;
+    percentual: number | null;
+    amostra_suficiente: boolean;
+  };
   /** eNPS da pesquisa inteira quando há pergunta de nota 0–10. */
   enps: {
     valor: number | null;
@@ -759,6 +883,7 @@ export async function obterResultado(
   if (pesquisa.status === "rascunho") {
     throw new ErroHttp(409, "Pesquisa em rascunho ainda não tem resultado.");
   }
+  const temAlvo = pesquisaTemAlvo(pesquisa);
   const [
     perguntas,
     escalas,
@@ -769,6 +894,7 @@ export async function obterResultado(
     planos,
     ativos,
     minimoAmostra,
+    elegiveis,
   ] = await Promise.all([
     listarPerguntas(id),
     contagensEscala(id),
@@ -782,7 +908,13 @@ export async function obterResultado(
     // de agora", então o k que vale é o de agora — não há resultado antigo a
     // reproduzir com o k antigo (mesmo raciocínio da 0044).
     lerMinimoPorRecorte(),
+    // Denominador da adesão sob alvo: elegíveis vigentes (DISTINCT pessoa).
+    temAlvo ? contarElegiveis(alvoDaLinha(pesquisa)) : Promise.resolve(null),
   ]);
+  const denominadorAdesao = temAlvo ? (elegiveis ?? 0) : ativos;
+  // Sob alvo, a adesão respeita o k igual à tela de recorte: participação de um
+  // grupo pequeno é dedução. Sem alvo, adesão da casa inteira, visível como hoje.
+  const adesaoOculta = temAlvo && pesquisa.participacoes < minimoAmostra;
 
   const escalaPorPergunta = new Map(escalas.map((e) => [e.pergunta_id, e]));
   const npsPorPergunta = new Map(nps.map((n) => [n.pergunta_id, n]));
@@ -915,12 +1047,13 @@ export async function obterResultado(
   return {
     pesquisa: { ...pesquisa, tipo_rotulo: ROTULOS_TIPO_PESQUISA[pesquisa.tipo] },
     adesao: {
-      participacoes: pesquisa.participacoes,
-      ativos,
+      participacoes: adesaoOculta ? null : pesquisa.participacoes,
+      ativos: denominadorAdesao,
       percentual:
-        ativos === 0
+        adesaoOculta || denominadorAdesao === 0
           ? null
-          : arredondar((pesquisa.participacoes / ativos) * 100),
+          : arredondar((pesquisa.participacoes / denominadorAdesao) * 100),
+      amostra_suficiente: !adesaoOculta,
     },
     enps:
       nps.length === 0
@@ -1117,17 +1250,26 @@ export async function atualizarPlano(
 
 /**
  * Fonte do indicador `adesao_pesquisa`: participação da ÚLTIMA pesquisa
- * encerrada (participantes ÷ colaboradores ativos), em percentual com uma
- * casa. null quando não há pesquisa encerrada ou não há ativos. Só agregado —
- * nunca quem respondeu.
+ * encerrada (participantes ÷ denominador), em percentual com uma casa. null
+ * quando não há pesquisa encerrada ou não há denominador. Só agregado — nunca
+ * quem respondeu.
+ *
+ * Denominador: colaboradores ativos quando a pesquisa não tem alvo (regressão);
+ * elegíveis vigentes quando há alvo. E, sob alvo, respeita o k igual à tela: a
+ * Central não pode ser a porta dos fundos de "3 de 4 responderam" que a tela de
+ * resultado esconde.
  */
 export async function valorIndicadorAdesaoPesquisa(): Promise<number | null> {
-  const [pesquisa, ativos] = await Promise.all([
-    ultimaPesquisaEncerrada(),
-    contarAtivos(),
+  const pesquisa = await ultimaPesquisaEncerrada();
+  if (!pesquisa) return null;
+  const temAlvo = pesquisaTemAlvo(pesquisa);
+  const [denominador, minimo] = await Promise.all([
+    temAlvo ? contarElegiveis(alvoDaLinha(pesquisa)) : contarAtivos(),
+    temAlvo ? lerMinimoPorRecorte() : Promise.resolve(0),
   ]);
-  if (!pesquisa || ativos === 0) return null;
-  return arredondar((pesquisa.participacoes / ativos) * 100);
+  if (temAlvo && pesquisa.participacoes < minimo) return null;
+  if (denominador === 0) return null;
+  return arredondar((pesquisa.participacoes / denominador) * 100);
 }
 
 /**

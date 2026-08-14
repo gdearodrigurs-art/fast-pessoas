@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { esquemaData } from "../../lib/data-civil";
+import { esquemaFiltroEstrutura } from "../estrutura/esquemas";
 
 /**
  * Pesquisa estruturada de clima — módulo PRÓPRIO, separado do check-in diário
@@ -163,6 +164,92 @@ export function avisoAnonimato(minimoAmostra: number): string {
   );
 }
 
+// ------------------------------------------------------------------ público-alvo
+//
+// A pesquisa pode MIRAR um recorte CONJUNTIVO (E) de até quatro dimensões
+// (migration 0079): registro (empresa), lotação (estabelecimento), centro de
+// custo e cargo. As quatro AUSENTES = empresa toda = comportamento de sempre;
+// qualquer uma preenchida estreita em E. O alvo guarda CRITÉRIO (ids), não a
+// lista de pessoas — a elegibilidade se resolve ao vivo pela lotação/cargo
+// VIGENTE de cada um (eixo 10). Identidade por id, nunca por nome (eixo 2);
+// cargo_id aponta para rh.cargo (identidade estável), não para a versão.
+
+export const esquemaAlvoPesquisa = esquemaFiltroEstrutura.extend({
+  /** CARGO — rh.cargo.id (a identidade estável, não rh.cargo_versao). */
+  cargo_id: z.coerce.number().int().positive().optional(),
+});
+
+export type AlvoPesquisa = z.infer<typeof esquemaAlvoPesquisa>;
+
+/**
+ * As quatro colunas de alvo já resolvidas (linha da pesquisa) OU o recorte
+ * VIGENTE de uma pessoa: mesma forma, `null` = ausente. É a forma com que o
+ * gate de elegibilidade compara os dois lados.
+ */
+export interface RecorteAlvo {
+  empresa_id: number | null;
+  estabelecimento_id: number | null;
+  centro_custo_id: number | null;
+  cargo_id: number | null;
+}
+
+/** A pesquisa mira um público quando ao menos uma dimensão do alvo vem preenchida. */
+export function pesquisaTemAlvo(alvo: RecorteAlvo): boolean {
+  return (
+    alvo.empresa_id !== null ||
+    alvo.estabelecimento_id !== null ||
+    alvo.centro_custo_id !== null ||
+    alvo.cargo_id !== null
+  );
+}
+
+/**
+ * O recorte VIGENTE da pessoa casa o alvo da pesquisa? Dimensão do alvo em
+ * `null` casa qualquer pessoa (não estreita); preenchida exige igualdade — e
+ * quem não tem aquele atributo vigente (recorte `null`) NÃO casa uma dimensão
+ * exigida. É o mesmo E conjuntivo do gate de listagem, em TypeScript, para o
+ * servidor barrar responder/ver formulário fora do alvo (eixo 7).
+ */
+export function recorteCasaAlvo(
+  alvo: RecorteAlvo,
+  recorte: RecorteAlvo
+): boolean {
+  return (
+    (alvo.empresa_id === null || alvo.empresa_id === recorte.empresa_id) &&
+    (alvo.estabelecimento_id === null ||
+      alvo.estabelecimento_id === recorte.estabelecimento_id) &&
+    (alvo.centro_custo_id === null ||
+      alvo.centro_custo_id === recorte.centro_custo_id) &&
+    (alvo.cargo_id === null || alvo.cargo_id === recorte.cargo_id)
+  );
+}
+
+/**
+ * O alvo do formulário tem alguma dimensão preenchida? (esquema, `undefined`).
+ * Type predicate: dentro do `if` o alvo passa a ser AlvoPesquisa não-nulo.
+ */
+export function alvoPreenchido(
+  alvo: AlvoPesquisa | undefined
+): alvo is AlvoPesquisa {
+  return (
+    alvo !== undefined &&
+    (alvo.empresa_id !== undefined ||
+      alvo.estabelecimento_id !== undefined ||
+      alvo.centro_custo_id !== undefined ||
+      alvo.cargo_id !== undefined)
+  );
+}
+
+/** A linha da pesquisa (colunas nuláveis) relida como filtro de contarElegiveis. */
+export function alvoDaLinha(linha: RecorteAlvo): AlvoPesquisa {
+  return {
+    empresa_id: linha.empresa_id ?? undefined,
+    estabelecimento_id: linha.estabelecimento_id ?? undefined,
+    centro_custo_id: linha.centro_custo_id ?? undefined,
+    cargo_id: linha.cargo_id ?? undefined,
+  };
+}
+
 // ------------------------------------------------------------------ entrada
 
 export const esquemaPerguntaNova = z
@@ -211,6 +298,9 @@ export const esquemaCriacaoPesquisa = z
     fim: esquemaData,
     // O anonimato é o padrão — quem quiser o contrário precisa dizer.
     anonima: z.boolean().optional().default(true),
+    // Público-alvo (0079): ausente = empresa toda. O gate de piso k mora no
+    // serviço (criarPesquisa), não aqui — o esquema só valida a forma dos ids.
+    alvo: esquemaAlvoPesquisa.optional(),
     perguntas: z
       .array(esquemaPerguntaNova)
       .min(1, "A pesquisa precisa de ao menos uma pergunta")

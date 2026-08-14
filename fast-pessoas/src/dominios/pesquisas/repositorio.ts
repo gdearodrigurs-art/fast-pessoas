@@ -1,6 +1,13 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
-import { StatusPesquisa, StatusPlano, TipoPergunta, TipoPesquisa } from "./esquemas";
+import { condicaoFiltroEstrutura } from "../estrutura/repositorio";
+import {
+  AlvoPesquisa,
+  StatusPesquisa,
+  StatusPlano,
+  TipoPergunta,
+  TipoPesquisa,
+} from "./esquemas";
 
 /**
  * SQL do módulo de pesquisa estruturada de clima. Duas regras de ouro deste
@@ -28,6 +35,11 @@ export interface PesquisaLinha {
   fim: string;
   status: StatusPesquisa;
   anonima: boolean;
+  /** Público-alvo (0079): os quatro NULL = empresa toda. Ver esquemas.ts. */
+  empresa_id: number | null;
+  estabelecimento_id: number | null;
+  centro_custo_id: number | null;
+  cargo_id: number | null;
   criada_por_nome: string;
   criada_em: string;
   aberta_em: string | null;
@@ -133,6 +145,10 @@ const SELECT_PESQUISA = `
          p.fim::text     AS fim,
          p.status,
          p.anonima,
+         p.empresa_id,
+         p.estabelecimento_id,
+         p.centro_custo_id,
+         p.cargo_id,
          u.nome          AS criada_por_nome,
          p.criada_em,
          p.aberta_em,
@@ -153,6 +169,10 @@ interface PesquisaCrua extends Record<string, unknown> {
   fim: string;
   status: StatusPesquisa;
   anonima: boolean;
+  empresa_id: string | null;
+  estabelecimento_id: string | null;
+  centro_custo_id: string | null;
+  cargo_id: string | null;
   criada_por_nome: string;
   criada_em: Date;
   aberta_em: Date | null;
@@ -161,10 +181,18 @@ interface PesquisaCrua extends Record<string, unknown> {
   participacoes: number;
 }
 
+function idOuNulo(valor: string | null): number | null {
+  return valor === null ? null : Number(valor);
+}
+
 function mapearPesquisa(linha: PesquisaCrua): PesquisaLinha {
   return {
     ...linha,
     id: Number(linha.id),
+    empresa_id: idOuNulo(linha.empresa_id),
+    estabelecimento_id: idOuNulo(linha.estabelecimento_id),
+    centro_custo_id: idOuNulo(linha.centro_custo_id),
+    cargo_id: idOuNulo(linha.cargo_id),
     criada_em: linha.criada_em.toISOString(),
     aberta_em: linha.aberta_em ? linha.aberta_em.toISOString() : null,
     encerrada_em: linha.encerrada_em ? linha.encerrada_em.toISOString() : null,
@@ -229,12 +257,18 @@ export async function inserirPesquisa(
     fim: string;
     anonima: boolean;
     criada_por: number;
+    // Público-alvo (0079): ausente/NULL em todas = empresa toda (regressão).
+    empresa_id?: number | null;
+    estabelecimento_id?: number | null;
+    centro_custo_id?: number | null;
+    cargo_id?: number | null;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh_clima.pesquisa
-       (titulo, tipo, descricao, inicio, fim, anonima, criada_por)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (titulo, tipo, descricao, inicio, fim, anonima, criada_por,
+        empresa_id, estabelecimento_id, centro_custo_id, cargo_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING id`,
     [
       dados.titulo,
@@ -244,6 +278,10 @@ export async function inserirPesquisa(
       dados.fim,
       dados.anonima,
       dados.criada_por,
+      dados.empresa_id ?? null,
+      dados.estabelecimento_id ?? null,
+      dados.centro_custo_id ?? null,
+      dados.cargo_id ?? null,
     ]
   );
   return Number(rows[0].id);
@@ -383,6 +421,95 @@ export async function buscarColaboradorPorUsuario(
   };
 }
 
+// ------------------------------------------------------------------ público-alvo
+
+/**
+ * Quantas PESSOAS distintas (não vínculos) são elegíveis a um alvo — a contagem
+ * que sustenta o piso de anonimato na criação e o denominador da adesão quando
+ * a pesquisa mira um público. Elegibilidade pela lotação/cargo VIGENTE (última
+ * lotação / última posição), a MESMA régua do FiltroEstrutura das outras telas:
+ * os três de estrutura vêm de `condicaoFiltroEstrutura` (que compara a última
+ * lotação), e o cargo de uma cláusula local sobre a última posição.
+ *
+ * Alvo vazio contaria todos os ativos — mas o serviço só chama esta função
+ * QUANDO HÁ alvo; sem alvo o denominador segue sendo `contarAtivos` (regressão
+ * byte a byte).
+ */
+export async function contarElegiveis(alvo: AlvoPesquisa): Promise<number> {
+  const parametros: unknown[] = [];
+  // condicaoFiltroEstrutura só ignora `undefined`; `alvo` do serviço já chega
+  // com undefined (não null) nas dimensões ausentes — ver alvoDaLinha.
+  const condEstrutura = condicaoFiltroEstrutura(alvo, parametros, "c");
+  let condCargo = "";
+  if (alvo.cargo_id !== undefined) {
+    parametros.push(alvo.cargo_id);
+    condCargo = ` AND $${parametros.length} = (
+        SELECT cv.cargo_id
+          FROM rh.posicao_colaborador pc
+          JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+         WHERE pc.colaborador_id = c.id
+         ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+         LIMIT 1)`;
+  }
+  const linhas = await consultar<{ total: number }>(
+    `SELECT COUNT(DISTINCT c.pessoa_id)::int AS total
+       FROM rh.colaborador c
+      WHERE c.status = 'ativo'${condEstrutura}${condCargo}`,
+    parametros
+  );
+  return linhas[0]?.total ?? 0;
+}
+
+/**
+ * Os quatro atributos VIGENTES de uma pessoa: empresa/estabelecimento/centro de
+ * custo pela ÚLTIMA lotação, cargo pela ÚLTIMA posição. NULL onde não houver. É
+ * o lado "pessoa" do gate de elegibilidade — casa contra o alvo da pesquisa
+ * (recorteCasaAlvo). A régua é a mesma do FiltroEstrutura (última linha, não
+ * `fim_vigencia IS NULL`), então não há duas verdades da unidade da pessoa.
+ */
+export async function recorteDoColaborador(colaboradorId: number): Promise<{
+  empresa_id: number | null;
+  estabelecimento_id: number | null;
+  centro_custo_id: number | null;
+  cargo_id: number | null;
+}> {
+  const linhas = await consultar<{
+    empresa_id: string | null;
+    estabelecimento_id: string | null;
+    centro_custo_id: string | null;
+    cargo_id: string | null;
+  }>(
+    `SELECT lot.empresa_id, lot.estabelecimento_id, lot.centro_custo_id,
+            pos.cargo_id
+       FROM (SELECT $1::bigint AS id) base
+       LEFT JOIN LATERAL (
+         SELECT le.empresa_id, le.estabelecimento_id, le.centro_custo_id
+           FROM rh.lotacao le
+          WHERE le.colaborador_id = base.id
+          ORDER BY le.inicio_vigencia DESC, le.id DESC
+          LIMIT 1
+       ) lot ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT cv.cargo_id
+           FROM rh.posicao_colaborador pc
+           JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+          WHERE pc.colaborador_id = base.id
+          ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+          LIMIT 1
+       ) pos ON TRUE`,
+    [colaboradorId]
+  );
+  const linha = linhas[0];
+  const numero = (valor: string | null | undefined): number | null =>
+    valor === null || valor === undefined ? null : Number(valor);
+  return {
+    empresa_id: numero(linha?.empresa_id),
+    estabelecimento_id: numero(linha?.estabelecimento_id),
+    centro_custo_id: numero(linha?.centro_custo_id),
+    cargo_id: numero(linha?.cargo_id),
+  };
+}
+
 /**
  * "Já respondi?" é pergunta da PESSOA, não do contrato.
  *
@@ -415,6 +542,14 @@ export async function jaParticipou(
  *
  * `respondida` sai pela PESSOA (ver `jaParticipou`): o vínculo aberto por
  * transferência entre CNPJs não devolve o direito de responder de novo.
+ *
+ * GATE DE ELEGIBILIDADE (0079): a lista só traz a pesquisa quando o recorte
+ * VIGENTE da pessoa casa o público-alvo. Para cada dimensão vale
+ * `p.<dim>_id IS NULL OR p.<dim>_id = <recorte da pessoa>` — alvo NULL casa todo
+ * mundo (empresa toda, regressão), preenchido exige igualdade. O recorte da
+ * pessoa vem das LATERAIS pela última lotação/posição, os mesmos $1 já usados
+ * para `respondida`, sem novo parâmetro. Sem colaborador ($1 NULL) o recorte é
+ * todo NULL: só as pesquisas de empresa toda aparecem, e nenhuma mirada.
  */
 export async function listarAbertasParaColaborador(
   colaboradorId: number | null
@@ -455,8 +590,28 @@ export async function listarAbertasParaColaborador(
               )
             END AS respondida
        FROM rh_clima.pesquisa p
+       LEFT JOIN LATERAL (
+         SELECT le.empresa_id, le.estabelecimento_id, le.centro_custo_id
+           FROM rh.lotacao le
+          WHERE le.colaborador_id = $1::bigint
+          ORDER BY le.inicio_vigencia DESC, le.id DESC
+          LIMIT 1
+       ) lot ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT cv.cargo_id
+           FROM rh.posicao_colaborador pc
+           JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+          WHERE pc.colaborador_id = $1::bigint
+          ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+          LIMIT 1
+       ) pos ON TRUE
       WHERE p.status = 'aberta'
         AND rh.hoje() BETWEEN p.inicio AND p.fim
+        AND (p.empresa_id IS NULL OR p.empresa_id = lot.empresa_id)
+        AND (p.estabelecimento_id IS NULL
+             OR p.estabelecimento_id = lot.estabelecimento_id)
+        AND (p.centro_custo_id IS NULL OR p.centro_custo_id = lot.centro_custo_id)
+        AND (p.cargo_id IS NULL OR p.cargo_id = pos.cargo_id)
       ORDER BY p.fim, p.id`,
     [colaboradorId]
   );
