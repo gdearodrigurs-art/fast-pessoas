@@ -53,7 +53,8 @@ import {
   buscarCandidatoBasico,
   buscarCargoVersaoVigente,
   buscarEstabelecimentoVersaoAtiva,
-  buscarEtapasAtivas,
+  buscarEtapasDoModelo,
+  buscarModeloPadrao,
   buscarFaixaVigente,
   buscarOfertaParaMutacao,
   buscarRequisicaoParaMutacao,
@@ -358,12 +359,23 @@ export async function criarVaga(
           `O cargo ${requisicao.cargo_nome} não tem faixa salarial vigente — cadastre a faixa antes de abrir a vaga.`
         );
       }
+      // A vaga congela o modelo de processo PADRÃO na abertura (0077); a
+      // candidatura vai andar pelas etapas deste modelo. (O seletor de outros
+      // modelos vem no Estágio 3.)
+      const modeloVersaoId = await buscarModeloPadrao(cliente);
+      if (modeloVersaoId === null) {
+        throw new ErroHttp(
+          409,
+          "Não há modelo de processo seletivo padrão ativo — configure o modelo antes de abrir vagas."
+        );
+      }
       const id = await inserirVaga(cliente, {
         requisicao_id: dados.requisicao_id,
         titulo: dados.titulo,
         faixa_min: faixa.faixa_min,
         faixa_max: faixa.faixa_max,
         prazo_alvo: dados.prazo_alvo,
+        modelo_versao_id: modeloVersaoId,
       });
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
@@ -532,23 +544,23 @@ export async function criarCandidatura(
           "candidato_id"
         );
       }
-      const etapas = await buscarEtapasAtivas(cliente);
+      const etapas = await buscarEtapasDoModelo(cliente, vaga.modelo_versao_id);
       if (etapas.length === 0) {
         throw new ErroHttp(
           409,
-          "Não há etapas de seleção ativas — ative o template antes."
+          "O modelo de processo desta vaga não tem etapas — configure o modelo antes."
         );
       }
       const etapaInicial = etapas[0];
       const id = await inserirCandidatura(cliente, {
         vaga_id: dados.vaga_id,
         candidato_id: dados.candidato_id,
-        etapa_atual_id: etapaInicial.id,
+        etapa_atual_id: etapaInicial.etapa_selecao_versao_id,
       });
       await inserirMovimentacao(cliente, {
         candidatura_id: id,
         de_etapa_id: null,
-        para_etapa_id: etapaInicial.id,
+        para_etapa_id: etapaInicial.etapa_selecao_versao_id,
         novo_status: null,
         motivo_catalogo: null,
         observacao: null,
@@ -606,10 +618,17 @@ export async function movimentarCandidatura(
     }
 
     if (dados.acao === "avancar") {
-      const etapas = await buscarEtapasAtivas(cliente);
-      const proxima = etapas.find(
-        (etapa) => etapa.ordem > candidatura.etapa_ordem
+      // Anda pelas etapas DO MODELO congelado na vaga (0077), não pela lista
+      // global viva: a próxima é a seguinte à etapa atual na ordem do modelo.
+      const etapas = await buscarEtapasDoModelo(
+        cliente,
+        candidatura.modelo_versao_id
       );
+      const indiceAtual = etapas.findIndex(
+        (etapa) => etapa.etapa_selecao_versao_id === candidatura.etapa_atual_id
+      );
+      const proxima =
+        indiceAtual >= 0 ? etapas[indiceAtual + 1] : undefined;
       if (!proxima) {
         throw new ErroHttp(
           409,
@@ -617,12 +636,12 @@ export async function movimentarCandidatura(
         );
       }
       await atualizarCandidatura(cliente, candidaturaId, {
-        etapa_atual_id: proxima.id,
+        etapa_atual_id: proxima.etapa_selecao_versao_id,
       });
       await inserirMovimentacao(cliente, {
         candidatura_id: candidaturaId,
         de_etapa_id: candidatura.etapa_atual_id,
-        para_etapa_id: proxima.id,
+        para_etapa_id: proxima.etapa_selecao_versao_id,
         novo_status: null,
         motivo_catalogo: null,
         observacao: dados.observacao ?? null,

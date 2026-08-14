@@ -171,6 +171,53 @@ export async function buscarEtapasAtivas(
   return rows.map((linha) => ({ ...linha, id: Number(linha.id) }));
 }
 
+export interface EtapaDoModelo {
+  /** id da versão de etapa (rh.etapa_selecao_versao) que a candidatura referencia. */
+  etapa_selecao_versao_id: number;
+  tipo: string;
+  nome: string;
+  /** ordem DENTRO do modelo (não a ordem global do catálogo). */
+  ordem: number;
+}
+
+/**
+ * As etapas de um modelo de processo (0076), na ordem do modelo. É por aqui que
+ * a candidatura anda desde o Estágio 2 — não mais pela lista global viva.
+ */
+export async function buscarEtapasDoModelo(
+  cliente: PoolClient,
+  modeloVersaoId: number
+): Promise<EtapaDoModelo[]> {
+  const { rows } = await cliente.query<{
+    etapa_selecao_versao_id: string;
+    tipo: string;
+    nome: string;
+    ordem: number;
+  }>(
+    `SELECT me.etapa_selecao_versao_id, e.tipo, e.nome, me.ordem
+       FROM rh.modelo_selecao_etapa me
+       JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id
+      WHERE me.modelo_versao_id = $1
+      ORDER BY me.ordem`,
+    [modeloVersaoId]
+  );
+  return rows.map((linha) => ({
+    ...linha,
+    etapa_selecao_versao_id: Number(linha.etapa_selecao_versao_id),
+  }));
+}
+
+/** O modelo de processo PADRÃO (o GERAL) ativo — default da vaga nova. */
+export async function buscarModeloPadrao(
+  cliente: PoolClient
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `SELECT id FROM rh.modelo_selecao_versao
+      WHERE padrao AND status = 'ativa' LIMIT 1`
+  );
+  return rows.length ? Number(rows[0].id) : null;
+}
+
 // ------------------------------------------------------------------ requisição de vaga
 
 export interface RequisicaoResumo {
@@ -417,11 +464,12 @@ export async function inserirVaga(
     faixa_min: number;
     faixa_max: number;
     prazo_alvo: string;
+    modelo_versao_id: number;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
-    `INSERT INTO rh.vaga (requisicao_id, titulo, faixa_min, faixa_max, prazo_alvo)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO rh.vaga (requisicao_id, titulo, faixa_min, faixa_max, prazo_alvo, modelo_versao_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
     [
       dados.requisicao_id,
@@ -429,6 +477,7 @@ export async function inserirVaga(
       dados.faixa_min,
       dados.faixa_max,
       dados.prazo_alvo,
+      dados.modelo_versao_id,
     ]
   );
   return Number(rows[0].id);
@@ -440,6 +489,7 @@ export interface VagaParaMutacao {
   status: StatusVaga;
   faixa_min: number;
   faixa_max: number;
+  modelo_versao_id: number;
 }
 
 export async function buscarVagaParaMutacao(
@@ -452,9 +502,11 @@ export async function buscarVagaParaMutacao(
     status: StatusVaga;
     faixa_min: string;
     faixa_max: string;
+    modelo_versao_id: string;
   }>(
     `SELECT id, titulo, status,
-            faixa_min::text AS faixa_min, faixa_max::text AS faixa_max
+            faixa_min::text AS faixa_min, faixa_max::text AS faixa_max,
+            modelo_versao_id
        FROM rh.vaga
       WHERE id = $1
       FOR UPDATE`,
@@ -467,6 +519,7 @@ export async function buscarVagaParaMutacao(
     status: rows[0].status,
     faixa_min: Number(rows[0].faixa_min),
     faixa_max: Number(rows[0].faixa_max),
+    modelo_versao_id: Number(rows[0].modelo_versao_id),
   };
 }
 
@@ -657,6 +710,8 @@ export interface CandidaturaParaMutacao {
   etapa_nome: string;
   etapa_ordem: number;
   etapa_tipo: string;
+  /** Modelo de processo congelado na vaga — por onde a candidatura anda (0077). */
+  modelo_versao_id: number;
 }
 
 export async function buscarCandidaturaParaMutacao(
@@ -679,10 +734,12 @@ export async function buscarCandidaturaParaMutacao(
     etapa_nome: string;
     etapa_ordem: number;
     etapa_tipo: string;
+    modelo_versao_id: string;
   }>(
     `SELECT ca.id, ca.vaga_id, ca.status, ca.etapa_atual_id, ca.candidato_id,
             v.titulo AS vaga_titulo, v.status AS vaga_status,
             v.faixa_min::text AS faixa_min, v.faixa_max::text AS faixa_max,
+            v.modelo_versao_id,
             r.solicitante_usuario_id,
             c.nome AS candidato_nome, c.email AS candidato_email,
             e.nome AS etapa_nome, e.ordem AS etapa_ordem, e.tipo AS etapa_tipo
@@ -705,6 +762,7 @@ export async function buscarCandidaturaParaMutacao(
     solicitante_usuario_id: Number(rows[0].solicitante_usuario_id),
     candidato_id: Number(rows[0].candidato_id),
     etapa_atual_id: Number(rows[0].etapa_atual_id),
+    modelo_versao_id: Number(rows[0].modelo_versao_id),
   };
 }
 
