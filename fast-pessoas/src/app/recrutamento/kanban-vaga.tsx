@@ -150,7 +150,11 @@ export function KanbanVaga({
       !kanban.candidaturas.some((c) => c.candidato_id === candidato.id)
   );
 
-  function renderCartao(candidatura: CandidaturaCartao, etapaTipo: string | null) {
+  function renderCartao(
+    candidatura: CandidaturaCartao,
+    etapaTipo: string | null,
+    ehUltima: boolean
+  ) {
     return (
       <CartaoCandidatura
         key={candidatura.id}
@@ -158,7 +162,7 @@ export function KanbanVaga({
         etapaTipo={etapaTipo}
         pode={pode}
         vagaAberta={vagaAberta}
-        ehUltima={candidatura.etapa_ordem >= ultimaOrdem}
+        ehUltima={ehUltima}
         avancando={avancando === candidatura.id}
         aoAvancar={() => avancar(candidatura)}
         aoReprovar={() => setReprovacao({ candidatura })}
@@ -226,7 +230,7 @@ export function KanbanVaga({
                 <p className={estilos.vazioColuna}>Ninguém nesta etapa.</p>
               ) : (
                 daColuna.map((candidatura) =>
-                  renderCartao(candidatura, etapa.tipo)
+                  renderCartao(candidatura, etapa.tipo, etapa.ordem >= ultimaOrdem)
                 )
               )}
             </div>
@@ -239,7 +243,7 @@ export function KanbanVaga({
               <span>{foraDasEtapas.length}</span>
             </h3>
             {foraDasEtapas.map((candidatura) =>
-              renderCartao(candidatura, null)
+              renderCartao(candidatura, null, false)
             )}
           </div>
         )}

@@ -78,6 +78,7 @@ import {
   listarCargosDisponiveis,
   listarEstabelecimentosAtivos,
   listarEtapasAtivas,
+  listarEtapasDoModelo,
   listarPareceres,
   listarRequisicoes,
   listarVagas,
@@ -430,7 +431,9 @@ export async function obterKanban(
     throw new ErroHttp(404, "Vaga não encontrada.");
   }
   const [etapas, candidaturas] = await Promise.all([
-    listarEtapasAtivas(),
+    // Colunas do kanban pelas etapas DO MODELO congelado da vaga (0077) — o par
+    // de leitura do pipeline; a escrita (criar/mover candidatura) já anda por aqui.
+    listarEtapasDoModelo(vaga.modelo_versao_id),
     listarCandidaturasDaVaga(vagaId),
   ]);
   const veSensivel = pode.ver || pode.gerir;

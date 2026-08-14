@@ -207,6 +207,26 @@ export async function buscarEtapasDoModelo(
   }));
 }
 
+/**
+ * As etapas de um modelo, na forma que o kanban consome (id = a versão de etapa
+ * que a candidatura referencia; ordem = a ordem DENTRO do modelo). Versão de
+ * POOL (fora de transação) do `buscarEtapasDoModelo` — é o par de LEITURA do
+ * pipeline: a escrita anda pelo modelo (servico), o desenho das colunas também.
+ */
+export async function listarEtapasDoModelo(
+  modeloVersaoId: number
+): Promise<EtapaAtiva[]> {
+  const linhas = await consultar<LinhaEtapa>(
+    `SELECT me.etapa_selecao_versao_id AS id, e.tipo, e.nome, me.ordem
+       FROM rh.modelo_selecao_etapa me
+       JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id
+      WHERE me.modelo_versao_id = $1
+      ORDER BY me.ordem`,
+    [modeloVersaoId]
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
 /** O modelo de processo PADRÃO (o GERAL) ativo — default da vaga nova. */
 export async function buscarModeloPadrao(
   cliente: PoolClient
@@ -388,6 +408,9 @@ export interface VagaResumo {
   status: StatusVaga;
   candidaturas_ativas: number;
   criado_em: string;
+  /** Modelo de processo CONGELADO na abertura (0077). O kanban desenha as
+   *  colunas pelas etapas deste modelo, não pela lista global viva. */
+  modelo_versao_id: number;
 }
 
 interface LinhaVaga extends Record<string, unknown> {
@@ -402,12 +425,14 @@ interface LinhaVaga extends Record<string, unknown> {
   prazo_alvo: string;
   dias_ate_prazo: number;
   status: StatusVaga;
+  modelo_versao_id: string;
   candidaturas_ativas: number;
   criado_em: string;
 }
 
 const SELECT_VAGA = `
   SELECT v.id, v.requisicao_id, v.titulo, v.status, v.criado_em,
+         v.modelo_versao_id,
          v.faixa_min::text AS faixa_min, v.faixa_max::text AS faixa_max,
          v.prazo_alvo::text AS prazo_alvo,
          (v.prazo_alvo - ${HOJE_SP})::int AS dias_ate_prazo,
@@ -428,6 +453,7 @@ function paraVaga(linha: LinhaVaga): VagaResumo {
     solicitante_usuario_id: Number(linha.solicitante_usuario_id),
     faixa_min: Number(linha.faixa_min),
     faixa_max: Number(linha.faixa_max),
+    modelo_versao_id: Number(linha.modelo_versao_id),
   };
 }
 
