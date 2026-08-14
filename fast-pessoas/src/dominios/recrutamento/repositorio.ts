@@ -296,6 +296,18 @@ export async function buscarModeloAtivo(
   return rows.length ? Number(rows[0].id) : null;
 }
 
+/** O nome de um modelo — para o rastro de auditoria da vaga (eixo 8). */
+export async function buscarNomeModelo(
+  cliente: PoolClient,
+  id: number
+): Promise<string | null> {
+  const { rows } = await cliente.query<{ nome: string }>(
+    `SELECT nome FROM rh.modelo_selecao_versao WHERE id = $1`,
+    [id]
+  );
+  return rows.length ? rows[0].nome : null;
+}
+
 /** Cria um modelo alternativo já ATIVO (não-padrão) e devolve o id. */
 export async function inserirModelo(
   cliente: PoolClient,

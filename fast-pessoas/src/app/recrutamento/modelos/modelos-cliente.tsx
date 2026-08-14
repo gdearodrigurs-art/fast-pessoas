@@ -45,9 +45,13 @@ export function ModelosCliente() {
   const disponiveis = (dados?.catalogo ?? []).filter(
     (e) => !escolhidos.has(e.id)
   );
-  const temOferta = sequencia.some((e) => e.tipo === "oferta");
-  const podeSalvar =
-    nome.trim() !== "" && sequencia.length > 0 && temOferta && !salvando;
+  // A oferta fecha o modelo: o kanban trata a oferta como o fim do processo, e
+  // uma etapa depois dela deixaria a candidatura num beco. Uma vez na sequência,
+  // ela é a última e nada mais entra; para inserir antes, remova a oferta.
+  const ofertaNaSequencia = sequencia.some((e) => e.tipo === "oferta");
+  const ofertaEhUltima =
+    sequencia.length > 0 && sequencia[sequencia.length - 1].tipo === "oferta";
+  const podeSalvar = nome.trim() !== "" && ofertaEhUltima && !salvando;
 
   async function salvar() {
     if (!podeSalvar) return;
@@ -163,31 +167,40 @@ export function ModelosCliente() {
                 )}
               </div>
 
-              {disponiveis.length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <div style={rotulo}>Adicionar etapa</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-                    {disponiveis.map((e) => (
-                      <button
-                        key={e.id}
-                        style={chip}
-                        type="button"
-                        onClick={() => setSequencia([...sequencia, e])}
-                      >
-                        + {e.nome}
-                        {e.tipo === "oferta" && (
-                          <span style={tagOfertaChip}>oferta</span>
-                        )}
-                      </button>
-                    ))}
+              {ofertaNaSequencia ? (
+                <p style={{ color: "#6b6763", fontSize: 13, marginTop: 12 }}>
+                  A oferta fecha o modelo — nada entra depois dela. Para inserir
+                  uma etapa antes, remova a oferta e adicione-a de novo por último.
+                </p>
+              ) : (
+                disponiveis.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={rotulo}>Adicionar etapa</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                      {disponiveis.map((e) => (
+                        <button
+                          key={e.id}
+                          style={chip}
+                          type="button"
+                          onClick={() => setSequencia([...sequencia, e])}
+                        >
+                          + {e.nome}
+                          {e.tipo === "oferta" && (
+                            <span style={tagOfertaChip}>oferta — fecha o modelo</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )
               )}
 
-              {sequencia.length > 0 && !temOferta && (
+              {sequencia.length > 0 && !ofertaEhUltima && (
                 <p style={{ color: "#8a6d00", fontSize: 13, marginTop: 12 }}>
-                  Falta uma etapa de <strong>oferta</strong> — é onde a proposta é
-                  registrada. Adicione uma para poder salvar.
+                  A etapa de <strong>oferta</strong> precisa ser a{" "}
+                  <strong>última</strong> do modelo — é onde a proposta é
+                  registrada e o processo termina. Adicione-a por último para
+                  poder salvar.
                 </p>
               )}
 

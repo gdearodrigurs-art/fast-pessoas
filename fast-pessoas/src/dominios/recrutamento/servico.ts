@@ -57,6 +57,7 @@ import {
   buscarEtapasDoModelo,
   buscarModeloAtivo,
   buscarModeloPadrao,
+  buscarNomeModelo,
   buscarFaixaVigente,
   buscarOfertaParaMutacao,
   buscarRequisicaoParaMutacao,
@@ -397,6 +398,11 @@ export async function criarVaga(
         prazo_alvo: dados.prazo_alvo,
         modelo_versao_id: modeloVersaoId,
       });
+      // Rastro (eixo 8): o modelo congelado muda o pipeline inteiro da vaga —
+      // a criação tem que registrar por qual processo a seleção vai correr.
+      const modeloNome =
+        (await buscarNomeModelo(cliente, modeloVersaoId)) ??
+        `#${modeloVersaoId}`;
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
@@ -413,6 +419,7 @@ export async function criarVaga(
             de: null,
             para: `${formatarSalario(faixa.faixa_min)} a ${formatarSalario(faixa.faixa_max)}`,
           },
+          "Modelo de processo": { de: null, para: modeloNome },
           "Prazo-alvo": { de: null, para: formatarData(dados.prazo_alvo) },
           Status: { de: null, para: ROTULOS_STATUS_VAGA.aberta },
         },
@@ -497,10 +504,16 @@ export async function criarModelo(
     vistos.add(id);
     escolhidas.push(etapa);
   }
-  if (!escolhidas.some((etapa) => etapa.tipo === "oferta")) {
+  // A oferta tem que ser a ÚLTIMA etapa: o kanban trata a oferta como o fim do
+  // processo (esconde "Avançar" na última etapa e só oferece "Registrar oferta"
+  // numa etapa tipo oferta). Uma etapa DEPOIS da oferta deixaria a candidatura
+  // num beco: sem avançar, sem ofertar e sem como recriá-la. Como o catálogo tem
+  // no máximo uma etapa de oferta ativa, exigir que a última seja de oferta já
+  // garante presença + terminalidade.
+  if (escolhidas[escolhidas.length - 1].tipo !== "oferta") {
     throw new ErroHttpCampo(
       409,
-      "O modelo precisa conter uma etapa de oferta — é onde a proposta é registrada.",
+      "A etapa de oferta tem que ser a última do modelo — é onde a proposta é registrada e o processo termina; nada pode vir depois dela.",
       "etapa_ids"
     );
   }
