@@ -13,6 +13,8 @@ export interface PermissoesFicha {
   podeAdminGestor: boolean;
   podeAdminLotacao: boolean;
   podeAdminCargo: boolean;
+  podeVerDisciplinar: boolean;
+  podeRegistrarDisciplinar: boolean;
 }
 
 export default async function PaginaFichaColaborador({
@@ -41,6 +43,8 @@ export default async function PaginaFichaColaborador({
     pode_admin_gestor: boolean;
     pode_admin_lotacao: boolean;
     pode_admin_cargo: boolean;
+    pode_ver_disciplinar: boolean;
+    pode_registrar_disciplinar: boolean;
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.colaborador.editar')      AS pode_editar,
             sistema.tem_permissao($1, 'rh.posicao.ver')             AS pode_ver_salario,
@@ -50,7 +54,9 @@ export default async function PaginaFichaColaborador({
             sistema.tem_permissao($1, 'rh.feedback.registrar')      AS pode_registrar_feedback,
             sistema.tem_permissao($1, 'rh.gestor.administrar')      AS pode_admin_gestor,
             sistema.tem_permissao($1, 'rh.estabelecimento.administrar') AS pode_admin_lotacao,
-            sistema.tem_permissao($1, 'rh.cargo.administrar')       AS pode_admin_cargo`,
+            sistema.tem_permissao($1, 'rh.cargo.administrar')       AS pode_admin_cargo,
+            sistema.tem_permissao($1, 'rh.disciplinar.ver')         AS pode_ver_disciplinar,
+            sistema.tem_permissao($1, 'rh.disciplinar.registrar')   AS pode_registrar_disciplinar`,
     [sessao.usuario_id]
   );
   const linha = linhas[0];
@@ -64,6 +70,8 @@ export default async function PaginaFichaColaborador({
     podeAdminGestor: Boolean(linha?.pode_admin_gestor),
     podeAdminLotacao: Boolean(linha?.pode_admin_lotacao),
     podeAdminCargo: Boolean(linha?.pode_admin_cargo),
+    podeVerDisciplinar: Boolean(linha?.pode_ver_disciplinar),
+    podeRegistrarDisciplinar: Boolean(linha?.pode_registrar_disciplinar),
   };
   return <FichaColaborador colaboradorId={idNumero} permissoes={permissoes} />;
 }

@@ -106,6 +106,367 @@ function BlocoPontoFicha({ colaboradorId }: { colaboradorId: number }) {
   );
 }
 
+// ------------------------------------------------------------------ bloco disciplinar (restrito — eixo 4/8)
+// Conteúdo SEMPRE restrito (dp/diretoria). O cartão busca o próprio dado
+// (`/api/disciplinar?colaborador_id=`, chave `rh.disciplinar.ver` + trilha de
+// leitura no serviço). 403 => o cartão simplesmente NÃO aparece — ausência, não
+// máscara. O escalonamento é MANUAL: mostramos o histórico por tipo para o DP
+// decidir; o sistema não escalona sozinho.
+
+interface MedidaFicha {
+  id: number;
+  tipo_chave: string;
+  tipo_nome: string;
+  com_periodo: boolean;
+  descricao: string;
+  impacto: string | null;
+  acao_combinada: string | null;
+  aplicada_em: string;
+  inicio: string | null;
+  fim: string | null;
+  registrado_por_nome: string;
+  registrado_em: string;
+}
+
+interface ContagemTipoFicha {
+  tipo_chave: string;
+  nome: string;
+  total: number;
+}
+
+interface TipoFicha {
+  chave: string;
+  nome: string;
+  com_periodo: boolean;
+}
+
+interface VisaoDisciplinar {
+  medidas: MedidaFicha[];
+  historico: ContagemTipoFicha[];
+  tipos: TipoFicha[];
+}
+
+const MEDIDA_EM_BRANCO = {
+  tipo_chave: "",
+  descricao: "",
+  impacto: "",
+  acao_combinada: "",
+  aplicada_em: "",
+  inicio: "",
+  fim: "",
+};
+
+function BlocoDisciplinarFicha({
+  colaboradorId,
+  podeRegistrar,
+}: {
+  colaboradorId: number;
+  podeRegistrar: boolean;
+}) {
+  const [dados, setDados] = useState<VisaoDisciplinar | null>(null);
+  const [visivel, setVisivel] = useState(true);
+  const [formAberto, setFormAberto] = useState(false);
+  const [nova, setNova] = useState({ ...MEDIDA_EM_BRANCO });
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  // Recarrega após registrar. Fora de effect (é ação de usuário) — pode
+  // setState direto.
+  async function recarregar() {
+    try {
+      const resposta = await fetch(
+        `/api/disciplinar?colaborador_id=${colaboradorId}`,
+        { cache: "no-store" }
+      );
+      if (!resposta.ok) {
+        setVisivel(false);
+        return;
+      }
+      setDados((await resposta.json()) as VisaoDisciplinar);
+    } catch {
+      setVisivel(false);
+    }
+  }
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/disciplinar?colaborador_id=${colaboradorId}`,
+          { cache: "no-store" }
+        );
+        if (!ativo) return;
+        if (!resposta.ok) {
+          // 403 e afins: quem não tem a chave não vê nem o cartão.
+          setVisivel(false);
+          return;
+        }
+        setDados((await resposta.json()) as VisaoDisciplinar);
+      } catch {
+        if (ativo) setVisivel(false);
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  const tipoSelecionado = dados?.tipos.find(
+    (tipo) => tipo.chave === nova.tipo_chave
+  );
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(
+        `/api/disciplinar?colaborador_id=${colaboradorId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tipo_chave: nova.tipo_chave,
+            descricao: nova.descricao,
+            aplicada_em: nova.aplicada_em,
+            impacto: nova.impacto.trim() || undefined,
+            acao_combinada: nova.acao_combinada.trim() || undefined,
+            inicio: tipoSelecionado?.com_periodo
+              ? nova.inicio || undefined
+              : undefined,
+            fim: tipoSelecionado?.com_periodo ? nova.fim || undefined : undefined,
+          }),
+        }
+      );
+      if (!resposta.ok) {
+        setErro(await lerErro(resposta));
+        return;
+      }
+      setNova({ ...MEDIDA_EM_BRANCO });
+      setFormAberto(false);
+      await recarregar();
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  if (!visivel) return null;
+
+  return (
+    <div className={estilos.cartao} style={{ marginTop: 16 }}>
+      <div className={estilos.itemTopo} style={{ marginBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>Disciplinar</h2>
+        <span className={estilos.tagRestrito}>RESTRITA · leitura logada</span>
+      </div>
+
+      {dados === null ? (
+        <p className={estilos.vazio}>Carregando…</p>
+      ) : (
+        <>
+          {dados.historico.length > 0 && (
+            <p className={estilos.itemExtra} style={{ marginTop: 0 }}>
+              Histórico por tipo:{" "}
+              {dados.historico
+                .map((linha) => `${linha.nome} (${linha.total})`)
+                .join(" · ")}
+            </p>
+          )}
+
+          {podeRegistrar && !formAberto && (
+            <p style={{ margin: "10px 0" }}>
+              <button
+                className={estilos.botao}
+                type="button"
+                onClick={() => {
+                  setErro(null);
+                  setFormAberto(true);
+                }}
+              >
+                + Registrar medida
+              </button>
+            </p>
+          )}
+
+          {podeRegistrar && formAberto && (
+            <form className={estilos.formulario} onSubmit={enviar}>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdTipo">
+                  Tipo
+                </label>
+                <select
+                  className={estilos.campo}
+                  id="mdTipo"
+                  required
+                  value={nova.tipo_chave}
+                  onChange={(e) =>
+                    setNova((atual) => ({ ...atual, tipo_chave: e.target.value }))
+                  }
+                >
+                  <option value="">selecione…</option>
+                  {dados.tipos.map((tipo) => (
+                    <option key={tipo.chave} value={tipo.chave}>
+                      {tipo.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdData">
+                  Data do fato
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="mdData"
+                  type="date"
+                  required
+                  max={HOJE_NA_OPERACAO}
+                  value={nova.aplicada_em}
+                  onChange={(e) =>
+                    setNova((atual) => ({
+                      ...atual,
+                      aplicada_em: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {tipoSelecionado?.com_periodo && (
+                <>
+                  <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="mdInicio">
+                      Início do período
+                    </label>
+                    <input
+                      className={estilos.campo}
+                      id="mdInicio"
+                      type="date"
+                      required
+                      value={nova.inicio}
+                      onChange={(e) =>
+                        setNova((atual) => ({ ...atual, inicio: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="mdFim">
+                      Fim do período
+                    </label>
+                    <input
+                      className={estilos.campo}
+                      id="mdFim"
+                      type="date"
+                      required
+                      value={nova.fim}
+                      onChange={(e) =>
+                        setNova((atual) => ({ ...atual, fim: e.target.value }))
+                      }
+                    />
+                  </div>
+                </>
+              )}
+              <div className={estilos.campoGrupoLargo}>
+                <label className={estilos.rotulo} htmlFor="mdDescricao">
+                  Descrição (fato, motivo)
+                </label>
+                <textarea
+                  className={estilos.campo}
+                  id="mdDescricao"
+                  rows={3}
+                  required
+                  maxLength={4000}
+                  value={nova.descricao}
+                  onChange={(e) =>
+                    setNova((atual) => ({ ...atual, descricao: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdImpacto">
+                  Impacto (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="mdImpacto"
+                  type="text"
+                  maxLength={2000}
+                  value={nova.impacto}
+                  onChange={(e) =>
+                    setNova((atual) => ({ ...atual, impacto: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdAcao">
+                  Ação combinada (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="mdAcao"
+                  type="text"
+                  maxLength={2000}
+                  value={nova.acao_combinada}
+                  onChange={(e) =>
+                    setNova((atual) => ({
+                      ...atual,
+                      acao_combinada: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {erro && <p className={estilos.erro}>{erro}</p>}
+              <button className={estilos.botao} type="submit" disabled={salvando}>
+                {salvando ? "Registrando…" : "Registrar"}
+              </button>
+              <button
+                className={estilos.botaoLinha}
+                type="button"
+                onClick={() => setFormAberto(false)}
+              >
+                Cancelar
+              </button>
+            </form>
+          )}
+
+          {dados.medidas.length === 0 ? (
+            <p className={estilos.vazio}>Nenhuma medida disciplinar registrada.</p>
+          ) : (
+            dados.medidas.map((medida) => (
+              <div key={medida.id} className={estilos.itemRegistro}>
+                <div className={estilos.itemTopo}>
+                  <span className={`${estilos.clf} ${estilos.clfAlerta}`}>
+                    {medida.tipo_nome}
+                  </span>
+                  <span>{formatarData(medida.aplicada_em)}</span>
+                  <span>registrado por {medida.registrado_por_nome}</span>
+                </div>
+                <div className={estilos.itemTexto}>{medida.descricao}</div>
+                {medida.inicio && medida.fim && (
+                  <div className={estilos.itemExtra}>
+                    Período: {formatarData(medida.inicio)} a{" "}
+                    {formatarData(medida.fim)}
+                  </div>
+                )}
+                {medida.impacto && (
+                  <div className={estilos.itemExtra}>
+                    Impacto: {medida.impacto}
+                  </div>
+                )}
+                {medida.acao_combinada && (
+                  <div className={estilos.itemExtra}>
+                    Ação combinada: {medida.acao_combinada}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** RCF vigente do cargo da posição atual — documento de gestão, não sensível. */
 interface Rcf {
   cargo_id: number;
@@ -346,6 +707,10 @@ const TIPOS_EVENTO: Record<string, { rotulo: string; simbolo: string; cor: strin
   reajuste: { rotulo: "Reajuste", simbolo: "$", cor: "#b58500" },
   feedback: { rotulo: "Feedback", simbolo: "✎", cor: "#1565c0" },
   ocorrencia: { rotulo: "Ocorrência", simbolo: "⚠", cor: "#c96f00" },
+  // Eco NEUTRO da medida disciplinar: chega só a quem tem a chave restrita (o
+  // servidor filtra a linha por payload.restrita); o motivo nunca entra no
+  // resumo — o detalhe fica no cartão Disciplinar, com leitura logada.
+  disciplinar: { rotulo: "Medida disciplinar", simbolo: "§", cor: "#8e24aa" },
   mudanca_gestor: { rotulo: "Mudança de gestor", simbolo: "⇄", cor: "#00838f" },
   transferencia: { rotulo: "Transferência", simbolo: "➜", cor: "#00838f" },
   transferencia_continuidade: {
@@ -1677,6 +2042,14 @@ export function FichaColaborador({
                   )}
                 </div>
               ))
+            )}
+            {/* Disciplinar: cartão à parte, restrito à chave rh.disciplinar.ver
+                (o gestor não vê). Self-fetch + 403 esconde o cartão. */}
+            {permissoes.podeVerDisciplinar && (
+              <BlocoDisciplinarFicha
+                colaboradorId={colaboradorId}
+                podeRegistrar={permissoes.podeRegistrarDisciplinar}
+              />
             )}
           </>
         )}
