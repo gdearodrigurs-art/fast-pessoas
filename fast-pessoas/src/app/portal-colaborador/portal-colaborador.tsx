@@ -589,7 +589,15 @@ function CartaoDependentes({
                 className={estilos.ligacao}
                 type="button"
                 disabled={enviando}
-                onClick={() => remover(dependente.id)}
+                onClick={() => {
+                  // Mesma confirmação nomeada do painel do DP: o DELETE
+                  // recalcula a folha em silêncio, não pode disparar sem aviso.
+                  if (
+                    window.confirm(`Remover o dependente ${dependente.nome}?`)
+                  ) {
+                    void remover(dependente.id);
+                  }
+                }}
               >
                 remover
               </button>

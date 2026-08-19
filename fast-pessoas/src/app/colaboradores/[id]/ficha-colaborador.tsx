@@ -169,6 +169,9 @@ function BlocoDisciplinarFicha({
   const [nova, setNova] = useState({ ...MEDIDA_EM_BRANCO });
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  // Erro de CARGA (distinto do `erro` do formulário): 5xx/timeout/rede não
+  // escondem o cartão — só sinalizam para tentar de novo. Só o 403 esconde.
+  const [erroCarregar, setErroCarregar] = useState<string | null>(null);
 
   // Recarrega após registrar. Fora de effect (é ação de usuário) — pode
   // setState direto.
@@ -178,13 +181,20 @@ function BlocoDisciplinarFicha({
         `/api/disciplinar?colaborador_id=${colaboradorId}`,
         { cache: "no-store" }
       );
-      if (!resposta.ok) {
+      if (resposta.status === 403) {
+        // Só o 403 esconde: ausência legítima da chave.
         setVisivel(false);
         return;
       }
+      if (!resposta.ok) {
+        // 5xx/rede: instabilidade, não ausência — mantém o cartão e sinaliza.
+        setErroCarregar("Não foi possível carregar. Tente novamente.");
+        return;
+      }
+      setErroCarregar(null);
       setDados((await resposta.json()) as VisaoDisciplinar);
     } catch {
-      setVisivel(false);
+      setErroCarregar("Falha de conexão. Tente novamente.");
     }
   }
 
@@ -197,14 +207,20 @@ function BlocoDisciplinarFicha({
           { cache: "no-store" }
         );
         if (!ativo) return;
-        if (!resposta.ok) {
-          // 403 e afins: quem não tem a chave não vê nem o cartão.
+        if (resposta.status === 403) {
+          // Só o 403 esconde o cartão: ausência legítima da chave. Qualquer
+          // outro erro (5xx/timeout/rede) é instabilidade, NÃO "ficha limpa" —
+          // esconder aqui seria falso-negativo (o DP lê ausência onde há dado).
           setVisivel(false);
+          return;
+        }
+        if (!resposta.ok) {
+          setErroCarregar("Não foi possível carregar. Tente novamente.");
           return;
         }
         setDados((await resposta.json()) as VisaoDisciplinar);
       } catch {
-        if (ativo) setVisivel(false);
+        if (ativo) setErroCarregar("Falha de conexão. Tente novamente.");
       }
     })();
     return () => {
@@ -262,7 +278,21 @@ function BlocoDisciplinarFicha({
         <span className={estilos.tagRestrito}>RESTRITA · leitura logada</span>
       </div>
 
-      {dados === null ? (
+      {erroCarregar !== null && dados === null ? (
+        <div>
+          <p className={estilos.erro}>{erroCarregar}</p>
+          <button
+            className={estilos.botaoLinha}
+            type="button"
+            onClick={() => {
+              setErroCarregar(null);
+              void recarregar();
+            }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      ) : dados === null ? (
         <p className={estilos.vazio}>Carregando…</p>
       ) : (
         <>

@@ -39,7 +39,7 @@ import {
   existePeriodoParaVencer,
   existeSobreposicao,
   travarProgramacoesDoColaborador,
-  inserirPeriodoSeFaltar,
+  inserirPeriodosEmLote,
   inserirProgramacao,
   LinhaPainelVencimento,
   listarColaboradoresNaoDesligados,
@@ -179,7 +179,9 @@ async function garantirPeriodos(
 ): Promise<void> {
   if (colaboradores.length === 0) return;
   const hoje = hojeSaoPaulo();
-  const existentes = await listarIniciosExistentes();
+  const existentes = await listarIniciosExistentes(
+    colaboradores.map((colaborador) => colaborador.id)
+  );
   const chaves = new Set(
     existentes.map((linha) => `${linha.colaborador_id}|${linha.inicio}`)
   );
@@ -195,21 +197,17 @@ async function garantirPeriodos(
   if (faltantes.length === 0 && !haVencimentos) return;
 
   await comTransacao(sessao.usuario_id, async (cliente) => {
-    for (const periodo of faltantes) {
-      const id = await inserirPeriodoSeFaltar(cliente, {
-        colaborador_id: periodo.colaborador_id,
-        inicio: periodo.inicio,
-        fim: periodo.fim,
-        limite_concessivo: periodo.limite_concessivo,
-        status: periodo.status,
-      });
-      if (id === null) continue; // outra sessão criou no meio — ok
+    // Um só INSERT em lote (ON CONFLICT DO NOTHING preservado): volta apenas as
+    // linhas de fato criadas — as em conflito (outra sessão criou no meio) não
+    // voltam —, então cada retorno é uma geração real a auditar.
+    const criados = await inserirPeriodosEmLote(cliente, faltantes);
+    for (const periodo of criados) {
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
         acao: "geracao",
         tabela: TABELA_PERIODO,
-        registroId: String(id),
+        registroId: String(periodo.id),
         diff: {
           "Período aquisitivo": {
             de: null,
