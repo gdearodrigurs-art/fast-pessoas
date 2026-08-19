@@ -740,3 +740,32 @@ não muda. O *k* continua valendo **por edição, por recorte, por pergunta** �
 
 **Por que subo em vez de decidir:** 14a escolhe o escopo (check-in × pesquisa × os dois), que muda o
 que se constrói; 14b/14c você já esboçou mas não confirmou como decisão fechada.
+
+---
+
+## 15 · Revisão geral 2026-08 — follow-ups não bloqueantes
+
+A revisão geral multiagente (relatório em `docs/revisao-geral-2026-08.md`) achou 10 itens, todos
+corrigidos e provados; a revisão adversarial DAS correções confirmou-as seguras e deixou estes
+follow-ups (nenhum é regressão nem furo novo — são dívida conhecida / pré-existente):
+
+1. **B3 — throttle dedicado de TOTP.** O rate-limit de login (0082) conta falha de SENHA; quem já tem
+   a senha vazada martela o 2º fator (6 dígitos) sem freio — de propósito, para não trancar o dono da
+   senha em TOTP pendente. Fechar com um throttle SEPARADO de TOTP por usuário (sem trancar a conta de
+   senha). Eixo do 2º fator.
+2. **B4 — centralizar o active-check nas rotas keyless de PÁGINA.** A reconferência de `usuario.ativo`
+   ("revogou, acabou") foi aplicada às guardas keyless de API (`exigirSessao`, `exigirSessaoNotificacoes`,
+   o guard do `beneficios`). As dezenas de `page.tsx` server-side escopadas só por sessão ainda não
+   reconferem — o vazamento residual é do PRÓPRIO usuário desativado (dado de terceiro já fica fechado
+   por `tem_permissao`). Vale um ponto único de guarda de página.
+3. **Teste de integração para férias (B6/B8).** A troca laço→lote em `garantirPeriodos`/
+   `inserirPeriodosEmLote`/`listarIniciosExistentes` foi validada por leitura + prova ao vivo, mas não
+   há `tests/ferias.test.ts` cobrindo o caminho. É a mudança que mais mereceria um teste.
+4. **B2 — piso k por subjanela já FECHADO** nesta leva (`media_recente`/`media_anterior` viram null
+   abaixo de k na subjanela). Registrado só para rastro.
+5. **M1 — falha silenciosa no reload PÓS-AÇÃO** (baixa): um `recarregar()` que falhe com 5xx depois de
+   já haver dados mantém os dados antigos sem avisar. Não é regressão (o estado anterior escondia o
+   cartão inteiro); melhoria residual.
+6. **B5 — CSP com `script-src 'unsafe-inline'`.** Sem infra de nonce, o CSP protege menos contra XSS do
+   que um nonce-based protegeria (mitigado: cookie httpOnly, sem CDN externo). Dívida conhecida,
+   documentada no próprio `next.config.ts`.
