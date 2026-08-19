@@ -219,10 +219,13 @@ export async function obterAgregado(): Promise<AgregadoClima> {
   // Lido a cada chamada, e não guardado em módulo: mudar o piso pela tela tem
   // de valer na próxima abertura do painel, sem reiniciar o servidor.
   const minimoRespondentes = await lerMinimoPorRecorte();
+  // O MESMO piso k vai aos quatro agregados: geral, por dia e por pergunta
+  // também suprimem/omitem quando os respondentes ficam abaixo do mínimo — sem
+  // isso, um recorte de baixa adesão publicaria a nota exata de uma pessoa.
   const [geral, porDia, porPergunta, porUnidade] = await Promise.all([
-    agregadoGeral(inicio, fim),
-    agregadoPorDia(inicio, fim),
-    agregadoPorPergunta(inicio, fim),
+    agregadoGeral(inicio, fim, minimoRespondentes),
+    agregadoPorDia(inicio, fim, minimoRespondentes),
+    agregadoPorPergunta(inicio, fim, minimoRespondentes),
     agregadoPorUnidade(inicio, fim, DIAS_RECORTE_RECENTE, minimoRespondentes),
   ]);
   // Agregado: média, contagens e nada mais — NUNCA autor. O corte por unidade

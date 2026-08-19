@@ -141,7 +141,8 @@ export async function inserirResposta(
 
 export async function agregadoPorDia(
   inicio: string,
-  fim: string
+  fim: string,
+  minimoRespondentes: number
 ): Promise<AgregadoDia[]> {
   return consultar<AgregadoDia & Record<string, unknown>>(
     `SELECT data_referencia::text AS data,
@@ -150,14 +151,21 @@ export async function agregadoPorDia(
        FROM rh_clima.checkin_resposta
       WHERE data_referencia BETWEEN $1 AND $2
       GROUP BY data_referencia
+     -- PISO DE ANONIMATO por PESSOA (mesma régua do agregado por unidade):
+     -- num dia de baixa adesão, sem piso, dava para publicar "respostas: 1,
+     -- média: <nota exata da pessoa>". Abaixo do mínimo, o ponto do dia é
+     -- OMITIDO. Por pessoa, não por contrato: transferido de CNPJ na janela
+     -- tem dois colaborador_id e contaria em dobro.
+     HAVING COUNT(DISTINCT pessoa_id) >= $3::int
       ORDER BY data_referencia`,
-    [inicio, fim]
+    [inicio, fim, minimoRespondentes]
   );
 }
 
 export async function agregadoPorPergunta(
   inicio: string,
-  fim: string
+  fim: string,
+  minimoRespondentes: number
 ): Promise<AgregadoPergunta[]> {
   const linhas = await consultar<{
     pergunta_versao_id: string;
@@ -173,8 +181,12 @@ export async function agregadoPorPergunta(
        JOIN rh_clima.pergunta_versao pv ON pv.id = r.pergunta_versao_id
       WHERE r.data_referencia BETWEEN $1 AND $2
       GROUP BY pv.id
+     -- Mesmo PISO DE ANONIMATO por pessoa: pergunta com pouca resposta na
+     -- janela revelaria a nota exata de quem respondeu. Abaixo do mínimo, a
+     -- pergunta é OMITIDA do recorte.
+     HAVING COUNT(DISTINCT r.pessoa_id) >= $3::int
       ORDER BY pv.ordem, pv.id`,
-    [inicio, fim]
+    [inicio, fim, minimoRespondentes]
   );
   return linhas.map((linha) => ({
     ...linha,
@@ -182,9 +194,27 @@ export async function agregadoPorPergunta(
   }));
 }
 
+/**
+ * PISO DE ANONIMATO no agregado geral: abaixo do mínimo de respondentes, a
+ * média revelaria a nota exata de pouca gente (com 1 respondente, média = a
+ * nota da pessoa). Suprime a MÉDIA — as contagens ficam, porque são rede
+ * inteira e não identificam ninguém, e ainda mostram a adesão baixa que
+ * motivou a supressão. Puro de propósito: a suíte prova sem abrir banco.
+ */
+export function aplicarPisoAgregadoGeral(
+  agregado: AgregadoGeral,
+  minimoRespondentes: number
+): AgregadoGeral {
+  if (agregado.respondentes < minimoRespondentes) {
+    return { ...agregado, media: null };
+  }
+  return agregado;
+}
+
 export async function agregadoGeral(
   inicio: string,
-  fim: string
+  fim: string,
+  minimoRespondentes: number
 ): Promise<AgregadoGeral> {
   const linhas = await consultar<AgregadoGeral & Record<string, unknown>>(
     // Conta PESSOA (pessoa_id, NOT NULL desde a 0052), não contrato: quem foi
@@ -197,7 +227,8 @@ export async function agregadoGeral(
       WHERE data_referencia BETWEEN $1 AND $2`,
     [inicio, fim]
   );
-  return linhas[0] ?? { media: null, respostas: 0, respondentes: 0 };
+  const agregado = linhas[0] ?? { media: null, respostas: 0, respondentes: 0 };
+  return aplicarPisoAgregadoGeral(agregado, minimoRespondentes);
 }
 
 /**
@@ -250,12 +281,21 @@ export async function agregadoPorUnidade(
   return consultar<AgregadoUnidade & Record<string, unknown>>(
     `SELECT ev.unidade,
             AVG(r.nota)::float8 AS media,
-            AVG(r.nota) FILTER (
-              WHERE r.data_referencia > $2::date - $3::int
-            )::float8 AS media_recente,
-            AVG(r.nota) FILTER (
-              WHERE r.data_referencia <= $2::date - $3::int
-            )::float8 AS media_anterior,
+            -- Piso k também POR SUBJANELA: a média recente/anterior só sai se a
+            -- própria subjanela tiver >= minimoRespondentes pessoas distintas.
+            -- Sem isto, uma unidade com k no mês mas 1 respondente na última
+            -- semana publicaria a nota exata dessa pessoa (identificação por
+            -- dedução — o achado B2 da revisão das correções).
+            CASE WHEN COUNT(DISTINCT r.pessoa_id) FILTER (
+                        WHERE r.data_referencia > $2::date - $3::int
+                      ) >= $4
+                 THEN AVG(r.nota) FILTER (WHERE r.data_referencia > $2::date - $3::int)
+            END::float8 AS media_recente,
+            CASE WHEN COUNT(DISTINCT r.pessoa_id) FILTER (
+                        WHERE r.data_referencia <= $2::date - $3::int
+                      ) >= $4
+                 THEN AVG(r.nota) FILTER (WHERE r.data_referencia <= $2::date - $3::int)
+            END::float8 AS media_anterior,
             COUNT(*)::int AS respostas,
             COUNT(DISTINCT r.pessoa_id)::int AS respondentes
        FROM rh_clima.checkin_resposta r

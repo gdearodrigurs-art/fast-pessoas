@@ -28,6 +28,7 @@ import {
 import {
   contemPiiObvio,
   limparContextoLivre,
+  nomesProvaveis,
 } from "../src/lib/desidentificar";
 import type {
   MemoriaCalculo,
@@ -442,4 +443,30 @@ test("validarPontosCegos: ponto cego com adjetivo de caráter é sinalizado", ()
 
 test("validarPontosCegos: sem divergências, nunca gera aviso", () => {
   assert.deepEqual(validarPontosCegos([], []), []);
+});
+
+// Guarda de nome próprio no contexto livre (achado MB1 da revisão geral): o
+// serviço BLOQUEIA a geração quando nomesProvaveis não é vazio, para o nome não
+// ir à IA externa. Aqui provamos a detecção (2+ palavras capitalizadas), a
+// ausência de falso positivo em texto comum, e a limitação conhecida (nome
+// isolado não é detectável).
+test("nomesProvaveis: detecta nome próprio (2+ palavras capitalizadas), sem repetir", () => {
+  assert.deepEqual(nomesProvaveis("conversar com Joao Silva sobre metas"), [
+    "Joao Silva",
+  ]);
+  assert.deepEqual(
+    nomesProvaveis("Maria Souza e Maria Souza de novo"),
+    ["Maria Souza"],
+    "nomes repetidos entram uma vez só"
+  );
+});
+
+test("nomesProvaveis: texto sem nome próprio não gera falso positivo", () => {
+  assert.deepEqual(nomesProvaveis("melhorar a comunicação com o gestor"), []);
+  assert.deepEqual(nomesProvaveis("focar na entrega dentro do prazo"), []);
+});
+
+test("nomesProvaveis: nome ISOLADO não é detectável (limitação documentada)", () => {
+  // "Joao" sozinho não casa (exige 2+ maiúsculas); o PDI é anônimo por design.
+  assert.deepEqual(nomesProvaveis("falar com Joao amanha"), []);
 });

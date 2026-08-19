@@ -4,8 +4,9 @@
  * da avaliação (competências e notas) não identificam ninguém; o único lugar por
  * onde PII pode vazar sem querer é o CAMPO LIVRE da mini-entrevista, escrito à mão.
  *
- * Aqui: redige padrões óbvios (CPF, e-mail, telefone) e SINALIZA possíveis nomes
- * próprios para o humano confirmar antes de gerar. Puro, sem I/O, testável.
+ * Aqui: redige padrões óbvios (CPF, e-mail, telefone) e DETECTA possíveis nomes
+ * próprios — que o serviço usa para BLOQUEAR a geração até o humano removê-los
+ * (antes só avisava, e o nome seguia para a IA). Puro, sem I/O, testável.
  * Só usa .match/.replace (globais) — nunca .test() com /g, que carrega lastIndex.
  */
 
@@ -62,4 +63,17 @@ export function contemPiiObvio(texto: string): boolean {
   return (
     contem(texto, RE_CPF) || contem(texto, RE_EMAIL) || contem(texto, RE_TELEFONE)
   );
+}
+
+/**
+ * Os prováveis nomes próprios (2+ palavras capitalizadas) num texto, sem repetir.
+ * É a lista que o serviço mostra ao bloquear a geração — o contexto livre do PDI
+ * não pode carregar nome para a IA externa. Limitação conhecida: um nome ISOLADO
+ * ("João") não casa RE_NOME (2+ maiúsculas) e não é detectável sem destruir o
+ * texto; por isso o PDI é anônimo por design (a IA nunca recebe QUEM), e o campo
+ * livre é o único ponto de fuga que esta função fecha para o caso detectável.
+ */
+export function nomesProvaveis(texto: string): string[] {
+  const m = texto.match(RE_NOME);
+  return m ? [...new Set(m)] : [];
 }

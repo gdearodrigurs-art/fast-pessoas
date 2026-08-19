@@ -1682,7 +1682,11 @@ async function cartaoAposDecisao(
       pode,
       movimentacao,
       demanda.solicitante_usuario_id === sessao.usuario_id,
-      false
+      // Cartão pós-decisão devolve o salário para quem pode vê-lo — logo é
+      // leitura de dado sensível e tem de deixar trilha, igual ao detalhe.
+      // Sem isto, um aprovador com rh.posicao.ver que faz POST direto ao
+      // endpoint de decisão recebia o salário sem rastro.
+      true
     ),
     etapas,
   };

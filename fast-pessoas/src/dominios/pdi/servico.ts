@@ -3,6 +3,7 @@ import { chamarClaudeEstruturado } from "../../lib/claude";
 import {
   contemPiiObvio,
   limparContextoLivre,
+  nomesProvaveis,
 } from "../../lib/desidentificar";
 import { registrarAlteracao } from "../../lib/auditoria";
 import { ErroHttp } from "../../lib/sessao";
@@ -182,6 +183,17 @@ export async function gerarPdi(
   const { limpo, avisos: avisosDesid } = limparContextoLivre(
     dados.entrevista.contexto_livre ?? ""
   );
+  // BLOQUEIO (não só aviso): nome próprio detectado no campo livre não segue para
+  // a IA externa — o PDI é anônimo por design. Só o campo livre é checado (o
+  // prompt inteiro tem nomes de competência/modelo legítimos que dariam falso
+  // positivo). Limitação: nome isolado ("João") não é detectável — ver desidentificar.ts.
+  const nomesNoContexto = nomesProvaveis(limpo);
+  if (nomesNoContexto.length > 0) {
+    throw new ErroHttp(
+      422,
+      `Há um possível nome próprio no contexto livre (${nomesNoContexto.join(", ")}). Remova antes de gerar — o PDI é anônimo e o texto vai para uma IA externa.`
+    );
+  }
   const entrevistaLimpa: EntrevistaPdi = {
     ...dados.entrevista,
     contexto_livre: limpo ? limpo : undefined,
