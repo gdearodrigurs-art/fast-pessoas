@@ -100,6 +100,50 @@ export async function registrarAcao(
   );
 }
 
+/** Falhas de SENHA recentes de um e-mail, na janela (minutos) — o gate do rate-limit. */
+export async function contarFalhasLoginRecentes(
+  email: string,
+  janelaMinutos: number
+): Promise<number> {
+  const linhas = await consultar<{ n: string }>(
+    `SELECT count(*)::text AS n FROM sistema.tentativa_login
+      WHERE lower(email) = lower($1) AND NOT sucesso
+        AND criado_em > now() - make_interval(mins => $2::int)`,
+    [email, janelaMinutos]
+  );
+  return Number(linhas[0]?.n ?? 0);
+}
+
+/** Registra uma tentativa de login (sucesso = a senha conferiu, mesmo que falte TOTP). */
+export async function registrarTentativaLogin(
+  email: string,
+  sucesso: boolean,
+  ip: string | null
+): Promise<void> {
+  await consultar(
+    "INSERT INTO sistema.tentativa_login (email, sucesso, ip) VALUES ($1, $2, $3)",
+    [email, sucesso, ip]
+  );
+}
+
+/** O limite administrável de tentativas de login por janela (eixo 9). */
+export async function lerParametroSeguranca(): Promise<{
+  maxTentativas: number;
+  janelaMinutos: number;
+}> {
+  const linhas = await consultar<{
+    max_tentativas_login: number;
+    janela_minutos: number;
+  }>(
+    "SELECT max_tentativas_login, janela_minutos FROM sistema.parametro_seguranca WHERE id = 1"
+  );
+  const linha = linhas[0];
+  return {
+    maxTentativas: Number(linha?.max_tentativas_login ?? 10),
+    janelaMinutos: Number(linha?.janela_minutos ?? 15),
+  };
+}
+
 export async function atualizarTotpSecret(
   cliente: PoolClient,
   usuarioId: number,

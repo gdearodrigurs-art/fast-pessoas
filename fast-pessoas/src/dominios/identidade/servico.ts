@@ -17,8 +17,11 @@ import {
   buscarPorEmail,
   buscarPorId,
   consumirPassoTotp,
+  contarFalhasLoginRecentes,
+  lerParametroSeguranca,
   listarChavesDoUsuario,
   registrarAcao,
+  registrarTentativaLogin,
   UsuarioIdentidade,
 } from "./repositorio";
 import { validarTotpComPasso } from "./totp";
@@ -85,6 +88,32 @@ async function validarEConsumirTotp(
   const passo = validarTotpComPasso(secret, codigo);
   if (passo === null) return false;
   return consumirPassoTotp(usuarioId, passo);
+}
+
+/**
+ * Rate-limit do login (achado B3): há falhas de SENHA demais para este e-mail na
+ * janela administrável? Se sim, a rota barra ANTES do bcrypt — mitiga o DoS de
+ * exaustão e o credential-stuffing. Não registra a batida na porta trancada,
+ * para um atacante não manter a vítima trancada além da janela.
+ */
+export async function loginBloqueado(email: string): Promise<boolean> {
+  const { maxTentativas, janelaMinutos } = await lerParametroSeguranca();
+  return (await contarFalhasLoginRecentes(email, janelaMinutos)) >= maxTentativas;
+}
+
+/**
+ * Registra a tentativa REAL (não a bloqueada) para o contador. sucesso = a SENHA
+ * conferiu: TOTP pendente/inválido não é senha errada e não deve trancar quem tem
+ * a senha certa mas tropeça no segundo fator.
+ */
+export async function registrarTentativa(
+  email: string,
+  resultado: ResultadoAutenticacao,
+  ip: string | null
+): Promise<void> {
+  const senhaConferiu =
+    resultado.ok || resultado.motivo !== "credenciais_invalidas";
+  await registrarTentativaLogin(email, senhaConferiu, ip);
 }
 
 export async function autenticar(

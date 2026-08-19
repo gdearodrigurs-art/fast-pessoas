@@ -1,5 +1,9 @@
 import { esquemaCredenciais } from "@/dominios/identidade/esquemas";
-import { autenticar } from "@/dominios/identidade/servico";
+import {
+  autenticar,
+  loginBloqueado,
+  registrarTentativa,
+} from "@/dominios/identidade/servico";
 import { criarSessao } from "@/lib/sessao";
 
 const MENSAGEM_GENERICA = "E-mail ou senha incorretos.";
@@ -20,7 +24,20 @@ export async function POST(request: Request) {
     );
   }
 
+  // Rate-limit ANTES do bcrypt: falhas demais na janela → 429 sem pagar o hash.
+  if (await loginBloqueado(analise.data.email)) {
+    return Response.json(
+      {
+        erro: "Muitas tentativas de acesso. Aguarde alguns minutos e tente novamente.",
+      },
+      { status: 429 }
+    );
+  }
+
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   const resultado = await autenticar(analise.data);
+  await registrarTentativa(analise.data.email, resultado, ip);
 
   if (!resultado.ok) {
     if (resultado.motivo === "totp_obrigatorio") {

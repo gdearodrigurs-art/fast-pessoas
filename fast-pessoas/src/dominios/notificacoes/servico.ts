@@ -1,5 +1,5 @@
 import { comTransacao } from "../../lib/banco";
-import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { ErroHttp, garantirUsuarioAtivo, lerSessao } from "../../lib/sessao";
 import { PayloadSessao } from "../identidade/esquemas";
 import { EmissaoNotificacao, esquemaEmissao } from "./esquemas";
 import {
@@ -117,6 +117,9 @@ export async function exigirSessaoNotificacoes(): Promise<PayloadSessao> {
       "Configure a autenticação em duas etapas para continuar"
     );
   }
+  // "Revogou, acabou" (B4): guarda keyless irmã da exigirSessao — desativado não
+  // lê nem as próprias notificações até o token expirar.
+  await garantirUsuarioAtivo(sessao.usuario_id);
   return sessao;
 }
 

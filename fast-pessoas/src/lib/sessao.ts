@@ -95,6 +95,24 @@ export function exigirSessaoValida(
 }
 
 /**
+ * "Revogou, acabou": o cookie de sessão é um JWT de 8h que segue válido mesmo
+ * depois de o usuário ser DESATIVADO. As rotas com chave já caem em 403 porque
+ * `sistema.tem_permissao` filtra `AND u.ativo`; mas as rotas SEM chave (escopo
+ * por sessão, como /api/colaboradores) nunca reliam o `ativo`. Esta reconferência
+ * — uma busca por PK — fecha a janela: desativado deixa de ler até a própria
+ * ficha. Não mora no proxy porque o proxy roda no edge, sem banco.
+ */
+export async function garantirUsuarioAtivo(usuarioId: number): Promise<void> {
+  const linhas = await consultar<{ ativo: boolean }>(
+    "SELECT ativo FROM sistema.usuario WHERE id = $1",
+    [usuarioId]
+  );
+  if (!linhas[0]?.ativo) {
+    throw new ErroHttp(401, "Sessão inválida — a conta não está mais ativa.");
+  }
+}
+
+/**
  * Guarda das rotas SEM chave fixa — aquelas em que o alcance não vem de uma
  * permissão, e sim do escopo por sessão/papel que o repositório aplica
  * (ex.: /api/colaboradores: funcionário vê a própria ficha, gestor vê a
@@ -105,7 +123,9 @@ export function exigirSessaoValida(
  * atalho pulava o 2FA e deixava a rota dependendo só do proxy.
  */
 export async function exigirSessao(): Promise<PayloadSessao> {
-  return exigirSessaoValida(await lerSessao());
+  const sessao = exigirSessaoValida(await lerSessao());
+  await garantirUsuarioAtivo(sessao.usuario_id);
+  return sessao;
 }
 
 /**
