@@ -15,6 +15,12 @@ export interface PermissoesFicha {
   podeAdminCargo: boolean;
   podeVerDisciplinar: boolean;
   podeRegistrarDisciplinar: boolean;
+  podeVerPosse: boolean;
+  podeRegistrarPosse: boolean;
+  /** A ficha aberta é a do PRÓPRIO usuário da sessão (rh.vinculo_atual). Só
+   *  de render: decide se o botão de ciência de posse aparece — a ciência é
+   *  ato do titular, e o serviço reconfere (não-titular = 404). */
+  ehPropriaFicha: boolean;
 }
 
 export default async function PaginaFichaColaborador({
@@ -45,6 +51,9 @@ export default async function PaginaFichaColaborador({
     pode_admin_cargo: boolean;
     pode_ver_disciplinar: boolean;
     pode_registrar_disciplinar: boolean;
+    pode_ver_posse: boolean;
+    pode_registrar_posse: boolean;
+    eh_propria_ficha: boolean;
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.colaborador.editar')      AS pode_editar,
             sistema.tem_permissao($1, 'rh.posicao.ver')             AS pode_ver_salario,
@@ -56,8 +65,11 @@ export default async function PaginaFichaColaborador({
             sistema.tem_permissao($1, 'rh.estabelecimento.administrar') AS pode_admin_lotacao,
             sistema.tem_permissao($1, 'rh.cargo.administrar')       AS pode_admin_cargo,
             sistema.tem_permissao($1, 'rh.disciplinar.ver')         AS pode_ver_disciplinar,
-            sistema.tem_permissao($1, 'rh.disciplinar.registrar')   AS pode_registrar_disciplinar`,
-    [sessao.usuario_id]
+            sistema.tem_permissao($1, 'rh.disciplinar.registrar')   AS pode_registrar_disciplinar,
+            sistema.tem_permissao($1, 'rh.posse.ver')               AS pode_ver_posse,
+            sistema.tem_permissao($1, 'rh.posse.registrar')         AS pode_registrar_posse,
+            rh.vinculo_atual($1) = $2::bigint                       AS eh_propria_ficha`,
+    [sessao.usuario_id, idNumero]
   );
   const linha = linhas[0];
   const permissoes: PermissoesFicha = {
@@ -72,6 +84,9 @@ export default async function PaginaFichaColaborador({
     podeAdminCargo: Boolean(linha?.pode_admin_cargo),
     podeVerDisciplinar: Boolean(linha?.pode_ver_disciplinar),
     podeRegistrarDisciplinar: Boolean(linha?.pode_registrar_disciplinar),
+    podeVerPosse: Boolean(linha?.pode_ver_posse),
+    podeRegistrarPosse: Boolean(linha?.pode_registrar_posse),
+    ehPropriaFicha: Boolean(linha?.eh_propria_ficha),
   };
   return <FichaColaborador colaboradorId={idNumero} permissoes={permissoes} />;
 }

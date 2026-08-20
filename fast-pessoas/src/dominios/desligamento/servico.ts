@@ -9,8 +9,11 @@ import {
   desativarUsuario,
   inserirEvento,
 } from "../colaboradores/repositorio";
+import { fecharSuspensao, suspensoesAlemDe } from "../disciplinar/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
 import { liquidarBancoNaRescisao } from "../ponto/servico";
+import { listarPendentesDevolucao as listarPossePendente } from "../posse/repositorio";
+import { listarEpiPendenteDevolucao } from "../sst/repositorio";
 import {
   CategoriaDevolucao,
   chaveDeNome,
@@ -426,12 +429,27 @@ async function resumoApos(id: number): Promise<ProcessoResumo> {
 
 // ------------------------------------------------------------------ detalhe
 
+/**
+ * O que ainda está COM o colaborador segundo os registros de entrega
+ * (rh.epi_entrega e rh.posse_item com devolvido_em nulo) — o AVISO do eixo 10:
+ * o checklist manual de itens pode esquecer; os registros de entrega não. A
+ * lista informa, não trava o encerramento (a cobrança é humana).
+ */
+export interface PendenciaDevolucao {
+  origem: "epi" | "posse";
+  descricao: string;
+  quantidade: number;
+  data_entrega: string;
+}
+
 export interface DetalheProcesso {
   processo: ProcessoResumo;
   /** Chave AUSENTE para quem não tem desligamento.motivo.ver. */
   motivo?: string | null;
   verificacoes: VerificacaoEstabilidade[];
   itens: ItemDevolucao[];
+  /** Pendências vindas dos registros de entrega (EPI + posse) — só aviso. */
+  pendencias_devolucao: PendenciaDevolucao[];
   /**
    * As categorias que o seletor de item pode oferecer — só as ATIVAS, e só
    * para quem gere itens. Vem do catálogo (0054): a tela não tem mais lista.
@@ -458,12 +476,37 @@ export async function obterDetalhe(
     throw new ErroHttp(404, "Processo não encontrado.");
   }
   const pode = await permissoesDe(sessao.usuario_id);
-  const [verificacoes, itens, entrevista, categorias] = await Promise.all([
-    listarVerificacoes(id),
-    listarItens(id),
-    buscarEntrevista(id),
-    listarCategoriasDevolucao(true),
-  ]);
+  const [verificacoes, itens, entrevista, categorias, episPendentes, possePendente] =
+    await Promise.all([
+      listarVerificacoes(id),
+      listarItens(id),
+      buscarEntrevista(id),
+      listarCategoriasDevolucao(true),
+      listarEpiPendenteDevolucao(processo.colaborador_id),
+      listarPossePendente(processo.colaborador_id),
+    ]);
+
+  // Pendências de devolução pelos REGISTROS DE ENTREGA (EPI da 0014 + posse da
+  // 0081), não pelo checklist manual: o que foi entregue e não voltou aparece
+  // aqui mesmo que ninguém tenha lembrado de criar o item. Aviso, não trava.
+  const pendenciasDevolucao: PendenciaDevolucao[] = [
+    ...episPendentes.map((entrega) => ({
+      origem: "epi" as const,
+      descricao: entrega.numero_ca
+        ? `${entrega.item_nome} (CA ${entrega.numero_ca})`
+        : entrega.item_nome,
+      quantidade: entrega.quantidade,
+      data_entrega: entrega.data_entrega,
+    })),
+    ...possePendente.map((item) => ({
+      origem: "posse" as const,
+      descricao: item.numero_serie
+        ? `${item.descricao} (nº ${item.numero_serie})`
+        : item.descricao,
+      quantidade: item.quantidade,
+      data_entrega: item.data_entrega,
+    })),
+  ];
 
   const terminal = ESTADOS_TERMINAIS.includes(processo.estado);
   const entrevistaPendente =
@@ -476,6 +519,7 @@ export async function obterDetalhe(
     processo,
     verificacoes,
     itens,
+    pendencias_devolucao: pendenciasDevolucao,
     categorias: gerirItens ? categorias : [],
     entrevista,
     acoes: {
@@ -789,6 +833,39 @@ export async function encerrarProcessoDesligamento(
         },
       },
     });
+
+    // DISCIPLINAR (eixo 10) — na MESMA transação: janela de suspensão não
+    // sobrevive ao contrato. O caso real é a suspensão AGENDADA cujo fim cai
+    // depois do término (registrarMedida sempre grava fim; fim nulo é coberto
+    // por robustez, o schema permite). A janela ENCOLHE para a data do
+    // desligamento; se ela toda começaria depois do término, colapsa no próprio
+    // início — o CHECK da 0080 (fim >= inicio) não aceita menos que isso.
+    const suspensoes = await suspensoesAlemDe(
+      cliente,
+      processo.colaborador_id,
+      dados.data_termino_efetiva
+    );
+    for (const suspensao of suspensoes) {
+      const fimDaJanela =
+        dados.data_termino_efetiva < suspensao.inicio
+          ? suspensao.inicio
+          : dados.data_termino_efetiva;
+      await fecharSuspensao(cliente, suspensao.id, fimDaJanela);
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "desligamento.disciplinar",
+        tabela: "rh.medida_disciplinar",
+        registroId: String(suspensao.id),
+        diff: {
+          Tipo: { de: null, para: suspensao.tipo_nome },
+          "Fim da suspensão": {
+            de: suspensao.fim ? formatarData(suspensao.fim) : "em aberto",
+            para: `${formatarData(fimDaJanela)} (encolhida pelo desligamento)`,
+          },
+        },
+      });
+    }
 
     await inserirEvento(cliente, {
       colaborador_id: processo.colaborador_id,

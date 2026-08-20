@@ -497,6 +497,435 @@ function BlocoDisciplinarFicha({
   );
 }
 
+// ------------------------------------------------------------------ bloco de posse de patrimônio (0081)
+// Patrimônio da empresa em posse do colaborador (notebook, ferramenta, carro).
+// Menos sensível que o disciplinar: dp+rh veem e registram (rh.posse.ver /
+// rh.posse.registrar). O cartão busca o próprio dado (/api/posse?colaborador_id=)
+// e usa o MESMO loader do BlocoDisciplinarFicha: 403 => o cartão some (ausência
+// legítima da chave); 5xx/timeout/rede => erro visível + "tentar novamente" —
+// esconder ali seria falso-negativo. A categoria vem do catálogo administrável
+// rh.categoria_devolucao (0054), o mesmo do checklist de desligamento.
+
+interface ItemPosseFicha {
+  id: number;
+  categoria_chave: string;
+  categoria_nome: string;
+  descricao: string;
+  quantidade: number;
+  numero_serie: string | null;
+  data_entrega: string;
+  termo_documento_id: number | null;
+  termo_titulo: string | null;
+  ciencia_registrada: boolean;
+  devolvido_em: string | null;
+}
+
+interface CategoriaPosseFicha {
+  chave: string;
+  nome: string;
+}
+
+interface VisaoPosse {
+  itens: ItemPosseFicha[];
+  categorias: CategoriaPosseFicha[];
+}
+
+const POSSE_EM_BRANCO = {
+  categoria_chave: "",
+  descricao: "",
+  quantidade: "",
+  numero_serie: "",
+  data_entrega: "",
+  termo_documento_id: "",
+};
+
+function BlocoPosseFicha({
+  colaboradorId,
+  podeRegistrar,
+  ehPropriaFicha,
+}: {
+  colaboradorId: number;
+  podeRegistrar: boolean;
+  /** A ciência é ato do TITULAR: o botão só aparece na própria ficha (o
+   *  serviço reconfere e devolve 404 a não-titular). */
+  ehPropriaFicha: boolean;
+}) {
+  const [dados, setDados] = useState<VisaoPosse | null>(null);
+  const [visivel, setVisivel] = useState(true);
+  const [formAberto, setFormAberto] = useState(false);
+  const [novo, setNovo] = useState({ ...POSSE_EM_BRANCO });
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  // Erro de CARGA (distinto do `erro` do formulário): 5xx/timeout/rede não
+  // escondem o cartão — só sinalizam para tentar de novo. Só o 403 esconde.
+  const [erroCarregar, setErroCarregar] = useState<string | null>(null);
+  const [acaoEmCurso, setAcaoEmCurso] = useState<number | null>(null);
+  const [erroAcao, setErroAcao] = useState<string | null>(null);
+
+  // Recarrega após registrar/devolver/ciência. Fora de effect (é ação de
+  // usuário) — pode setState direto.
+  async function recarregar() {
+    try {
+      const resposta = await fetch(`/api/posse?colaborador_id=${colaboradorId}`, {
+        cache: "no-store",
+      });
+      if (resposta.status === 403) {
+        // Só o 403 esconde: ausência legítima da chave.
+        setVisivel(false);
+        return;
+      }
+      if (!resposta.ok) {
+        // 5xx/rede: instabilidade, não ausência — mantém o cartão e sinaliza.
+        setErroCarregar("Não foi possível carregar. Tente novamente.");
+        return;
+      }
+      setErroCarregar(null);
+      setDados((await resposta.json()) as VisaoPosse);
+    } catch {
+      setErroCarregar("Falha de conexão. Tente novamente.");
+    }
+  }
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/posse?colaborador_id=${colaboradorId}`,
+          { cache: "no-store" }
+        );
+        if (!ativo) return;
+        if (resposta.status === 403) {
+          // Só o 403 esconde o cartão: ausência legítima da chave. Qualquer
+          // outro erro (5xx/timeout/rede) é instabilidade, NÃO "sem itens" —
+          // esconder aqui seria falso-negativo.
+          setVisivel(false);
+          return;
+        }
+        if (!resposta.ok) {
+          setErroCarregar("Não foi possível carregar. Tente novamente.");
+          return;
+        }
+        setDados((await resposta.json()) as VisaoPosse);
+      } catch {
+        if (ativo) setErroCarregar("Falha de conexão. Tente novamente.");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(
+        `/api/posse?colaborador_id=${colaboradorId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            categoria_chave: novo.categoria_chave,
+            descricao: novo.descricao,
+            // Em branco vira chave ausente — assim o erro é "Informe a
+            // quantidade" e não "Quantidade mínima: 1" (Number("") vira zero).
+            quantidade:
+              novo.quantidade.trim() === ""
+                ? undefined
+                : Number(novo.quantidade),
+            numero_serie: novo.numero_serie.trim() || undefined,
+            data_entrega: novo.data_entrega,
+            termo_documento_id: novo.termo_documento_id
+              ? Number(novo.termo_documento_id)
+              : null,
+          }),
+        }
+      );
+      if (!resposta.ok) {
+        setErro(await lerErro(resposta));
+        return;
+      }
+      setNovo({ ...POSSE_EM_BRANCO });
+      setFormAberto(false);
+      await recarregar();
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function agir(itemId: number, acao: "devolucao" | "ciencia") {
+    setErroAcao(null);
+    setAcaoEmCurso(itemId);
+    try {
+      const resposta = await fetch(`/api/posse/${itemId}/${acao}`, {
+        method: "POST",
+      });
+      if (!resposta.ok) {
+        setErroAcao(await lerErro(resposta));
+        return;
+      }
+      await recarregar();
+    } catch {
+      setErroAcao("Falha de conexão. Tente novamente.");
+    } finally {
+      setAcaoEmCurso(null);
+    }
+  }
+
+  if (!visivel) return null;
+
+  return (
+    <div className={estilos.cartao} style={{ marginTop: 16 }}>
+      <h2>Patrimônio em posse</h2>
+
+      {erroCarregar !== null && dados === null ? (
+        <div>
+          <p className={estilos.erro}>{erroCarregar}</p>
+          <button
+            className={estilos.botaoLinha}
+            type="button"
+            onClick={() => {
+              setErroCarregar(null);
+              void recarregar();
+            }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      ) : dados === null ? (
+        <p className={estilos.vazio}>Carregando…</p>
+      ) : (
+        <>
+          {podeRegistrar && !formAberto && (
+            <p style={{ margin: "10px 0" }}>
+              <button
+                className={estilos.botao}
+                type="button"
+                onClick={() => {
+                  setErro(null);
+                  setFormAberto(true);
+                }}
+              >
+                + Registrar entrega
+              </button>
+            </p>
+          )}
+
+          {podeRegistrar && formAberto && (
+            <form className={estilos.formulario} onSubmit={enviar}>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psCategoria">
+                  Categoria
+                </label>
+                {/* As opções vêm do catálogo administrável (só as ativas),
+                    nunca de uma lista escrita aqui. */}
+                <select
+                  className={estilos.campo}
+                  id="psCategoria"
+                  required
+                  value={novo.categoria_chave}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      categoria_chave: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">selecione…</option>
+                  {dados.categorias.map((categoria) => (
+                    <option key={categoria.chave} value={categoria.chave}>
+                      {categoria.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psDescricao">
+                  Item
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psDescricao"
+                  type="text"
+                  required
+                  maxLength={500}
+                  placeholder="ex.: Notebook Dell i7 patrimônio 123"
+                  value={novo.descricao}
+                  onChange={(e) =>
+                    setNovo((atual) => ({ ...atual, descricao: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psQuantidade">
+                  Quantidade
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psQuantidade"
+                  type="number"
+                  required
+                  min={1}
+                  max={999}
+                  value={novo.quantidade}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      quantidade: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psSerie">
+                  Nº de série / patrimônio (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psSerie"
+                  type="text"
+                  maxLength={120}
+                  value={novo.numero_serie}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      numero_serie: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psData">
+                  Data da entrega
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psData"
+                  type="date"
+                  required
+                  max={HOJE_NA_OPERACAO}
+                  value={novo.data_entrega}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      data_entrega: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psTermo">
+                  Termo no GED — nº do documento (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psTermo"
+                  type="number"
+                  min={1}
+                  value={novo.termo_documento_id}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      termo_documento_id: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {erro && <p className={estilos.erro}>{erro}</p>}
+              <button className={estilos.botao} type="submit" disabled={salvando}>
+                {salvando ? "Registrando…" : "Registrar"}
+              </button>
+              <button
+                className={estilos.botaoLinha}
+                type="button"
+                onClick={() => setFormAberto(false)}
+              >
+                Cancelar
+              </button>
+            </form>
+          )}
+
+          {dados.itens.length === 0 ? (
+            <p className={estilos.vazio}>
+              Nenhum patrimônio registrado em posse deste colaborador.
+            </p>
+          ) : (
+            dados.itens.map((item) => (
+              <div key={item.id} className={estilos.itemRegistro}>
+                <div className={estilos.itemTopo}>
+                  <span className={`${estilos.clf} ${estilos.clfNeutro}`}>
+                    {item.categoria_nome}
+                  </span>
+                  <span>entregue em {formatarData(item.data_entrega)}</span>
+                  <span>
+                    {item.devolvido_em
+                      ? `devolvido em ${formatarDataEvento(item.devolvido_em)}`
+                      : "em uso"}
+                  </span>
+                </div>
+                <div className={estilos.itemTexto}>
+                  {item.descricao} (qtd {item.quantidade})
+                  {item.numero_serie ? ` · nº ${item.numero_serie}` : ""}
+                </div>
+                <div className={estilos.itemExtra}>
+                  Termo:{" "}
+                  {item.termo_documento_id ? (
+                    <a
+                      href={`/api/documentos/${item.termo_documento_id}/download`}
+                    >
+                      {item.termo_titulo ?? `#${item.termo_documento_id}`}
+                    </a>
+                  ) : (
+                    "sem termo no GED"
+                  )}
+                  {" · Ciência: "}
+                  {item.ciencia_registrada
+                    ? "registrada"
+                    : item.termo_documento_id
+                      ? "pendente (o titular dá a ciência sobre o termo)"
+                      : "sem termo, sem ciência"}
+                </div>
+                {podeRegistrar && item.devolvido_em === null && (
+                  <p style={{ margin: "8px 0 0" }}>
+                    <button
+                      className={estilos.botaoLinha}
+                      type="button"
+                      disabled={acaoEmCurso === item.id}
+                      onClick={() => void agir(item.id, "devolucao")}
+                    >
+                      {acaoEmCurso === item.id
+                        ? "Registrando…"
+                        : "Registrar devolução"}
+                    </button>
+                    {ehPropriaFicha &&
+                      item.termo_documento_id !== null &&
+                      !item.ciencia_registrada && (
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          disabled={acaoEmCurso === item.id}
+                          onClick={() => void agir(item.id, "ciencia")}
+                          title="Aceite eletrônico: só o titular registra a própria ciência"
+                        >
+                          Dar ciência
+                        </button>
+                      )}
+                  </p>
+                )}
+              </div>
+            ))
+          )}
+          {erroAcao && <p className={estilos.erro}>{erroAcao}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** RCF vigente do cargo da posição atual — documento de gestão, não sensível. */
 interface Rcf {
   cargo_id: number;
@@ -1593,6 +2022,16 @@ export function FichaColaborador({
             )}
 
             <BlocoPontoFicha colaboradorId={colaboradorId} />
+
+            {/* Posse de patrimônio (0081): dp+rh. Self-fetch + 403 esconde o
+                cartão; erro transitório mostra "tentar novamente". */}
+            {permissoes.podeVerPosse && (
+              <BlocoPosseFicha
+                colaboradorId={colaboradorId}
+                podeRegistrar={permissoes.podeRegistrarPosse}
+                ehPropriaFicha={permissoes.ehPropriaFicha}
+              />
+            )}
 
             {/* RCF do cargo — pedido explícito da analista de RH. Vem da versão
                 VIGENTE do cargo da posição atual; documento de gestão (não é

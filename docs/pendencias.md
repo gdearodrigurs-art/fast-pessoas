@@ -769,3 +769,29 @@ follow-ups (nenhum é regressão nem furo novo — são dívida conhecida / pré
 6. **B5 — CSP com `script-src 'unsafe-inline'`.** Sem infra de nonce, o CSP protege menos contra XSS do
    que um nonce-based protegeria (mitigado: cookie httpOnly, sem CDN externo). Dívida conhecida,
    documentada no próprio `next.config.ts`.
+
+---
+
+## 16 · Fatia Posse — follow-ups da revisão adversarial (não bloqueantes)
+
+A revisão da fatia Posse (2026-08-20) confirmou permissões, append-only e a regressão zero no
+desligamento; o achado ALTO (predicado morto do hook de suspensão) e dois MÉDIA (botão de ciência
+para não-titular; ERRCODE do trinco → 0083) foram corrigidos ANTES do commit. Ficam:
+
+1. **Superfície do titular para a ciência.** O botão "Dar ciência" agora só aparece na PRÓPRIA
+   ficha — mas o titular típico não tem `rh.posse.ver`, então o cartão nem carrega para ele. A
+   ciência hoje só é praticável por dp/rh na própria ficha. Follow-up: um "minha posse" no portal
+   do colaborador (paralelo ao "Minhas entregas de EPI"), listando os itens e oferecendo a ciência.
+   E: ciência dada direto no GED não projeta `ciencia_registrada` (a projeção mora em
+   `darCienciaPosse`) — a superfície do titular resolve os dois.
+2. **Teste da regra crítica.** `tests/posse.test.ts` cobre borda zod; falta teste (com repositório
+   mockado, molde dos testes de ponto) de que `darCienciaPosse` devolve 404 a não-titular e de que
+   categoria inativa é recusada no serviço.
+3. **Duplo clique na ciência** (herdado do EPI): duas requisições concorrentes passam pelo check e a
+   segunda estoura 23505 sem tradução → 500. Corrigir nos DOIS (posse e sst) com `violacaoUnica`.
+4. **`fecharSuspensao` sem guarda própria** (sem `AND` de janela nem rowCount): inócuo enquanto só o
+   hook chama na mesma transação; obrigatório quando existir UI de fechamento manual de suspensão.
+5. **Miudezas:** data de entrega futura aceita por POST direto (teto só no HTML — consistente com o
+   disciplinar); `colaboradorDoUsuario` da posse usa `vinculo_atual` (o GED já migrou para
+   `vinculosDoUsuario`; paridade de molde com o EPI); `dada_em` de ciência já existente devolve o
+   relógio do app, não o real.

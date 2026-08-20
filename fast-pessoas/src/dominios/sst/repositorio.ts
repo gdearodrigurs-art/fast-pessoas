@@ -557,6 +557,23 @@ export async function listarEntregasDoColaborador(
   return linhas.map(mapearEntrega);
 }
 
+/**
+ * EPIs ainda com o colaborador (devolvido_em IS NULL) — a consulta que o
+ * DESLIGAMENTO usa para avisar as pendências de devolução (eixo 10). Usa o
+ * índice parcial de pendência da 0014.
+ */
+export async function listarEpiPendenteDevolucao(
+  colaboradorId: number
+): Promise<EntregaEpiLinha[]> {
+  const linhas = await consultar<EntregaEpiCrua>(
+    `${SELECT_ENTREGA}
+      WHERE e.colaborador_id = $1 AND e.devolvido_em IS NULL
+      ORDER BY e.data_entrega DESC, e.id DESC`,
+    [colaboradorId]
+  );
+  return linhas.map(mapearEntrega);
+}
+
 export async function buscarEntregaEpi(
   id: number
 ): Promise<EntregaEpiLinha | null> {

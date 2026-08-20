@@ -161,6 +161,50 @@ export async function fecharSuspensao(
   );
 }
 
+export interface SuspensaoAberta {
+  id: number;
+  tipo_nome: string;
+  inicio: string;
+  /** null = janela aberta (o schema permite, embora o app hoje sempre grave fim). */
+  fim: string | null;
+}
+
+/**
+ * Janelas de suspensão que SOBREVIVERIAM ao desligamento numa data: fim ABERTO
+ * (nulo — o schema da 0080 permite, ainda que registrarMedida hoje exija fim) OU
+ * fim DEPOIS da data do término. É a consulta que o DESLIGAMENTO usa para
+ * encolhê-las no encerramento (eixo 10: quem encerra o vínculo fecha as janelas
+ * dele). Só `fim IS NULL` era código morto: a suspensão real nasce com fim, e o
+ * caso que ocorre é a janela agendada ultrapassando o término (achado da revisão).
+ */
+export async function suspensoesAlemDe(
+  cliente: PoolClient,
+  colaboradorId: number,
+  dataTermino: string
+): Promise<SuspensaoAberta[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    tipo_nome: string;
+    inicio: string;
+    fim: string | null;
+  }>(
+    `SELECT m.id, t.nome AS tipo_nome, m.inicio::text AS inicio, m.fim::text AS fim
+       FROM rh.medida_disciplinar m
+       JOIN rh.tipo_medida_disciplinar t ON t.chave = m.tipo_chave
+      WHERE m.colaborador_id = $1
+        AND m.inicio IS NOT NULL
+        AND (m.fim IS NULL OR m.fim > $2::date)
+      ORDER BY m.inicio, m.id`,
+    [colaboradorId, dataTermino]
+  );
+  return rows.map((linha) => ({
+    id: Number(linha.id),
+    tipo_nome: linha.tipo_nome,
+    inicio: linha.inicio,
+    fim: linha.fim,
+  }));
+}
+
 // ------------------------------------------------------------------ histórico por tipo (escalonamento MANUAL)
 
 export interface ContagemTipo {
