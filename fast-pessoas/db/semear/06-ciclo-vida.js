@@ -388,6 +388,8 @@ function diasDeAviso(tipo, dataAdmissao, dataTermino) {
 }
 
 // Devoluções coerentes com o que cada cargo usa no dia a dia da distribuidora.
+// A categoria é a CHAVE de rh.categoria_devolucao (0054), não lista fixa: item
+// que tem categoria própria usa a própria — 'outro' é para o que sobra mesmo.
 const DEVOLUCOES_POR_CARGO = {
   Conferente: [
     ['epi', 'Botina de segurança e capacete (ficha de EPI do CD)'],
@@ -416,7 +418,7 @@ const DEVOLUCOES_POR_CARGO = {
 const DEVOLUCAO_PADRAO = [
   ['cracha', 'Crachá de acesso'],
   ['uniforme', 'Uniforme do balcão de vendas'],
-  ['outro', 'Tablet de consulta de estoque do salão'],
+  ['tablet', 'Tablet de consulta de estoque do salão'],
 ];
 
 function devolucoesDe(cargo) {
