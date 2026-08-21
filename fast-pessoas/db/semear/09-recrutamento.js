@@ -767,6 +767,16 @@ async function semear(cliente) {
     },
   ];
 
+  // 0077: a vaga congela o modelo de seleção ao ser criada — a demo usa o
+  // padrão vigente semeado pela 0076 (buscado por natureza, nunca por id fixo).
+  const { rows: modelosSelecao } = await cliente.query(
+    `SELECT id FROM rh.modelo_selecao_versao WHERE padrao AND status = 'ativa' ORDER BY id LIMIT 1`
+  );
+  if (modelosSelecao.length === 0) {
+    throw new Error('modelo de seleção padrão (0076) não encontrado no catálogo');
+  }
+  const modeloSelecaoId = Number(modelosSelecao[0].id);
+
   const idsVaga = await inserirLote(
     cliente,
     'rh.vaga',
@@ -777,6 +787,7 @@ async function semear(cliente) {
       'faixa_max',
       'prazo_alvo',
       'status',
+      'modelo_versao_id',
       'criado_em',
       'atualizado_em',
     ],
@@ -787,6 +798,7 @@ async function semear(cliente) {
       v.faixa_max,
       iso(diasAtras(v.prazoDias)),
       v.status,
+      modeloSelecaoId,
       instante(v.criadoDias, rng),
       instante(v.atualizadoDias, rng),
     ]),

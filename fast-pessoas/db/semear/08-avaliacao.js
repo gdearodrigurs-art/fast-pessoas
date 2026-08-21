@@ -935,12 +935,19 @@ async function semear(cliente) {
   }
 
   // ---------------------------------------------------------------- avaliações (rascunho)
-  // Todo ciclo nasce com a linha de resposta em rascunho — igual ao app.
+  // Todo ciclo nasce com a linha de resposta em rascunho — igual ao app. A linha é a do
+  // líder (papel default da 0067): o avaliador é o designado do ciclo, exigido por trigger.
   const avaliacoesGravadas = await inserirLote(
     cliente,
     'rh.avaliacao',
-    ['ciclo_id', 'estado', 'criado_em', 'atualizado_em'],
-    ciclos.map((ciclo) => [ciclo.id, 'rascunho', ciclo.criado_em, ciclo.criado_em]),
+    ['ciclo_id', 'estado', 'avaliador_colaborador_id', 'criado_em', 'atualizado_em'],
+    ciclos.map((ciclo) => [
+      ciclo.id,
+      'rascunho',
+      ciclo.pessoa.gestor_id,
+      ciclo.criado_em,
+      ciclo.criado_em,
+    ]),
     'id, ciclo_id'
   );
   const avaliacaoPorCiclo = new Map(
@@ -948,6 +955,29 @@ async function semear(cliente) {
       Number(linha.ciclo_id),
       Number(linha.id),
     ])
+  );
+
+  // ---------------------------------------------------------------- autoavaliações (0067)
+  // Ciclo de DESEMPENHO tem também a linha 'auto' — do próprio avaliado, exigida
+  // pela consolidação. Experiência não recebe auto (decisão do dono, 0067).
+  const autosGravadas = await inserirLote(
+    cliente,
+    'rh.avaliacao',
+    ['ciclo_id', 'papel', 'estado', 'avaliador_colaborador_id', 'criado_em', 'atualizado_em'],
+    ciclos
+      .filter((ciclo) => ciclo.tipo === 'desempenho')
+      .map((ciclo) => [
+        ciclo.id,
+        'auto',
+        'rascunho',
+        ciclo.pessoa.id,
+        ciclo.criado_em,
+        ciclo.criado_em,
+      ]),
+    'id, ciclo_id'
+  );
+  const autoPorCiclo = new Map(
+    autosGravadas.map((linha) => [Number(linha.ciclo_id), Number(linha.id)])
   );
 
   // ---------------------------------------------------------------- respostas
@@ -983,6 +1013,21 @@ async function semear(cliente) {
           ciclo.envio,
           ciclo.envio,
         ]);
+      }
+      // A auto consolidável também vai completa — a trava de envio exige tudo
+      // respondido. As notas são independentes das do líder (e não entram na nota).
+      const autoId = autoPorCiclo.get(ciclo.id);
+      if (autoId) {
+        for (const indicador of estrutura.pilares.flatMap((p) => p.indicadores)) {
+          linhasResposta.push([
+            autoId,
+            indicador.id,
+            inteiro(rng, 3, 5),
+            false,
+            ciclo.envio,
+            ciclo.envio,
+          ]);
+        }
       }
     } else if (ciclo.parcial) {
       // Rascunho pela metade: 9 dos 15 indicadores respondidos. Prova na tela
@@ -1023,8 +1068,12 @@ async function semear(cliente) {
                     unnest($2::timestamptz[]) AS enviado_em) v
       WHERE a.id = v.id`,
     [
-      consolidaveis.map((ciclo) => avaliacaoPorCiclo.get(ciclo.id)),
-      consolidaveis.map((ciclo) => ciclo.envio),
+      consolidaveis.flatMap((ciclo) =>
+        [avaliacaoPorCiclo.get(ciclo.id), autoPorCiclo.get(ciclo.id)].filter(Boolean)
+      ),
+      consolidaveis.flatMap((ciclo) =>
+        autoPorCiclo.has(ciclo.id) ? [ciclo.envio, ciclo.envio] : [ciclo.envio]
+      ),
     ]
   );
 

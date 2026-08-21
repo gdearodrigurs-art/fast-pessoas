@@ -86,6 +86,14 @@ const ORDEM_LIMPEZA = [
   // ---- notificações internas
   'sistema.notificacao',
 
+  // ---- PDI e ações (0066/0072/0073) — a ação pode nascer de um PDI e o PDI
+  // aponta para o ciclo de avaliação: andamento → ação → pdi, ANTES do bloco
+  // de avaliação. O PDI nasce por trigger na consolidação, então existe linha
+  // aqui mesmo sem módulo próprio de semeadura. rh.pdi_instrucao é catálogo.
+  'rh.acao_andamento',
+  'rh.acao_aberta',
+  'rh.pdi',
+
   // ---- avaliação 360 (o modelo/pilares/indicadores/faixas são catálogo)
   'rh.resposta_item',
   'rh.avaliacao',
@@ -101,6 +109,12 @@ const ORDEM_LIMPEZA = [
   'rh.candidato',
   'rh.vaga',
   'rh.requisicao_vaga',
+
+  // ---- disciplinar e posse (0080/0081) — medida e termo apontam para o
+  // colaborador; o termo de posse também para o documento (GED, mais abaixo).
+  // rh.tipo_medida_disciplinar e rh.categoria_devolucao são catálogo e ficam.
+  'rh.medida_disciplinar',
+  'rh.posse_item',
 
   // ---- desligamento (tipos e roteiro são catálogo)
   'rh.entrevista_desligamento',
@@ -126,6 +140,8 @@ const ORDEM_LIMPEZA = [
   'rh.afastamento',
 
   // ---- benefícios (catálogo de benefício é dado de demo, não de migration)
+  // O pedido de revisão (0057) aponta para a adesão e para a demanda: sai antes.
+  'rh.pedido_revisao_beneficio',
   'rh.dependente',
   'rh.adesao',
   'rh.regra_elegibilidade_versao',
@@ -148,8 +164,7 @@ const ORDEM_LIMPEZA = [
   // ---- metas (o catálogo rh.indicador fica)
   'rh.meta_indicador_versao',
 
-  // ---- núcleo de pessoas
-  'rh.acao_aberta',
+  // ---- núcleo de pessoas (ação aberta subiu para o bloco de PDI)
   'rh.feedback_formal',
   'rh.ocorrencia',
   'rh.relacao_gestor',
@@ -157,6 +172,15 @@ const ORDEM_LIMPEZA = [
   'rh.lotacao',
   'rh.evento_colaborador',
   'rh.colaborador',
+
+  // ---- modelos de avaliação POR CARGO (0074) — criados pela tela, logo dado
+  // de demo; o Padrão Modelo (cargo_id NULL) e seus filhos são catálogo e ficam.
+  // Precisam sair ANTES de rh.cargo (FK) e já com respostas/ciclos removidos
+  // acima. Ordem filho → pai: indicador → pilar → faixa → versão.
+  'rh.indicador_avaliacao',
+  'rh.pilar_avaliacao',
+  'rh.faixa_resultado_versao',
+  'rh.modelo_avaliacao_versao',
 
   // ---- estrutura organizacional (depois de posição/lotação/requisição)
   'rh.tabela_salarial_versao',
@@ -188,6 +212,15 @@ const CONDICAO_PARCIAL = {
   'rh.regra_banco_horas_versao':
     'estabelecimento_id IS NOT NULL OR cargo_id IS NOT NULL OR colaborador_id IS NOT NULL',
   'rh.feriado': 'estabelecimento_id IS NOT NULL',
+  // Só as versões POR CARGO (e seus filhos) são demo; o Padrão Modelo fica.
+  'rh.modelo_avaliacao_versao': 'cargo_id IS NOT NULL',
+  'rh.faixa_resultado_versao':
+    'modelo_versao_id IN (SELECT id FROM rh.modelo_avaliacao_versao WHERE cargo_id IS NOT NULL)',
+  'rh.pilar_avaliacao':
+    'modelo_versao_id IN (SELECT id FROM rh.modelo_avaliacao_versao WHERE cargo_id IS NOT NULL)',
+  'rh.indicador_avaliacao':
+    'pilar_id IN (SELECT id FROM rh.pilar_avaliacao WHERE modelo_versao_id IN ' +
+    '(SELECT id FROM rh.modelo_avaliacao_versao WHERE cargo_id IS NOT NULL))',
 };
 
 // Triggers a desligar: append-only (audit.bloquear_mutacao) e congelamento de
