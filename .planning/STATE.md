@@ -20,12 +20,12 @@ See: .planning/PROJECT.md (updated 2026-08-10)
 
 ## Current Position
 
-Phase: 1 of 7 (Padrão Modelo)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-08-10 — Roadmap criado a partir do ingest (docs/17 itens 2–8); fundação/Onda I/Onda H/sweeps 0/0b marcados como shipped
+Phase: cadeia de execução (Ondas 1–4) — fases 1, 5 e 6 completas; 2 e 3 parciais
+Plan: Onda 1 em execução (7 agentes paralelos: Visibilidade · Recrutamento · TOTP · Posse titular · Conduta núcleo · Motor férias · Teste férias)
+Status: Executing
+Last activity: 2026-08-24 — 22/22 decisões do dono registradas (docs/20); Onda 1 largada
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████░░░░] ~65%
 
 ## Performance Metrics
 
