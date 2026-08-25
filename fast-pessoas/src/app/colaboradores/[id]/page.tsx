@@ -45,6 +45,7 @@ export default async function PaginaFichaColaborador({
     pode_editar: boolean;
     pode_ver_salario: boolean;
     pode_ver_salario_equipe: boolean;
+    pode_ver_disciplinar_equipe: boolean;
     pode_editar_posicao: boolean;
     pode_ver_restrita: boolean;
     pode_registrar_ocorrencia: boolean;
@@ -61,6 +62,7 @@ export default async function PaginaFichaColaborador({
     `SELECT sistema.tem_permissao($1, 'rh.colaborador.editar')      AS pode_editar,
             sistema.tem_permissao($1, 'rh.posicao.ver')             AS pode_ver_salario,
             sistema.tem_permissao($1, 'rh.posicao.ver.equipe')      AS pode_ver_salario_equipe,
+            sistema.tem_permissao($1, 'rh.disciplinar.ver.equipe')  AS pode_ver_disciplinar_equipe,
             sistema.tem_permissao($1, 'rh.posicao.editar')          AS pode_editar_posicao,
             sistema.tem_permissao($1, 'rh.ocorrencia.restrita.ver') AS pode_ver_restrita,
             sistema.tem_permissao($1, 'rh.ocorrencia.registrar')    AS pode_registrar_ocorrencia,
@@ -76,15 +78,27 @@ export default async function PaginaFichaColaborador({
     [sessao.usuario_id, idNumero]
   );
   const linha = linhas[0];
-  // A1:a — o salário aparece também para quem só tem a chave de EQUIPE, desde
-  // que a ficha aberta esteja na sub-árvore de quem olha (ou seja um vínculo
-  // dele). Flag só de render: a rota /posicao reconfere chave e alcance.
+  // A1:a / A3:a — salário e disciplinar aparecem também para quem só tem a
+  // chave de EQUIPE, desde que a ficha aberta esteja na sub-árvore de quem
+  // olha. Flags só de render: as rotas reconferem chave e alcance. A
+  // sub-árvore é resolvida UMA vez, e só quando alguma chave de equipe pede.
   let salarioPelaEquipe = false;
-  if (!linha?.pode_ver_salario && linha?.pode_ver_salario_equipe) {
-    salarioPelaEquipe = await colaboradorNoEscopo(
-      idNumero,
-      await escopoDaMinhaEquipe(sessao)
-    );
+  let disciplinarPelaEquipe = false;
+  const precisaSubArvore =
+    (!linha?.pode_ver_salario && linha?.pode_ver_salario_equipe) ||
+    (!linha?.pode_ver_disciplinar && linha?.pode_ver_disciplinar_equipe);
+  if (precisaSubArvore) {
+    const escopoEquipe = await escopoDaMinhaEquipe(sessao);
+    if (!linha?.pode_ver_salario && linha?.pode_ver_salario_equipe) {
+      // Salário: sub-árvore OU vínculo próprio (cláusula de pessoa do escopo).
+      salarioPelaEquipe = await colaboradorNoEscopo(idNumero, escopoEquipe);
+    }
+    if (!linha?.pode_ver_disciplinar && linha?.pode_ver_disciplinar_equipe) {
+      // Disciplinar: SÓ o vínculo LIDERADO (A3:a) — nem a própria ficha.
+      disciplinarPelaEquipe =
+        escopoEquipe.alcance === "equipe" &&
+        escopoEquipe.equipeIds.includes(idNumero);
+    }
   }
   const permissoes: PermissoesFicha = {
     podeEditar: Boolean(linha?.pode_editar),
@@ -96,7 +110,8 @@ export default async function PaginaFichaColaborador({
     podeAdminGestor: Boolean(linha?.pode_admin_gestor),
     podeAdminLotacao: Boolean(linha?.pode_admin_lotacao),
     podeAdminCargo: Boolean(linha?.pode_admin_cargo),
-    podeVerDisciplinar: Boolean(linha?.pode_ver_disciplinar),
+    podeVerDisciplinar:
+      Boolean(linha?.pode_ver_disciplinar) || disciplinarPelaEquipe,
     podeRegistrarDisciplinar: Boolean(linha?.pode_registrar_disciplinar),
     podeVerPosse: Boolean(linha?.pode_ver_posse),
     podeRegistrarPosse: Boolean(linha?.pode_registrar_posse),

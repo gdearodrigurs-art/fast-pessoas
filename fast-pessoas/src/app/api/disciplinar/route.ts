@@ -4,7 +4,7 @@ import {
   registrarMedida,
 } from "@/dominios/disciplinar/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import { exigirAlgumaPermissao, exigirPermissao } from "@/lib/sessao";
 
 /** `?colaborador_id=` na querystring — o alvo de quem se lê/registra. */
 function idColaborador(request: Request): number | null {
@@ -15,20 +15,25 @@ function idColaborador(request: Request): number | null {
 }
 
 /**
- * Medidas disciplinares de um colaborador. Conteúdo SEMPRE restrito
- * (dp/diretoria); o gestor não alcança. A leitura grava trilha (eixo 8) no
- * serviço. 403 aqui faz o cartão da ficha simplesmente NÃO aparecer — ausência,
- * não máscara.
+ * Medidas disciplinares de um colaborador. DUAS chaves, alcances diferentes
+ * (0084, decisão A3:a): `rh.disciplinar.ver` (global — dp/diretoria) e
+ * `rh.disciplinar.ver.equipe` (gestor — sub-árvore, SÓ o vínculo que ele
+ * lidera; o serviço confere o alvo e devolve 404 fora dele). A leitura grava
+ * trilha (eixo 8) no serviço, com a chave que DE FATO autorizou. 403 aqui faz
+ * o cartão da ficha simplesmente NÃO aparecer — ausência, não máscara.
  */
 export async function GET(request: Request) {
   try {
-    const sessao = await exigirPermissao("rh.disciplinar.ver");
+    const { sessao, concedidas } = await exigirAlgumaPermissao([
+      "rh.disciplinar.ver",
+      "rh.disciplinar.ver.equipe",
+    ]);
     const colaboradorId = idColaborador(request);
     if (colaboradorId === null) {
       return Response.json({ erro: "Identificador inválido" }, { status: 400 });
     }
     return Response.json(
-      await listarMedidasColaborador(sessao, colaboradorId)
+      await listarMedidasColaborador(sessao, colaboradorId, concedidas)
     );
   } catch (erro) {
     return responderErro(erro);

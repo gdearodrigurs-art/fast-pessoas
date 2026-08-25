@@ -117,6 +117,74 @@ export function validarPeriodoDaMedida(
   return null;
 }
 
+// ------------------------------------------------------------------ fechar/encurtar suspensão (decisão D1:a)
+// Regras do dono: SÓ ENCURTAR o fim (nunca estender, nunca reabrir); data
+// retroativa aceita até o INÍCIO da janela; quem registra pode encerrar (reusa
+// rh.disciplinar.registrar); tudo auditado. Estender uma suspensão exige
+// registrar medida NOVA — de propósito.
+
+export const esquemaFechamentoSuspensao = z.object({
+  /** O novo fim da janela — só para trás do fim atual, nunca antes do início. */
+  fim: esquemaData,
+});
+
+export type FechamentoSuspensao = z.infer<typeof esquemaFechamentoSuspensao>;
+
+export interface ProblemaEncurtamento {
+  campo: "fim";
+  mensagem: string;
+}
+
+/**
+ * A régua D1:a em função PURA (testável sem banco), no molde de
+ * `validarPeriodoDaMedida`. O repositório repete o mesmo predicado dentro do
+ * UPDATE (com `rh.hoje()` e rowCount) como guarda de corrida — aqui nasce a
+ * mensagem amigável, lá nasce a garantia.
+ *
+ *   • medida sem janela (inicio nulo) não tem o que encerrar;
+ *   • janela cujo fim já passou está ENCERRADA — não se reabre nem se
+ *     reescreve (correção é medida nova);
+ *   • o novo fim aceita retroativo, mas nunca antes do INÍCIO da janela;
+ *   • e só ENCURTA: novo fim tem que ser anterior ao fim atual.
+ */
+export function validarEncurtamentoDeSuspensao(
+  medida: { inicio: string | null; fim: string | null },
+  novoFim: string,
+  hoje: string
+): ProblemaEncurtamento | null {
+  if (medida.inicio === null) {
+    return {
+      campo: "fim",
+      mensagem: "Esta medida não tem janela de período — nada a encerrar.",
+    };
+  }
+  if (medida.fim !== null && medida.fim <= hoje) {
+    return {
+      campo: "fim",
+      mensagem:
+        "A janela desta suspensão já se encerrou — o passado não se reescreve. " +
+        "Se houve novo fato, registre uma medida nova.",
+    };
+  }
+  if (novoFim < medida.inicio) {
+    return {
+      campo: "fim",
+      mensagem:
+        "O novo fim não pode ser anterior ao início da janela — a data " +
+        "retroativa vale até o próprio início (decisão D1).",
+    };
+  }
+  if (medida.fim !== null && novoFim >= medida.fim) {
+    return {
+      campo: "fim",
+      mensagem:
+        "Só é possível ENCURTAR a suspensão. Para estender, registre uma " +
+        "medida nova — a janela gravada não se estica (decisão D1).",
+    };
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------ catálogo de tipos (administrável, molde 0054)
 
 export const esquemaCriacaoTipoMedida = z.object({

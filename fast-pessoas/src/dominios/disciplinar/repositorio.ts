@@ -161,6 +161,70 @@ export async function fecharSuspensao(
   );
 }
 
+/** A medida travada para o fechamento manual (D1:a) — só o que a régua lê. */
+export interface MedidaParaFechar {
+  id: number;
+  colaborador_id: number;
+  tipo_chave: string;
+  tipo_nome: string;
+  inicio: string | null;
+  fim: string | null;
+}
+
+export async function buscarMedidaParaFechar(
+  cliente: PoolClient,
+  id: number
+): Promise<MedidaParaFechar | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    colaborador_id: string;
+    tipo_chave: string;
+    tipo_nome: string;
+    inicio: string | null;
+    fim: string | null;
+  }>(
+    `SELECT m.id, m.colaborador_id, m.tipo_chave, t.nome AS tipo_nome,
+            m.inicio::text AS inicio, m.fim::text AS fim
+       FROM rh.medida_disciplinar m
+       JOIN rh.tipo_medida_disciplinar t ON t.chave = m.tipo_chave
+      WHERE m.id = $1
+      FOR UPDATE OF m`,
+    [id]
+  );
+  if (rows.length === 0) return null;
+  return {
+    ...rows[0],
+    id: Number(rows[0].id),
+    colaborador_id: Number(rows[0].colaborador_id),
+  };
+}
+
+/**
+ * O UPDATE do fechamento manual (D1:a), com a régua INTEIRA repetida no
+ * predicado — guarda própria, no molde de `suspensoesAlemDe`: janela VIVA
+ * (fim nulo ou ainda no futuro de rh.hoje()), novo fim nunca antes do início
+ * (retroativo até ali é aceito) e SÓ ENCURTANDO (novo fim antes do fim atual).
+ * O serviço valida antes com mensagem amigável; aqui o rowCount é a verdade —
+ * zero linhas significa que a régua (ou uma corrida) barrou, e nada mudou.
+ */
+export async function encurtarSuspensaoViva(
+  cliente: PoolClient,
+  id: number,
+  novoFim: string
+): Promise<boolean> {
+  const { rowCount } = await cliente.query(
+    `UPDATE rh.medida_disciplinar m
+        SET fim = $2
+      WHERE m.id = $1
+        AND m.inicio IS NOT NULL
+        AND (m.fim IS NULL OR m.fim > rh.hoje())
+        AND $2::date >= m.inicio
+        AND (m.fim IS NULL OR $2::date < m.fim)`,
+    [id, novoFim]
+  );
+  return (rowCount ?? 0) > 0;
+}
+
 export interface SuspensaoAberta {
   id: number;
   tipo_nome: string;

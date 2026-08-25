@@ -3,19 +3,28 @@ import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { PayloadSessao } from "../identidade/esquemas";
-import { inserirEvento } from "../colaboradores/repositorio";
+import { hojeNaOperacao } from "../colaboradores/esquemas";
+import {
+  colaboradorIdDoUsuario,
+  inserirEvento,
+} from "../colaboradores/repositorio";
+import { carregarLideradosDaSubArvore } from "../organograma/subarvore";
 import { notificar } from "../notificacoes/servico";
 import {
   chaveDeNome,
   CriacaoTipoMedida,
+  FechamentoSuspensao,
   RegistroMedida,
+  validarEncurtamentoDeSuspensao,
   validarPeriodoDaMedida,
 } from "./esquemas";
 import {
   buscarColaboradorDaMedida,
+  buscarMedidaParaFechar,
   buscarTipoParaAtualizar,
   ContagemTipo,
   contarPorTipo,
+  encurtarSuspensaoViva,
   inativarTipo,
   inserirMedida,
   inserirTipo,
@@ -30,6 +39,8 @@ import {
 const TABELA_MEDIDA = "rh.medida_disciplinar";
 const TABELA_TIPO = "rh.tipo_medida_disciplinar";
 const CHAVE_VER = "rh.disciplinar.ver";
+/** Alcance de EQUIPE do gestor (0084, decisão A3:a): sub-árvore, só o vínculo liderado. */
+const CHAVE_VER_EQUIPE = "rh.disciplinar.ver.equipe";
 const RECURSO_VER = "colaborador.medida_disciplinar";
 
 function truncar(texto: string, limite: number): string {
@@ -52,15 +63,36 @@ export interface VisaoDisciplinar {
 }
 
 /**
- * A leitura das medidas de UM colaborador. O ROTA já exigiu rh.disciplinar.ver;
- * aqui, ao devolver, gravamos a trilha (eixo 8) com a chave que autorizou —
+ * A leitura das medidas de UM colaborador. A rota já exigiu uma das DUAS
+ * chaves (0084, decisão A3:a): a global `rh.disciplinar.ver` (dp/diretoria)
+ * continua como sempre foi; a de equipe `rh.disciplinar.ver.equipe` alcança SÓ
+ * os vínculos que quem pergunta LIDERA na sub-árvore — nem os próprios
+ * vínculos (gestor não abre o próprio disciplinar), nem o contrato
+ * anterior/de outro CNPJ do liderado (a 0046 barrou o cross-vínculo de
+ * propósito; a medida pertence ao vínculo, e só o vínculo liderado entra).
+ *
+ * Ao devolver, gravamos a trilha (eixo 8) com a chave que DE FATO autorizou —
  * abrir o registro disciplinar de alguém é leitura sensível mesmo quando ele
  * está vazio ("esta pessoa não tem medidas" também é informação restrita).
  */
 export async function listarMedidasColaborador(
   sessao: PayloadSessao,
-  colaboradorId: number
+  colaboradorId: number,
+  chavesConcedidas: ReadonlySet<string> = new Set([CHAVE_VER])
 ): Promise<VisaoDisciplinar> {
+  const global = chavesConcedidas.has(CHAVE_VER);
+  if (!global) {
+    // Só a chave de equipe: o alvo tem que ser um vínculo LIDERADO da minha
+    // sub-árvore. Fora dela = ausência (o mesmo 404 de inexistente) — o cartão
+    // da ficha nem aparece.
+    const meuVinculo = await colaboradorIdDoUsuario(sessao.usuario_id);
+    const liderados =
+      meuVinculo === null ? [] : await carregarLideradosDaSubArvore(meuVinculo);
+    if (!liderados.includes(colaboradorId)) {
+      throw new ErroHttp(404, "Colaborador não encontrado.");
+    }
+  }
+  const chaveDaLeitura = global ? CHAVE_VER : CHAVE_VER_EQUIPE;
   const { medidas, historico } = await comTransacao(
     sessao.usuario_id,
     async (cliente) => {
@@ -68,7 +100,7 @@ export async function listarMedidasColaborador(
       const historico = await contarPorTipo(cliente, colaboradorId);
       await registrarLeituraSensivel(cliente, {
         usuarioId: sessao.usuario_id,
-        chavePermissao: CHAVE_VER,
+        chavePermissao: chaveDaLeitura,
         recurso: RECURSO_VER,
         registroId: String(colaboradorId),
       });
@@ -201,6 +233,81 @@ export async function registrarMedida(
   });
 
   return criada;
+}
+
+// ------------------------------------------------------------------ fechar/encurtar suspensão (decisão D1:a)
+
+/**
+ * Fecha (encurta) manualmente a janela de uma suspensão. Regras do dono, D1:a:
+ * SÓ ENCURTAR — nunca estender nem reabrir (estender = medida nova); data
+ * retroativa aceita até o início da janela; a chave é a MESMA de quem registra
+ * (`rh.disciplinar.registrar`, conferida na rota); tudo auditado, com eco
+ * NEUTRO na linha do tempo (o motivo nunca vaza pela timeline).
+ *
+ * A régua roda duas vezes de propósito: aqui (validarEncurtamentoDeSuspensao,
+ * mensagem amigável por campo) e dentro do UPDATE (encurtarSuspensaoViva, com
+ * rh.hoje() e rowCount) — a segunda é a que segura corrida e relógio.
+ * O chamador do desligamento (fecharSuspensao, eixo 10) continua intacto.
+ */
+export async function fecharSuspensaoManual(
+  sessao: PayloadSessao,
+  medidaId: number,
+  dados: FechamentoSuspensao
+): Promise<MedidaDisciplinar> {
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    const medida = await buscarMedidaParaFechar(cliente, medidaId);
+    if (!medida) {
+      throw new ErroHttp(404, "Medida disciplinar não encontrada.");
+    }
+    const problema = validarEncurtamentoDeSuspensao(
+      { inicio: medida.inicio, fim: medida.fim },
+      dados.fim,
+      hojeNaOperacao()
+    );
+    if (problema) {
+      throw new ErroHttpCampo(400, problema.mensagem, problema.campo);
+    }
+    const encurtou = await encurtarSuspensaoViva(cliente, medidaId, dados.fim);
+    if (!encurtou) {
+      throw new ErroHttp(
+        409,
+        "A janela mudou enquanto você editava — recarregue e confira o fim atual."
+      );
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "disciplinar.suspensao.encerrar",
+      tabela: TABELA_MEDIDA,
+      registroId: String(medidaId),
+      diff: {
+        Tipo: { de: null, para: medida.tipo_nome },
+        "Fim da suspensão": {
+          de: medida.fim ? formatarData(medida.fim) : "em aberto",
+          para: `${formatarData(dados.fim)} (encerrada manualmente)`,
+        },
+      },
+    });
+    // Eco NEUTRO na timeline, o mesmo do registro: payload restrita esconde a
+    // linha de quem não tem a chave, e o resumo não carrega motivo nenhum.
+    await inserirEvento(cliente, {
+      colaborador_id: medida.colaborador_id,
+      tipo: "disciplinar",
+      ocorrido_em: `${dados.fim}T00:00:00Z`,
+      origem_tabela: TABELA_MEDIDA,
+      origem_id: medidaId,
+      resumo:
+        "Janela de medida disciplinar encerrada antecipadamente (detalhe no cartão Disciplinar)",
+      payload: { restrita: true, tipo_chave: medida.tipo_chave },
+      registrado_por: sessao.usuario_id,
+    });
+    const medidas = await listarMedidas(cliente, medida.colaborador_id);
+    const atualizada = medidas.find((item) => item.id === medidaId);
+    if (!atualizada) {
+      throw new ErroHttp(500, "Falha ao reler a medida encerrada.");
+    }
+    return atualizada;
+  });
 }
 
 // ------------------------------------------------------------------ catálogo de tipos (administrar — molde 0054)

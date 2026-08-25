@@ -107,9 +107,12 @@ function BlocoPontoFicha({ colaboradorId }: { colaboradorId: number }) {
 }
 
 // ------------------------------------------------------------------ bloco disciplinar (restrito — eixo 4/8)
-// Conteúdo SEMPRE restrito (dp/diretoria). O cartão busca o próprio dado
-// (`/api/disciplinar?colaborador_id=`, chave `rh.disciplinar.ver` + trilha de
-// leitura no serviço). 403 => o cartão simplesmente NÃO aparece — ausência, não
+// Conteúdo SEMPRE restrito. O cartão busca o próprio dado
+// (`/api/disciplinar?colaborador_id=`) e DUAS chaves o abrem, com alcances
+// diferentes (0084, decisão A3:a): `rh.disciplinar.ver` (global — dp e
+// diretoria) e `rh.disciplinar.ver.equipe` (gestor — sub-árvore, só o vínculo
+// que ele lidera; o serviço confere o alvo). Trilha de leitura no serviço,
+// sempre. 403/404 => o cartão simplesmente NÃO aparece — ausência, não
 // máscara. O escalonamento é MANUAL: mostramos o histórico por tipo para o DP
 // decidir; o sistema não escalona sozinho.
 
@@ -172,6 +175,12 @@ function BlocoDisciplinarFicha({
   // Erro de CARGA (distinto do `erro` do formulário): 5xx/timeout/rede não
   // escondem o cartão — só sinalizam para tentar de novo. Só o 403 esconde.
   const [erroCarregar, setErroCarregar] = useState<string | null>(null);
+  // Fechamento manual da suspensão (D1:a): qual medida está com o formulário
+  // aberto, o novo fim digitado e o erro daquela ação.
+  const [fechandoId, setFechandoId] = useState<number | null>(null);
+  const [novoFim, setNovoFim] = useState("");
+  const [fechandoEmCurso, setFechandoEmCurso] = useState(false);
+  const [erroFechar, setErroFechar] = useState<string | null>(null);
 
   // Recarrega após registrar. Fora de effect (é ação de usuário) — pode
   // setState direto.
@@ -181,8 +190,9 @@ function BlocoDisciplinarFicha({
         `/api/disciplinar?colaborador_id=${colaboradorId}`,
         { cache: "no-store" }
       );
-      if (resposta.status === 403) {
-        // Só o 403 esconde: ausência legítima da chave.
+      if (resposta.status === 403 || resposta.status === 404) {
+        // 403 = sem a chave; 404 = fora do alcance da chave de equipe (A3:a).
+        // Os dois são ausência legítima — só eles escondem o cartão.
         setVisivel(false);
         return;
       }
@@ -207,9 +217,10 @@ function BlocoDisciplinarFicha({
           { cache: "no-store" }
         );
         if (!ativo) return;
-        if (resposta.status === 403) {
-          // Só o 403 esconde o cartão: ausência legítima da chave. Qualquer
-          // outro erro (5xx/timeout/rede) é instabilidade, NÃO "ficha limpa" —
+        if (resposta.status === 403 || resposta.status === 404) {
+          // 403 = sem a chave; 404 = fora do alcance da chave de equipe.
+          // Ausência legítima esconde o cartão. Qualquer outro erro
+          // (5xx/timeout/rede) é instabilidade, NÃO "ficha limpa" —
           // esconder aqui seria falso-negativo (o DP lê ausência onde há dado).
           setVisivel(false);
           return;
@@ -267,6 +278,41 @@ function BlocoDisciplinarFicha({
     } finally {
       setSalvando(false);
     }
+  }
+
+  /**
+   * Fechamento manual da suspensão (decisão D1:a): só encurta — o servidor
+   * recusa estender/reabrir e aceita retroativo até o início da janela.
+   */
+  async function fecharSuspensao(medidaId: number) {
+    setFechandoEmCurso(true);
+    setErroFechar(null);
+    try {
+      const resposta = await fetch(`/api/disciplinar/${medidaId}/fechar`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fim: novoFim }),
+      });
+      if (!resposta.ok) {
+        setErroFechar(await lerErro(resposta));
+        return;
+      }
+      setFechandoId(null);
+      setNovoFim("");
+      await recarregar();
+    } catch {
+      setErroFechar("Falha de conexão. Tente novamente.");
+    } finally {
+      setFechandoEmCurso(false);
+    }
+  }
+
+  /** Janela que ainda pode ser encurtada: tem início e o fim não passou. */
+  function janelaViva(medida: MedidaFicha): boolean {
+    return (
+      medida.inicio !== null &&
+      (medida.fim === null || medida.fim > HOJE_NA_OPERACAO)
+    );
   }
 
   if (!visivel) return null;
@@ -486,6 +532,61 @@ function BlocoDisciplinarFicha({
                 {medida.acao_combinada && (
                   <div className={estilos.itemExtra}>
                     Ação combinada: {medida.acao_combinada}
+                  </div>
+                )}
+                {/* D1:a — fechar/encurtar a suspensão: só quem registra
+                    (rh.disciplinar.registrar) e só janela viva. O servidor
+                    recusa estender/reabrir; retroativo vale até o início. */}
+                {podeRegistrar && janelaViva(medida) && (
+                  <div style={{ marginTop: 8 }}>
+                    {fechandoId !== medida.id ? (
+                      <button
+                        className={estilos.botaoLinha}
+                        type="button"
+                        onClick={() => {
+                          setErroFechar(null);
+                          setNovoFim("");
+                          setFechandoId(medida.id);
+                        }}
+                      >
+                        Encerrar suspensão antes do fim
+                      </button>
+                    ) : (
+                      <div className={estilos.itemExtra}>
+                        <label htmlFor={`mdNovoFim${medida.id}`}>
+                          Novo fim (só encurta; retroativo até{" "}
+                          {medida.inicio ? formatarData(medida.inicio) : "o início"}
+                          ):{" "}
+                        </label>
+                        <input
+                          id={`mdNovoFim${medida.id}`}
+                          type="date"
+                          min={medida.inicio ?? undefined}
+                          max={medida.fim ?? undefined}
+                          value={novoFim}
+                          onChange={(e) => setNovoFim(e.target.value)}
+                        />{" "}
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          disabled={fechandoEmCurso || novoFim === ""}
+                          onClick={() => void fecharSuspensao(medida.id)}
+                        >
+                          {fechandoEmCurso ? "Encerrando…" : "Confirmar"}
+                        </button>{" "}
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          disabled={fechandoEmCurso}
+                          onClick={() => setFechandoId(null)}
+                        >
+                          Cancelar
+                        </button>
+                        {erroFechar && (
+                          <p className={estilos.erro}>{erroFechar}</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

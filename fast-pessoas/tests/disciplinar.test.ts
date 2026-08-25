@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   chaveDeNome,
   esquemaRegistroMedida,
+  validarEncurtamentoDeSuspensao,
   validarPeriodoDaMedida,
 } from "../src/dominios/disciplinar/esquemas";
 
@@ -98,6 +99,94 @@ test("registro pontual (advertência) sem janela passa na borda", () => {
     aplicada_em: "2026-08-14",
   });
   assert.equal(analise.success, true);
+});
+
+// ---------------------------------------------------------------- fechar/encurtar suspensão (D1:a)
+// Regras do dono (docs/20, D1:a): SÓ encurtar o fim — nunca estender nem
+// reabrir (estender = medida nova); data retroativa aceita até o INÍCIO da
+// janela; janela cujo fim já passou é história, não se reescreve.
+
+const HOJE = "2026-08-25";
+
+test("encurtar o fim de uma suspensão viva passa", () => {
+  const problema = validarEncurtamentoDeSuspensao(
+    { inicio: "2026-08-20", fim: "2026-08-30" },
+    "2026-08-26",
+    HOJE
+  );
+  assert.equal(problema, null);
+});
+
+test("retroativo é aceito ATÉ o início da janela — no início inclusive", () => {
+  assert.equal(
+    validarEncurtamentoDeSuspensao(
+      { inicio: "2026-08-20", fim: "2026-08-30" },
+      "2026-08-20",
+      HOJE
+    ),
+    null
+  );
+});
+
+test("novo fim antes do início da janela é recusado", () => {
+  const problema = validarEncurtamentoDeSuspensao(
+    { inicio: "2026-08-20", fim: "2026-08-30" },
+    "2026-08-19",
+    HOJE
+  );
+  assert.notEqual(problema, null);
+  assert.equal(problema?.campo, "fim");
+});
+
+test("estender a suspensão é recusado — estender é medida nova", () => {
+  const problema = validarEncurtamentoDeSuspensao(
+    { inicio: "2026-08-20", fim: "2026-08-30" },
+    "2026-09-15",
+    HOJE
+  );
+  assert.notEqual(problema, null);
+});
+
+test("repetir o fim atual também é recusado — não houve encurtamento", () => {
+  assert.notEqual(
+    validarEncurtamentoDeSuspensao(
+      { inicio: "2026-08-20", fim: "2026-08-30" },
+      "2026-08-30",
+      HOJE
+    ),
+    null
+  );
+});
+
+test("janela cujo fim já passou não se reabre nem se reescreve", () => {
+  const problema = validarEncurtamentoDeSuspensao(
+    { inicio: "2026-07-01", fim: "2026-07-05" },
+    "2026-07-03",
+    HOJE
+  );
+  assert.notEqual(problema, null);
+});
+
+test("medida pontual (sem janela) não tem o que encerrar", () => {
+  const problema = validarEncurtamentoDeSuspensao(
+    { inicio: null, fim: null },
+    "2026-08-26",
+    HOJE
+  );
+  assert.notEqual(problema, null);
+});
+
+test("janela com fim em aberto (schema permite) aceita o fechamento", () => {
+  // registrarMedida sempre grava fim, mas o schema da 0080 permite fim nulo —
+  // e a régua não pode recusar exatamente o caso que mais precisa de fechamento.
+  assert.equal(
+    validarEncurtamentoDeSuspensao(
+      { inicio: "2026-08-20", fim: null },
+      "2026-08-26",
+      HOJE
+    ),
+    null
+  );
 });
 
 // ---------------------------------------------------------------- chave derivada do nome (catálogo)
