@@ -37,10 +37,12 @@ import { EntradaCarga } from "./esquemas";
 import {
   analisarLinhaCargo,
   analisarLinhaEstrutura,
+  CargoExistente,
   chaveDeNome,
   COLUNAS_CARGOS,
   COLUNAS_ESTRUTURA,
   decidirEmpresaDaLinha,
+  divergenciaDeCargoHomonimo,
   dividirLinhas,
   ehCabecalho,
   EmpresaExistente,
@@ -306,10 +308,21 @@ export async function importarCargos(
   const linhas = exigirLinhasUteis(entrada.conteudo);
   const hoje = await hojeDeSaoPaulo();
 
-  // Identidade do cargo: nome da versão ATIVA, normalizado.
-  const cargos = new Set<string>();
+  // Identidade do cargo: nome da versão ATIVA, normalizado — com nível e
+  // faixa (em centavos) junto, para o homônimo divergente virar rejeição (B3),
+  // não "já existia" silencioso.
+  const cargos = new Map<string, CargoExistente>();
   for (const cargo of await listarCargosAdministraveis()) {
-    if (cargo.nome) cargos.add(chaveDeNome(cargo.nome));
+    if (!cargo.nome) continue;
+    cargos.set(chaveDeNome(cargo.nome), {
+      nivel_id: cargo.nivel_hierarquico_id,
+      // O resumo fala em REAIS (NUMERIC de duas casas); a comparação é em
+      // centavo inteiro (eixo 5) — Math.round fecha o resto binário do float.
+      faixa_min_centavos:
+        cargo.faixa_min === null ? null : Math.round(cargo.faixa_min * 100),
+      faixa_max_centavos:
+        cargo.faixa_max === null ? null : Math.round(cargo.faixa_max * 100),
+    });
   }
   // Nível hierárquico: por NOME do catálogo administrável (A6:a) — a carga não
   // cria nível; nome fora do catálogo é rejeição com motivo.
@@ -336,11 +349,8 @@ export async function importarCargos(
     }
     const dados = analise.dados;
 
-    if (cargos.has(chaveDeNome(dados.nome))) {
-      jaExistiam += 1;
-      continue;
-    }
-
+    // O nível resolve ANTES do teste de homônimo: tanto a criação quanto a
+    // comparação de divergência (B3) precisam do id do catálogo.
     let nivelId: number | null = null;
     if (dados.nivel !== null) {
       nivelId = niveis.get(chaveDeNome(dados.nivel)) ?? null;
@@ -352,6 +362,27 @@ export async function importarCargos(
         });
         continue;
       }
+    }
+
+    const existente = cargos.get(chaveDeNome(dados.nome));
+    if (existente) {
+      // B3: homônimo com nível/faixa divergentes NÃO é "já existia" — engolir
+      // a linha perdia a posição do quadro em silêncio. Igual por inteiro
+      // (no que a linha informa) segue idempotente.
+      const divergencia = divergenciaDeCargoHomonimo(
+        {
+          nivel_id: nivelId,
+          faixa_min_centavos: dados.faixa_min_centavos,
+          faixa_max_centavos: dados.faixa_max_centavos,
+        },
+        existente
+      );
+      if (divergencia) {
+        rejeicoes.push({ linha: numero, motivo: divergencia, conteudo: bruta });
+      } else {
+        jaExistiam += 1;
+      }
+      continue;
     }
 
     try {
@@ -369,7 +400,11 @@ export async function importarCargos(
             }
           : {}),
       });
-      cargos.add(chaveDeNome(dados.nome));
+      cargos.set(chaveDeNome(dados.nome), {
+        nivel_id: nivelId,
+        faixa_min_centavos: dados.faixa_min_centavos,
+        faixa_max_centavos: dados.faixa_max_centavos,
+      });
       aceitas += 1;
     } catch (erro) {
       rejeicoes.push({ linha: numero, motivo: motivoDoErro(erro), conteudo: bruta });

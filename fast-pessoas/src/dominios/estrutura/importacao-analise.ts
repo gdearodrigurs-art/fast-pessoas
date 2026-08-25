@@ -357,6 +357,42 @@ export function analisarLinhaEstrutura(
 
 // ------------------------------------------------------------------ cargos
 
+/** O que o importador precisa saber de um cargo que JÁ existe (versão ativa). */
+export interface CargoExistente {
+  nivel_id: number | null;
+  faixa_min_centavos: number | null;
+  faixa_max_centavos: number | null;
+}
+
+/**
+ * B3: cargo homônimo só é "já existia" quando o que a linha INFORMA bate por
+ * inteiro com o catálogo — nível e faixa divergentes eram engolidos em
+ * silêncio e a posição do quadro se perdia. Coluna vazia na linha não afirma
+ * nada e não diverge. Devolve o motivo da rejeição, ou null quando é mesmo
+ * "já existia".
+ */
+export function divergenciaDeCargoHomonimo(
+  linha: CargoExistente,
+  existente: CargoExistente
+): string | null {
+  const divergencias: string[] = [];
+  if (linha.nivel_id !== null && linha.nivel_id !== existente.nivel_id) {
+    divergencias.push("nível");
+  }
+  if (
+    linha.faixa_min_centavos !== null &&
+    (linha.faixa_min_centavos !== existente.faixa_min_centavos ||
+      linha.faixa_max_centavos !== existente.faixa_max_centavos)
+  ) {
+    divergencias.push("faixa salarial");
+  }
+  if (divergencias.length === 0) return null;
+  return (
+    `Cargo homônimo já existe com ${divergencias.join(" e ")} diferente — ` +
+    "o catálogo não distingue cargos pelo nome; ajuste o nome na planilha ou edite o cargo pela tela"
+  );
+}
+
 export function analisarLinhaCargo(
   colunasBrutas: string[]
 ): Analise<LinhaCargo> {

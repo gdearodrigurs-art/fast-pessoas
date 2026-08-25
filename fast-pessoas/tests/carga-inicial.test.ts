@@ -6,6 +6,7 @@ import {
   analisarLinhaEstrutura,
   chaveDeNome,
   decidirEmpresaDaLinha,
+  divergenciaDeCargoHomonimo,
   dividirLinhas,
   ehCabecalho,
   EmpresaExistente,
@@ -254,6 +255,68 @@ test("cargo sem nível e sem faixa é válido — as colunas são opcionais", ()
     assert.equal(analise.dados.nivel, null);
     assert.equal(analise.dados.faixa_min_centavos, null);
   }
+});
+
+test("B3: cargo homônimo com nível ou faixa DIVERGENTE rejeita — nunca vira 'já existia'", () => {
+  // O caso exato do defeito: a linha trazia nível/faixa diferentes do
+  // catálogo e era engolida — a posição do quadro se perdia em silêncio.
+  const existente = {
+    nivel_id: 1,
+    faixa_min_centavos: 240000,
+    faixa_max_centavos: 380000,
+  };
+
+  const nivelDiverge = divergenciaDeCargoHomonimo(
+    { nivel_id: 2, faixa_min_centavos: 240000, faixa_max_centavos: 380000 },
+    existente
+  );
+  assert.notEqual(nivelDiverge, null);
+  assert.match(nivelDiverge ?? "", /nível diferente/);
+  assert.match(nivelDiverge ?? "", /não distingue cargos pelo nome/);
+
+  const faixaDiverge = divergenciaDeCargoHomonimo(
+    { nivel_id: 1, faixa_min_centavos: 250000, faixa_max_centavos: 380000 },
+    existente
+  );
+  assert.match(faixaDiverge ?? "", /faixa salarial diferente/);
+
+  const tudoDiverge = divergenciaDeCargoHomonimo(
+    { nivel_id: 2, faixa_min_centavos: 100000, faixa_max_centavos: 200000 },
+    existente
+  );
+  assert.match(tudoDiverge ?? "", /nível e faixa salarial diferente/);
+
+  // A linha que informa nível onde o catálogo não tem também diverge — aceitar
+  // calada perderia a posição do quadro do mesmo jeito.
+  const catalogoSemNivel = divergenciaDeCargoHomonimo(
+    { nivel_id: 1, faixa_min_centavos: null, faixa_max_centavos: null },
+    { nivel_id: null, faixa_min_centavos: null, faixa_max_centavos: null }
+  );
+  assert.notEqual(catalogoSemNivel, null);
+});
+
+test("B3: homônimo IGUAL por inteiro (no que a linha informa) segue 'já existia'", () => {
+  const existente = {
+    nivel_id: 1,
+    faixa_min_centavos: 240000,
+    faixa_max_centavos: 380000,
+  };
+  // Igual por inteiro.
+  assert.equal(
+    divergenciaDeCargoHomonimo(
+      { nivel_id: 1, faixa_min_centavos: 240000, faixa_max_centavos: 380000 },
+      existente
+    ),
+    null
+  );
+  // Coluna vazia não afirma nada: linha só com o nome continua idempotente.
+  assert.equal(
+    divergenciaDeCargoHomonimo(
+      { nivel_id: null, faixa_min_centavos: null, faixa_max_centavos: null },
+      existente
+    ),
+    null
+  );
 });
 
 test("faixa pela metade, invertida ou ilegível rejeita com motivo", () => {
