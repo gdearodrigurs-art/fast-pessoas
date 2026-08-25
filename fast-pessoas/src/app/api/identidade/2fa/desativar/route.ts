@@ -1,7 +1,7 @@
 import { esquemaDesativacao2fa } from "@/dominios/identidade/esquemas";
 import { desativar2fa } from "@/dominios/identidade/servico";
 import { responderErro } from "@/lib/http";
-import { ErroHttp, lerSessao } from "@/lib/sessao";
+import { ErroHttp, garantirUsuarioAtivo, lerSessao } from "@/lib/sessao";
 
 export async function POST(request: Request) {
   try {
@@ -9,6 +9,8 @@ export async function POST(request: Request) {
     if (!sessao) {
       throw new ErroHttp(401, "Não autenticado");
     }
+    // A7: conta desativada não mexe no próprio 2FA — reconferência no banco.
+    await garantirUsuarioAtivo(sessao.usuario_id);
 
     const corpo = await request.json().catch(() => null);
     const analise = esquemaDesativacao2fa.safeParse(corpo);
