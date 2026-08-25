@@ -245,39 +245,117 @@ export interface ModeloResumo {
   nome: string;
   padrao: boolean;
   status: string;
-  etapas: { nome: string; tipo: string; ordem: number }[];
+  /** Versão anterior que este modelo reformulou — o fio da série (0076). */
+  continua_de: number | null;
+  inicio_vigencia: string | null;
+  fim_vigencia: string | null;
+  etapas: { id: number; nome: string; tipo: string; ordem: number }[];
   /** Quantas vagas congelaram esta versão do modelo. */
   vagas_usando: number;
 }
 
+interface LinhaModelo extends Record<string, unknown> {
+  id: string;
+  nome: string;
+  padrao: boolean;
+  status: string;
+  continua_de: string | null;
+  inicio_vigencia: string | null;
+  fim_vigencia: string | null;
+  vagas_usando: number;
+  etapas: { id: number; nome: string; tipo: string; ordem: number }[];
+}
+
+const SELECT_MODELOS = `
+  SELECT m.id, m.nome, m.padrao, m.status, m.continua_de,
+         m.inicio_vigencia::text AS inicio_vigencia,
+         m.fim_vigencia::text AS fim_vigencia,
+         (SELECT count(*) FROM rh.vaga v WHERE v.modelo_versao_id = m.id)::int
+           AS vagas_usando,
+         COALESCE(
+           json_agg(
+             json_build_object('id', me.etapa_selecao_versao_id,
+                               'nome', e.nome, 'tipo', e.tipo, 'ordem', me.ordem)
+             ORDER BY me.ordem
+           ) FILTER (WHERE me.id IS NOT NULL),
+           '[]'
+         ) AS etapas
+    FROM rh.modelo_selecao_versao m
+    LEFT JOIN rh.modelo_selecao_etapa me ON me.modelo_versao_id = m.id
+    LEFT JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id`;
+
+function paraModelo(linha: LinhaModelo): ModeloResumo {
+  return {
+    ...linha,
+    id: Number(linha.id),
+    continua_de: linha.continua_de === null ? null : Number(linha.continua_de),
+  };
+}
+
 /** Os modelos ATIVOS (o GERAL + os alternativos) com suas etapas e uso. */
 export async function listarModelos(): Promise<ModeloResumo[]> {
-  const linhas = await consultar<{
-    id: string;
-    nome: string;
-    padrao: boolean;
-    status: string;
-    vagas_usando: number;
-    etapas: { nome: string; tipo: string; ordem: number }[];
-  }>(
-    `SELECT m.id, m.nome, m.padrao, m.status,
-            (SELECT count(*) FROM rh.vaga v WHERE v.modelo_versao_id = m.id)::int
-              AS vagas_usando,
-            COALESCE(
-              json_agg(
-                json_build_object('nome', e.nome, 'tipo', e.tipo, 'ordem', me.ordem)
-                ORDER BY me.ordem
-              ) FILTER (WHERE me.id IS NOT NULL),
-              '[]'
-            ) AS etapas
-       FROM rh.modelo_selecao_versao m
-       LEFT JOIN rh.modelo_selecao_etapa me ON me.modelo_versao_id = m.id
-       LEFT JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id
+  const linhas = await consultar<LinhaModelo>(
+    `${SELECT_MODELOS}
       WHERE m.status = 'ativa'
       GROUP BY m.id
       ORDER BY m.padrao DESC, m.nome`
   );
-  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+  return linhas.map(paraModelo);
+}
+
+/**
+ * Os modelos ENCERRADOS — o histórico da série (reformulados apontados por
+ * continua_de do sucessor, e aposentados sem substituto), mais novo primeiro.
+ */
+export async function listarModelosEncerrados(): Promise<ModeloResumo[]> {
+  const linhas = await consultar<LinhaModelo>(
+    `${SELECT_MODELOS}
+      WHERE m.status = 'encerrada'
+      GROUP BY m.id
+      ORDER BY m.fim_vigencia DESC, m.id DESC`
+  );
+  return linhas.map(paraModelo);
+}
+
+export interface ModeloParaMutacao {
+  id: number;
+  nome: string;
+  padrao: boolean;
+  status: string;
+}
+
+/** Tranca a versão do modelo para reformular/aposentar (FOR UPDATE). */
+export async function buscarModeloParaMutacao(
+  cliente: PoolClient,
+  id: number
+): Promise<ModeloParaMutacao | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    nome: string;
+    padrao: boolean;
+    status: string;
+  }>(
+    `SELECT id, nome, padrao, status
+       FROM rh.modelo_selecao_versao
+      WHERE id = $1
+      FOR UPDATE`,
+    [id]
+  );
+  return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+/** Encerra um modelo ATIVO. GREATEST protege o CHECK fim >= início. */
+export async function encerrarModelo(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.modelo_selecao_versao
+        SET status = 'encerrada',
+            fim_vigencia = GREATEST(inicio_vigencia, rh.hoje())
+      WHERE id = $1 AND status = 'ativa'`,
+    [id]
+  );
 }
 
 /**
@@ -308,16 +386,21 @@ export async function buscarNomeModelo(
   return rows.length ? rows[0].nome : null;
 }
 
-/** Cria um modelo alternativo já ATIVO (não-padrão) e devolve o id. */
+/**
+ * Cria uma versão de modelo já ATIVA e devolve o id. Modelo novo nasce com
+ * padrao=false e sem continuidade; a REFORMULAÇÃO passa continua_de (o fio da
+ * série) e herda o padrao da anterior — na mesma transação que a encerra, por
+ * causa do índice de um-padrão-ativo (0076, decisão G2).
+ */
 export async function inserirModelo(
   cliente: PoolClient,
-  nome: string
+  dados: { nome: string; padrao: boolean; continua_de: number | null }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
-    `INSERT INTO rh.modelo_selecao_versao (nome, padrao, status, inicio_vigencia)
-     VALUES ($1, false, 'ativa', rh.hoje())
+    `INSERT INTO rh.modelo_selecao_versao (nome, padrao, status, inicio_vigencia, continua_de)
+     VALUES ($1, $2, 'ativa', rh.hoje(), $3)
      RETURNING id`,
-    [nome]
+    [dados.nome, dados.padrao, dados.continua_de]
   );
   return Number(rows[0].id);
 }

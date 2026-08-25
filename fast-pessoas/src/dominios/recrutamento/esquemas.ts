@@ -189,6 +189,69 @@ export const esquemaCriacaoModelo = z.object({
 
 export type CriacaoModelo = z.infer<typeof esquemaCriacaoModelo>;
 
+// ------------------------------------------------------------------ desenho do modelo de processo
+
+export interface EtapaCatalogoSelecao {
+  id: number;
+  tipo: string;
+  nome: string;
+}
+
+export type SequenciaValidada =
+  | { ok: true; etapas: EtapaCatalogoSelecao[] }
+  | { ok: false; status: 400 | 409; mensagem: string };
+
+/**
+ * A regra de desenho de um modelo de processo, pura (criar E reformular
+ * passam por aqui): etapas do catálogo vigente, sem repetição, e a OFERTA
+ * como ÚLTIMA etapa — o kanban trata a oferta como o fim do processo (esconde
+ * "Avançar" na última etapa e só oferece "Registrar oferta" numa etapa tipo
+ * oferta). Uma etapa DEPOIS da oferta deixaria a candidatura num beco: sem
+ * avançar, sem ofertar e sem como recriá-la (UNIQUE vaga+candidato). Como o
+ * catálogo tem no máximo uma etapa de oferta ativa, exigir que a última seja
+ * de oferta já garante presença + terminalidade. O serviço traduz o resultado
+ * em erro HTTP; aqui é só a regra, sem dependência de infraestrutura.
+ */
+export function validarSequenciaDeEtapas(
+  catalogo: EtapaCatalogoSelecao[],
+  etapaIds: number[]
+): SequenciaValidada {
+  const porId = new Map(catalogo.map((etapa) => [etapa.id, etapa]));
+  const vistos = new Set<number>();
+  const escolhidas: EtapaCatalogoSelecao[] = [];
+  for (const id of etapaIds) {
+    if (vistos.has(id)) {
+      return {
+        ok: false,
+        status: 400,
+        mensagem: "A mesma etapa aparece duas vezes no modelo.",
+      };
+    }
+    const etapa = porId.get(id);
+    if (!etapa) {
+      return {
+        ok: false,
+        status: 409,
+        mensagem: "Uma das etapas escolhidas não existe ou não está ativa.",
+      };
+    }
+    vistos.add(id);
+    escolhidas.push(etapa);
+  }
+  if (
+    escolhidas.length === 0 ||
+    escolhidas[escolhidas.length - 1].tipo !== "oferta"
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      mensagem:
+        "A etapa de oferta tem que ser a última do modelo — é onde a proposta é registrada e o processo termina; nada pode vir depois dela.",
+    };
+  }
+  return { ok: true, etapas: escolhidas };
+}
+
 /**
  * Troca do modelo congelado de uma vaga ABERTA e SEM candidatura (decisão G1:
  * reformular um modelo NÃO migra vaga aberta — quem quiser a versão nova troca

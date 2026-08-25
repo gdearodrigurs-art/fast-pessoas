@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { CSSProperties, useEffect, useState } from "react";
 import { acaoCabecalho, Cabecalho } from "@/app/cabecalho";
-import type { EtapaAtiva } from "@/dominios/recrutamento/repositorio";
+import type { EtapaAtiva, ModeloResumo } from "@/dominios/recrutamento/repositorio";
 import type { PainelModelosSelecao } from "@/dominios/recrutamento/servico";
+import { formatarData } from "../formato";
 
 export function ModelosCliente() {
   const [dados, setDados] = useState<PainelModelosSelecao | null>(null);
@@ -14,6 +15,10 @@ export function ModelosCliente() {
 
   const [nome, setNome] = useState("");
   const [sequencia, setSequencia] = useState<EtapaAtiva[]>([]);
+  // Modelo cuja série o formulário está reformulando — null = criar do zero.
+  const [reformulando, setReformulando] = useState<ModeloResumo | null>(null);
+  // Aposentadoria pede confirmação inline no próprio cartão.
+  const [aposentando, setAposentando] = useState<number | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [erroAcao, setErroAcao] = useState<string | null>(null);
 
@@ -53,12 +58,70 @@ export function ModelosCliente() {
     sequencia.length > 0 && sequencia[sequencia.length - 1].tipo === "oferta";
   const podeSalvar = nome.trim() !== "" && ofertaEhUltima && !salvando;
 
+  // O fio da série: id → modelo (ativos + encerrados) para andar o continua_de.
+  const porId = new Map<number, ModeloResumo>(
+    [...(dados?.modelos ?? []), ...(dados?.encerrados ?? [])].map((m) => [
+      m.id,
+      m,
+    ])
+  );
+  const comSubstituto = new Set(
+    [...(dados?.modelos ?? []), ...(dados?.encerrados ?? [])]
+      .map((m) => m.continua_de)
+      .filter((id): id is number => id !== null)
+  );
+  // Aposentados: encerrados que ninguém reformulou (os reformulados aparecem
+  // como histórico da série do sucessor).
+  const aposentados = (dados?.encerrados ?? []).filter(
+    (m) => !comSubstituto.has(m.id)
+  );
+
+  function serieDe(modelo: ModeloResumo): ModeloResumo[] {
+    const cadeia: ModeloResumo[] = [];
+    let atual = modelo.continua_de;
+    while (atual !== null) {
+      const anterior = porId.get(atual);
+      if (!anterior) break;
+      cadeia.push(anterior);
+      atual = anterior.continua_de;
+    }
+    return cadeia;
+  }
+
+  function limparFormulario() {
+    setNome("");
+    setSequencia([]);
+    setReformulando(null);
+  }
+
+  function iniciarReformulacao(modelo: ModeloResumo) {
+    const catalogo = dados?.catalogo ?? [];
+    // Pré-carrega a sequência atual com as peças do catálogo vigente: casa por
+    // id e, se a versão de etapa do modelo já saiu do catálogo, pela do mesmo
+    // tipo — o reformular só aceita etapas ativas.
+    const prefil = modelo.etapas
+      .map(
+        (e) =>
+          catalogo.find((c) => c.id === e.id) ??
+          catalogo.find((c) => c.tipo === e.tipo)
+      )
+      .filter((e): e is EtapaAtiva => e !== undefined);
+    setReformulando(modelo);
+    setNome(modelo.nome);
+    setSequencia(prefil);
+    setAposentando(null);
+    setErroAcao(null);
+  }
+
   async function salvar() {
     if (!podeSalvar) return;
     setSalvando(true);
     setErroAcao(null);
     try {
-      const resposta = await fetch("/api/recrutamento/modelos", {
+      const url = reformulando
+        ? `/api/recrutamento/modelos/${reformulando.id}/reformular`
+        : "/api/recrutamento/modelos";
+      const resposta = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -68,11 +131,38 @@ export function ModelosCliente() {
       });
       const corpo = await resposta.json().catch(() => ({}));
       if (!resposta.ok) {
-        setErroAcao(corpo.erro ?? "Não foi possível criar o modelo.");
+        setErroAcao(
+          corpo.erro ??
+            (reformulando
+              ? "Não foi possível reformular o modelo."
+              : "Não foi possível criar o modelo.")
+        );
         return;
       }
-      setNome("");
-      setSequencia([]);
+      limparFormulario();
+      setVersao((v) => v + 1);
+    } catch {
+      setErroAcao("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function aposentar(modelo: ModeloResumo) {
+    setSalvando(true);
+    setErroAcao(null);
+    try {
+      const resposta = await fetch(
+        `/api/recrutamento/modelos/${modelo.id}/aposentar`,
+        { method: "POST" }
+      );
+      const corpo = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) {
+        setErroAcao(corpo.erro ?? "Não foi possível aposentar o modelo.");
+        return;
+      }
+      setAposentando(null);
+      if (reformulando?.id === modelo.id) limparFormulario();
       setVersao((v) => v + 1);
     } catch {
       setErroAcao("Falha de conexão. Tente novamente.");
@@ -93,9 +183,10 @@ export function ModelosCliente() {
         <p style={{ color: "#6b6763", margin: "6px 0 24px" }}>
           Um modelo é a sequência de etapas que a candidatura percorre. Toda vaga
           nova escolhe um modelo (o <strong>GERAL</strong> vem pré-selecionado) e
-          o congela na abertura — reformular um modelo depois não mexe em vaga já
-          aberta. O desenho de um modelo não muda depois de criado: para alterar,
-          crie um novo.
+          o congela na abertura. <strong>Reformular</strong> encerra a versão
+          atual e publica a nova no lugar — vaga já aberta NÃO migra: fica na
+          versão antiga, e a troca (só sem candidatura) é feita na própria vaga.{" "}
+          <strong>Aposentar</strong> encerra sem substituto.
         </p>
 
         {erro && <p style={{ color: "#c62828" }}>{erro}</p>}
@@ -105,27 +196,114 @@ export function ModelosCliente() {
           <>
             <section>
               <h2 style={tituloArea}>Modelos ativos ({dados.modelos.length})</h2>
-              {dados.modelos.map((m) => (
-                <div key={m.id} style={cartao}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 16, fontWeight: 600 }}>{m.nome}</span>
-                    {m.padrao && <span style={badgeGeral}>GERAL</span>}
+              {dados.modelos.map((m) => {
+                const serie = serieDe(m);
+                return (
+                  <div key={m.id} style={cartao}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 16, fontWeight: 600 }}>{m.nome}</span>
+                      {m.padrao && <span style={badgeGeral}>GERAL</span>}
+                      {reformulando?.id === m.id && (
+                        <span style={badgeReformulando}>reformulando…</span>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 14.5 }}>
+                      {m.etapas.map((e) => e.nome).join("  →  ")}
+                    </div>
+                    <div style={{ color: "#6b6763", fontSize: 13, marginTop: 6 }}>
+                      {m.etapas.length} etapa(s) ·{" "}
+                      {m.vagas_usando === 0
+                        ? "nenhuma vaga usando"
+                        : `${m.vagas_usando} vaga(s) usando`}
+                      {m.inicio_vigencia &&
+                        ` · vigente desde ${formatarData(m.inicio_vigencia)}`}
+                    </div>
+                    {serie.length > 0 && (
+                      <div style={blocoSerie}>
+                        <div style={rotuloSerie}>Histórico da série</div>
+                        {serie.map((anterior) => (
+                          <div key={anterior.id} style={linhaSerie}>
+                            substitui <b>{anterior.nome}</b>
+                            {anterior.inicio_vigencia && anterior.fim_vigencia && (
+                              <>
+                                {" "}
+                                ({formatarData(anterior.inicio_vigencia)} –{" "}
+                                {formatarData(anterior.fim_vigencia)})
+                              </>
+                            )}{" "}
+                            — {anterior.etapas.map((e) => e.nome).join(" → ")}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                      <button
+                        style={botaoMiudo}
+                        type="button"
+                        onClick={() => iniciarReformulacao(m)}
+                      >
+                        Reformular
+                      </button>
+                      {!m.padrao &&
+                        (aposentando === m.id ? (
+                          <>
+                            <span style={{ fontSize: 13, color: "#8a6d00" }}>
+                              Aposentar? Sai da oferta de vaga nova; vagas que o
+                              congelaram continuam nele.
+                            </span>
+                            <button
+                              style={botaoMiudoPerigo}
+                              type="button"
+                              disabled={salvando}
+                              onClick={() => aposentar(m)}
+                            >
+                              Confirmar
+                            </button>
+                            <button
+                              style={botaoMiudo}
+                              type="button"
+                              onClick={() => setAposentando(null)}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            style={botaoMiudoPerigo}
+                            type="button"
+                            onClick={() => {
+                              setAposentando(m.id);
+                              setErroAcao(null);
+                            }}
+                          >
+                            Aposentar
+                          </button>
+                        ))}
+                      {m.padrao && (
+                        <span style={{ fontSize: 13, color: "#6b6763" }}>
+                          O GERAL não se aposenta — toda vaga nova nasce dele.
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 14.5 }}>
-                    {m.etapas.map((e) => e.nome).join("  →  ")}
-                  </div>
-                  <div style={{ color: "#6b6763", fontSize: 13, marginTop: 6 }}>
-                    {m.etapas.length} etapa(s) ·{" "}
-                    {m.vagas_usando === 0
-                      ? "nenhuma vaga usando"
-                      : `${m.vagas_usando} vaga(s) usando`}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </section>
 
             <section style={{ marginTop: 12 }}>
-              <h2 style={tituloArea}>Novo modelo</h2>
+              <h2 style={tituloArea}>
+                {reformulando
+                  ? `Reformular — ${reformulando.nome}`
+                  : "Novo modelo"}
+              </h2>
+              {reformulando && (
+                <p style={{ color: "#6b6763", fontSize: 13.5, margin: "0 0 10px" }}>
+                  A versão atual será encerrada e esta nova entra no lugar, na
+                  mesma série
+                  {reformulando.padrao && " — e herda o posto de GERAL"}. Vagas
+                  abertas continuam na versão antiga.
+                </p>
+              )}
               {erroAcao && <p style={{ color: "#c62828" }}>{erroAcao}</p>}
               <input
                 style={campo}
@@ -205,16 +383,54 @@ export function ModelosCliente() {
               )}
 
               <div style={barra}>
+                {reformulando && (
+                  <button
+                    style={botaoSecundario}
+                    type="button"
+                    onClick={limparFormulario}
+                  >
+                    Cancelar reformulação
+                  </button>
+                )}
                 <button
                   style={podeSalvar ? botao : botaoDesabilitado}
                   type="button"
                   onClick={salvar}
                   disabled={!podeSalvar}
                 >
-                  {salvando ? "Criando…" : "Criar modelo"}
+                  {salvando
+                    ? "Salvando…"
+                    : reformulando
+                      ? "Publicar versão nova"
+                      : "Criar modelo"}
                 </button>
               </div>
             </section>
+
+            {aposentados.length > 0 && (
+              <section style={{ marginTop: 12 }}>
+                <h2 style={tituloArea}>Aposentados ({aposentados.length})</h2>
+                {aposentados.map((m) => (
+                  <div key={m.id} style={cartaoEncerrado}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 15, fontWeight: 600 }}>{m.nome}</span>
+                      <span style={badgeEncerrado}>encerrado</span>
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 14 }}>
+                      {m.etapas.map((e) => e.nome).join("  →  ")}
+                    </div>
+                    <div style={{ color: "#6b6763", fontSize: 13, marginTop: 6 }}>
+                      {m.inicio_vigencia && m.fim_vigencia
+                        ? `vigeu de ${formatarData(m.inicio_vigencia)} a ${formatarData(m.fim_vigencia)} · `
+                        : ""}
+                      {m.vagas_usando === 0
+                        ? "nenhuma vaga usou"
+                        : `${m.vagas_usando} vaga(s) congelaram esta versão`}
+                    </div>
+                  </div>
+                ))}
+              </section>
+            )}
           </>
         )}
       </main>
@@ -235,6 +451,11 @@ const cartao: CSSProperties = {
   borderRadius: 10,
   padding: 14,
   marginBottom: 10,
+};
+const cartaoEncerrado: CSSProperties = {
+  ...cartao,
+  background: "#f2f0ed",
+  color: "#4b4845",
 };
 const campo: CSSProperties = {
   width: "100%",
@@ -270,6 +491,30 @@ const botaoDesabilitado: CSSProperties = {
   background: "#b9c2d0",
   cursor: "not-allowed",
 };
+const botaoSecundario: CSSProperties = {
+  background: "#fff",
+  color: "#1c3b6e",
+  border: "1px solid #cfcbc6",
+  borderRadius: 6,
+  padding: "8px 14px",
+  font: "inherit",
+  cursor: "pointer",
+};
+const botaoMiudo: CSSProperties = {
+  background: "#fff",
+  color: "#1c3b6e",
+  border: "1px solid #cfcbc6",
+  borderRadius: 6,
+  padding: "4px 10px",
+  font: "inherit",
+  fontSize: 13,
+  cursor: "pointer",
+};
+const botaoMiudoPerigo: CSSProperties = {
+  ...botaoMiudo,
+  color: "#c62828",
+  borderColor: "#e0b4b4",
+};
 const chip: CSSProperties = {
   background: "#fff",
   color: "#1c3b6e",
@@ -298,6 +543,41 @@ const badgeGeral: CSSProperties = {
   background: "#e7edf6",
   borderRadius: 4,
   padding: "2px 6px",
+};
+const badgeReformulando: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.5,
+  color: "#8a6d00",
+  background: "#fdf3d6",
+  borderRadius: 4,
+  padding: "2px 6px",
+};
+const badgeEncerrado: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.5,
+  color: "#6b6763",
+  background: "#e3e0dc",
+  borderRadius: 4,
+  padding: "2px 6px",
+};
+const blocoSerie: CSSProperties = {
+  marginTop: 10,
+  borderLeft: "3px solid #e3e0dc",
+  paddingLeft: 10,
+};
+const rotuloSerie: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  color: "#6b6763",
+};
+const linhaSerie: CSSProperties = {
+  fontSize: 13,
+  color: "#4b4845",
+  marginTop: 4,
 };
 const tagOferta: CSSProperties = {
   marginLeft: 8,

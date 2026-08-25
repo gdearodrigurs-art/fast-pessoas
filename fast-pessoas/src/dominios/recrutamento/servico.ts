@@ -38,6 +38,7 @@ import {
   Movimentacao,
   RespostaOferta,
   TrocaModeloVaga,
+  validarSequenciaDeEtapas,
   ROTULOS_MOTIVO_MOVIMENTACAO,
   ROTULOS_MOTIVO_REQUISICAO,
   ROTULOS_RECOMENDACAO,
@@ -59,6 +60,7 @@ import {
   buscarEtapasDoModelo,
   buscarModeloAtivo,
   buscarModeloPadrao,
+  buscarModeloParaMutacao,
   buscarNomeModelo,
   buscarFaixaVigente,
   buscarOfertaParaMutacao,
@@ -69,6 +71,7 @@ import {
   CandidaturaKanban,
   CargoDisponivel,
   contarCandidaturasDaVaga,
+  encerrarModelo,
   EstabelecimentoDisponivel,
   EtapaAtiva,
   gravarDecisaoRequisicao,
@@ -88,6 +91,7 @@ import {
   listarEtapasAtivas,
   listarEtapasDoModelo,
   listarModelos,
+  listarModelosEncerrados,
   listarPareceres,
   listarRequisicoes,
   listarVagas,
@@ -513,6 +517,8 @@ export async function trocarModeloDaVaga(
 
 export interface PainelModelosSelecao {
   modelos: ModeloResumo[];
+  /** Histórico da série: versões encerradas (reformuladas ou aposentadas). */
+  encerrados: ModeloResumo[];
   /** Catálogo de etapas disponíveis para montar um modelo. */
   catalogo: EtapaAtiva[];
 }
@@ -527,18 +533,34 @@ export async function obterModelosSelecao(
       "Sem permissão para administrar modelos de processo."
     );
   }
-  const [modelos, catalogo] = await Promise.all([
+  const [modelos, encerrados, catalogo] = await Promise.all([
     listarModelos(),
+    listarModelosEncerrados(),
     listarEtapasAtivas(),
   ]);
-  return { modelos, catalogo };
+  return { modelos, encerrados, catalogo };
+}
+
+/**
+ * A regra de desenho (etapas do catálogo, sem repetição, oferta por último)
+ * vive pura em validarSequenciaDeEtapas — criar e reformular usam a MESMA; o
+ * que muda é só de onde nasce a versão. Aqui ela vira erro HTTP no campo.
+ */
+async function exigirSequenciaValida(etapaIds: number[]): Promise<EtapaAtiva[]> {
+  const catalogo = await listarEtapasAtivas();
+  const resultado = validarSequenciaDeEtapas(catalogo, etapaIds);
+  if (!resultado.ok) {
+    throw new ErroHttpCampo(resultado.status, resultado.mensagem, "etapa_ids");
+  }
+  // As escolhidas vêm do próprio catálogo — o cast só devolve a forma completa.
+  return resultado.etapas as EtapaAtiva[];
 }
 
 /**
  * Cria um modelo de processo alternativo (nasce ATIVO, não-padrão). As etapas
- * têm que ser do catálogo vigente, sem repetição, e conter ao menos uma etapa
- * de OFERTA — senão a candidatura nunca alcançaria a proposta (é onde o valor
- * é registrado). Os ids/ordem viram imutáveis: mudar o desenho = novo modelo.
+ * têm que ser do catálogo vigente, sem repetição, e terminar na etapa de
+ * OFERTA — senão a candidatura nunca alcançaria a proposta (é onde o valor
+ * é registrado). Os ids/ordem viram imutáveis: mudar o desenho = reformular.
  */
 export async function criarModelo(
   sessao: PayloadSessao,
@@ -551,46 +573,14 @@ export async function criarModelo(
       "Sem permissão para administrar modelos de processo."
     );
   }
-  const catalogo = await listarEtapasAtivas();
-  const porId = new Map(catalogo.map((etapa) => [etapa.id, etapa]));
-
-  const vistos = new Set<number>();
-  const escolhidas: EtapaAtiva[] = [];
-  for (const id of dados.etapa_ids) {
-    if (vistos.has(id)) {
-      throw new ErroHttpCampo(
-        400,
-        "A mesma etapa aparece duas vezes no modelo.",
-        "etapa_ids"
-      );
-    }
-    const etapa = porId.get(id);
-    if (!etapa) {
-      throw new ErroHttpCampo(
-        409,
-        "Uma das etapas escolhidas não existe ou não está ativa.",
-        "etapa_ids"
-      );
-    }
-    vistos.add(id);
-    escolhidas.push(etapa);
-  }
-  // A oferta tem que ser a ÚLTIMA etapa: o kanban trata a oferta como o fim do
-  // processo (esconde "Avançar" na última etapa e só oferece "Registrar oferta"
-  // numa etapa tipo oferta). Uma etapa DEPOIS da oferta deixaria a candidatura
-  // num beco: sem avançar, sem ofertar e sem como recriá-la. Como o catálogo tem
-  // no máximo uma etapa de oferta ativa, exigir que a última seja de oferta já
-  // garante presença + terminalidade.
-  if (escolhidas[escolhidas.length - 1].tipo !== "oferta") {
-    throw new ErroHttpCampo(
-      409,
-      "A etapa de oferta tem que ser a última do modelo — é onde a proposta é registrada e o processo termina; nada pode vir depois dela.",
-      "etapa_ids"
-    );
-  }
+  const escolhidas = await exigirSequenciaValida(dados.etapa_ids);
 
   return await comTransacao(sessao.usuario_id, async (cliente) => {
-    const id = await inserirModelo(cliente, dados.nome);
+    const id = await inserirModelo(cliente, {
+      nome: dados.nome,
+      padrao: false,
+      continua_de: null,
+    });
     await inserirEtapasNoModelo(cliente, id, dados.etapa_ids);
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
@@ -607,6 +597,113 @@ export async function criarModelo(
       },
     });
     return id;
+  });
+}
+
+/**
+ * Reformular: encerra a versão ativa e publica a nova ligada a ela
+ * (continua_de) na MESMA transação — molde do clima (0075). O modelo PADRÃO
+ * (GERAL) também passa por aqui e a versão nova HERDA padrao=true no mesmo
+ * ato (decisão G2): o índice de um-padrão-ativo da 0076 só admite um por vez,
+ * por isso a anterior é encerrada ANTES do INSERT. Vaga aberta NÃO migra
+ * (decisão G1): fica congelada na versão antiga; a troca é o PATCH da vaga.
+ */
+export async function reformularModelo(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  id: number,
+  dados: CriacaoModelo
+): Promise<number> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  const escolhidas = await exigirSequenciaValida(dados.etapa_ids);
+
+  return await comTransacao(sessao.usuario_id, async (cliente) => {
+    const anterior = await buscarModeloParaMutacao(cliente, id);
+    if (!anterior) {
+      throw new ErroHttp(404, "Modelo não encontrado.");
+    }
+    if (anterior.status !== "ativa") {
+      throw new ErroHttp(409, "Só um modelo ativo pode ser reformulado.");
+    }
+    await encerrarModelo(cliente, id);
+    const novoId = await inserirModelo(cliente, {
+      nome: dados.nome,
+      padrao: anterior.padrao,
+      continua_de: id,
+    });
+    await inserirEtapasNoModelo(cliente, novoId, dados.etapa_ids);
+    const diff: Diff = {
+      Reformula: { de: `#${id}: ${anterior.nome}`, para: dados.nome },
+      Etapas: {
+        de: null,
+        para: escolhidas.map((etapa) => etapa.nome).join(" → "),
+      },
+    };
+    if (anterior.padrao) {
+      diff["Padrão (GERAL)"] = { de: null, para: "herdado da versão anterior" };
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_MODELO,
+      registroId: String(novoId),
+      diff,
+    });
+    return novoId;
+  });
+}
+
+/**
+ * Aposentar: encerra sem substituto — o modelo sai da oferta de vaga nova.
+ * Vagas que o congelaram continuam correndo por ele (0077). O GERAL não se
+ * aposenta: toda vaga nova nasce dele; para mudar o desenho, reformule-o.
+ */
+export async function aposentarModelo(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  id: number
+): Promise<void> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const modelo = await buscarModeloParaMutacao(cliente, id);
+    if (!modelo) {
+      throw new ErroHttp(404, "Modelo não encontrado.");
+    }
+    if (modelo.status !== "ativa") {
+      throw new ErroHttp(409, "Só um modelo ativo pode ser aposentado.");
+    }
+    if (modelo.padrao) {
+      throw new ErroHttp(
+        409,
+        "O modelo GERAL (padrão) não se aposenta — toda vaga nova nasce dele. Para mudar o desenho, use “Reformular”."
+      );
+    }
+    await encerrarModelo(cliente, id);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_MODELO,
+      registroId: String(id),
+      diff: {
+        Nome: { de: null, para: modelo.nome },
+        Situação: {
+          de: "ativa",
+          para: "aposentado (encerrado, sem substituto)",
+        },
+      },
+    });
   });
 }
 
