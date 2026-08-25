@@ -19,6 +19,7 @@ import {
 } from "../demandas/esquemas";
 import { PayloadSessao } from "../identidade/esquemas";
 import { notificar } from "../notificacoes/servico";
+import { adicionarDias, periodosFaltantes } from "./calculo";
 import {
   CriacaoProgramacao,
   nivelAlerta,
@@ -63,72 +64,12 @@ const TABELA_DEMANDA = "rh.demanda";
 const CHAVE_TIPO_DEMANDA = "programacao_ferias";
 // 30 dias de direito por período: default saldo_dias da tabela (migração 0007).
 
-/**
- * ESTE É O NÚMERO DE NEGÓCIO QUE AINDA ESTÁ CHUMBADO NO MÓDULO DE FÉRIAS, e a
- * varredura de 2026-07 o deixa DECLARADO em vez de disfarçado.
- *
- * O que ele faz: `fim do aquisitivo + N meses` é a data gravada em
- * rh.periodo_aquisitivo.limite_concessivo, e é ela — e só ela — que faz o
- * painel dizer "VENCIDA — dobro (art. 137)". Ou seja, é o limite que decide se
- * o sistema afirma que a empresa deve férias em dobro. Pela régua da própria
- * casa (limite é do usuário, não do código), isto deveria ser parâmetro
- * versionado com vigência, como os divisores da folha (0038) e os parâmetros
- * da jornada (0043).
- *
- * Por que 11 e não 12: o art. 134 manda CONCEDER nos 12 meses seguintes ao
- * aquisitivo, e conceder é o gozo inteiro caber dentro da janela — com 30 dias
- * de gozo, a última data de INÍCIO fica ~1 mês antes do fim dos 12. É uma
- * INTERPRETAÇÃO, não o texto da lei, e ela vem casada com DIAS_GOZO_MAXIMO:
- * quem goza 10 dias poderia começar mais tarde e aqui não pode.
- *
- * DECISÃO DO DONO (pendência #3, 11/08/2026): SEPARAR as duas coisas que o 11
- * colava. O limite LEGAL do "dobro" (art. 134: "nos 12 meses subsequentes") é
- * 12 e é LEI, não escolha — é este número, e é o que decide "VENCIDA — dobro".
- * A migration 0062 reconciliou as linhas antigas: recomputou limite = fim + 12 e
- * desvenceu quem a régua de 11 tinha marcado cedo demais.
- *
- * O 11 vira um ALERTA administrável — o aviso antecipado ao DP, que NÃO afirma
- * dobro — numa fatia seguinte (tabela de parâmetro + tela). Pendência #3.
- */
-const MESES_LIMITE_CONCESSIVO = 12;
-
 // ------------------------------------------------------------------ datas (UTC no banco, SP na régua)
 
 function hojeSaoPaulo(): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
   }).format(new Date());
-}
-
-function paraUtc(dataIso: string): Date {
-  return new Date(`${dataIso}T00:00:00Z`);
-}
-
-function paraIso(data: Date): string {
-  return data.toISOString().slice(0, 10);
-}
-
-function adicionarAnos(dataIso: string, anos: number): string {
-  const data = paraUtc(dataIso);
-  data.setUTCFullYear(data.getUTCFullYear() + anos);
-  return paraIso(data);
-}
-
-function adicionarMeses(dataIso: string, meses: number): string {
-  const data = paraUtc(dataIso);
-  const dia = data.getUTCDate();
-  data.setUTCMonth(data.getUTCMonth() + meses);
-  // Estouro de mês (ex.: 31/03 + 11 meses): trava no último dia do mês.
-  if (data.getUTCDate() !== dia) {
-    data.setUTCDate(0);
-  }
-  return paraIso(data);
-}
-
-function adicionarDias(dataIso: string, dias: number): string {
-  const data = paraUtc(dataIso);
-  data.setUTCDate(data.getUTCDate() + dias);
-  return paraIso(data);
 }
 
 function formatarData(dataIso: string): string {
@@ -138,39 +79,12 @@ function formatarData(dataIso: string): string {
 
 // ------------------------------------------------------------------ geração lazy de períodos
 
-interface PeriodoEsperado {
-  inicio: string;
-  fim: string;
-  limite_concessivo: string;
-  status: StatusPeriodo;
-}
-
-/**
- * Ciclos de 12 meses a partir da admissão, um por aniversário, até hoje.
- * 30 dias de direito por ciclo; vencido quando o limite concessivo passou.
- */
-function periodosEsperados(dataAdmissao: string, hoje: string): PeriodoEsperado[] {
-  const periodos: PeriodoEsperado[] = [];
-  let inicio = dataAdmissao;
-  // Trava de segurança: ninguém tem mais de 80 ciclos de férias.
-  for (let ciclo = 0; ciclo < 80 && inicio <= hoje; ciclo += 1) {
-    const fim = adicionarDias(adicionarAnos(inicio, 1), -1);
-    const limite = adicionarMeses(fim, MESES_LIMITE_CONCESSIVO);
-    periodos.push({
-      inicio,
-      fim,
-      limite_concessivo: limite,
-      status: limite < hoje ? "vencido" : "em_aberto",
-    });
-    inicio = adicionarAnos(inicio, 1);
-  }
-  return periodos;
-}
-
 /**
  * Gerador lazy: na consulta, cria os períodos aquisitivos que faltam até hoje
  * e marca como vencidos os que estouraram o limite concessivo. Idempotente —
- * só abre transação quando há o que fazer.
+ * só abre transação quando há o que fazer. A régua (quais períodos são
+ * esperados e quais faltam) é o motor puro de ./calculo, com teste unitário
+ * em tests/ferias.test.ts.
  */
 async function garantirPeriodos(
   sessao: PayloadSessao,
@@ -182,17 +96,7 @@ async function garantirPeriodos(
   const existentes = await listarIniciosExistentes(
     colaboradores.map((colaborador) => colaborador.id)
   );
-  const chaves = new Set(
-    existentes.map((linha) => `${linha.colaborador_id}|${linha.inicio}`)
-  );
-  const faltantes: (PeriodoEsperado & { colaborador_id: number })[] = [];
-  for (const colaborador of colaboradores) {
-    for (const periodo of periodosEsperados(colaborador.data_admissao, hoje)) {
-      if (!chaves.has(`${colaborador.id}|${periodo.inicio}`)) {
-        faltantes.push({ ...periodo, colaborador_id: colaborador.id });
-      }
-    }
-  }
+  const faltantes = periodosFaltantes(colaboradores, existentes, hoje);
   const haVencimentos = await existePeriodoParaVencer(escopoColaboradorId);
   if (faltantes.length === 0 && !haVencimentos) return;
 

@@ -106,7 +106,7 @@ export type CriacaoProgramacao = z.infer<typeof esquemaCriacaoProgramacao>;
  *    aqui: é a data gravada em rh.periodo_aquisitivo.limite_concessivo, uma
  *    por pessoa e por período, e o teste que a usa é `diasAteLimite < 0`, isto
  *    é "a data já passou". Comparar com zero não é escolher número.
- *    (O número que DERIVA essa data — MESES_LIMITE_CONCESSIVO, em servico.ts —
+ *    (O número que DERIVA essa data — MESES_LIMITE_CONCESSIVO, em calculo.ts —
  *    esse sim é limite chumbado, e está denunciado como tal.)
  *
  * 2. 30/60/90 não vêm do art. 137, apesar de a fama dizer que vêm. São uma
