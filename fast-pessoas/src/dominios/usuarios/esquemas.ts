@@ -132,6 +132,9 @@ const GRUPOS_POR_PREFIXO: ReadonlyArray<readonly [string, string]> = [
   ["indicador.", "Metas e indicadores"],
   ["relatorio.", "Metas e indicadores"],
   ["documento.", "Documentos"],
+  // Ciclo de ciência (0086): gerir/liberar vivem sobre o GED — é em Documentos
+  // que o administrador as procura.
+  ["rh.conduta.", "Documentos"],
   ["ferias.", "Férias"],
   ["afastamento.", "Afastamentos"],
   ["desligamento.", "Desligamento"],

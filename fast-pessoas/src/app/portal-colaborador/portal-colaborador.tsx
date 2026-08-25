@@ -49,6 +49,29 @@ interface ItemMinhaPosse {
   devolvido_em: string | null;
 }
 
+/**
+ * Contrato de GET /api/documentos/pendencias/minhas (ciclo de ciência, 0086).
+ * O mesmo payload alimenta o gate da Onda 2; aqui é só o cartão de aviso.
+ */
+interface PendenciaCiencia {
+  documento_id: number;
+  titulo: string;
+  bloqueante: boolean;
+  data_limite: string | null;
+  vencida: boolean;
+  bloqueia: boolean;
+}
+interface TestemunhoPendenteCartao {
+  ato_id: number;
+  documento_titulo: string;
+  pessoa_nome: string;
+}
+interface BlocoCiencias {
+  bloqueada: boolean;
+  pendencias: PendenciaCiencia[];
+  testemunhos: TestemunhoPendenteCartao[];
+}
+
 interface Visao {
   pode: {
     ferias: boolean;
@@ -963,6 +986,135 @@ function CartaoMinhaPosse() {
   );
 }
 
+/** A5:b — autodeclaração de raça-cor. Self-fetch em /api/portais/colaborador/raca-cor
+ *  (keyless por titularidade: o titular sai da sessão; o DP lê por outra porta, logada). */
+function CartaoRacaCor() {
+  const [dados, setDados] = useState<{
+    declaracao: { raca_cor: string | null; rotulo: string | null };
+    opcoes: { valor: string; rotulo: string }[];
+  } | null>(null);
+  const [escolha, setEscolha] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/portais/colaborador/raca-cor", { cache: "no-store" });
+        if (!ativo || !resposta.ok) return;
+        setDados(await resposta.json());
+      } catch { /* portal segue sem o cartão */ }
+    })();
+    return () => { ativo = false; };
+  }, []);
+
+  if (dados === null) return null;
+
+  async function declarar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch("/api/portais/colaborador/raca-cor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raca_cor: escolha }),
+      });
+      const corpo = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) {
+        setErro((corpo as { erro?: string }).erro ?? "Não foi possível salvar.");
+        return;
+      }
+      setDados((atual) => (atual === null ? null : { ...atual, declaracao: corpo }));
+      setEscolha("");
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <section className={estilos.cartao}>
+      <h2>Raça-cor (autodeclaração)</h2>
+      <p>
+        Padrão IBGE, declarada por você — ninguém declara em seu lugar, e você pode
+        mudar quando quiser. Declaração atual:{" "}
+        <strong>{dados.declaracao.rotulo ?? "não declarada"}</strong>.
+      </p>
+      <form onSubmit={declarar}>
+        <select required value={escolha} onChange={(e) => setEscolha(e.target.value)}>
+          <option value="">selecione…</option>
+          {dados.opcoes.map((opcao) => (
+            <option key={opcao.valor} value={opcao.valor}>{opcao.rotulo}</option>
+          ))}
+        </select>{" "}
+        <button type="submit" disabled={salvando || escolha === ""}>
+          {salvando ? "Salvando…" : "Declarar"}
+        </button>
+      </form>
+      {erro && <p>{erro}</p>}
+    </section>
+  );
+}
+
+/**
+ * Ciclo de ciência (0086): pendências de ciência e testemunhos pendentes do
+ * usuário, com aviso de bloqueio em destaque. O dado vem por rota própria
+ * (molde do bloco de ponto) — falha não derruba o portal.
+ */
+function CartaoCiencias({ bloco }: { bloco: BlocoCiencias }) {
+  if (bloco.pendencias.length === 0 && bloco.testemunhos.length === 0) {
+    return null;
+  }
+  return (
+    <section className={estilos.cartao}>
+      <div className={estilos.cabecalhoCartao}>
+        <h2>Ciência de documentos</h2>
+        <Link className={estilos.ligacao} href="/documentos">
+          Ler e dar ciência →
+        </Link>
+      </div>
+      {bloco.bloqueada && (
+        <p className={estilos.erro}>
+          Há pendência que bloqueia o seu acesso ao sistema — regularize na
+          página de Documentos.
+        </p>
+      )}
+      <ul className={estilos.lista}>
+        {bloco.pendencias.map((pendencia) => (
+          <li
+            key={pendencia.documento_id}
+            className={`${estilos.itemLista} ${estilos.itemListaAcao}`}
+          >
+            <p>{pendencia.titulo}</p>
+            <span className={estilos.metaItem}>
+              {pendencia.bloqueante ? "Bloqueante" : "Aguarda sua ciência"}
+              {pendencia.data_limite
+                ? ` · prazo até ${formatarData(pendencia.data_limite)}`
+                : ""}
+              {pendencia.vencida ? " · prazo vencido" : ""}
+            </span>
+          </li>
+        ))}
+        {bloco.testemunhos.map((testemunho) => (
+          <li
+            key={testemunho.ato_id}
+            className={`${estilos.itemLista} ${estilos.itemListaAcao}`}
+          >
+            <p>Testemunho pendente — {testemunho.documento_titulo}</p>
+            <span className={estilos.metaItem}>
+              Ato sobre {testemunho.pessoa_nome} · confirme na página de
+              Documentos
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function CartaoAvaliacoes({ bloco }: { bloco: BlocoAvaliacoes }) {
   return (
     <section className={estilos.cartao}>
@@ -1138,6 +1290,27 @@ export function PortalColaborador() {
   const [ponto, setPonto] = useState<BlocoPonto | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [ciencias, setCiencias] = useState<BlocoCiencias | null>(null);
+
+  // Ciclo de ciência (0086): rota própria do domínio de documentos, molde
+  // exato do bloco de ponto — falha aqui não derruba o portal.
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/documentos/pendencias/minhas", {
+          cache: "no-store",
+        });
+        if (!ativo || !resposta.ok) return;
+        setCiencias((await resposta.json()) as BlocoCiencias);
+      } catch {
+        /* portal segue sem o cartão de ciências */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   // Bloco de ponto vem do domínio DONO do dado, com a chave dele
   // (ponto.ver.proprio). Falha aqui não derruba o portal: o cartão só não
@@ -1226,6 +1399,9 @@ export function PortalColaborador() {
         {visao !== null && (
           <>
             <CartaoMeusDados dados={visao.meus_dados} />
+            {/* Fora de `colunas` de propósito: o aviso de bloqueio precisa de
+                destaque acima da grade. */}
+            {ciencias !== null && <CartaoCiencias bloco={ciencias} />}
 
             <div className={estilos.colunas}>
               {ponto !== null && <CartaoPonto bloco={ponto} />}
@@ -1248,6 +1424,8 @@ export function PortalColaborador() {
               {/* Cartão autônomo: busca o próprio dado e se esconde sozinho
                   (403/sem itens). Falha nele não derruba o portal. */}
               <CartaoMinhaPosse />
+              {/* Self-fetch como a posse: a titularidade sai da sessão. */}
+              <CartaoRacaCor />
               <CartaoAvaliacoes bloco={visao.avaliacoes} />
               {visao.checkin !== null && (
                 <CartaoCheckin bloco={visao.checkin} />
