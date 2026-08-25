@@ -25,6 +25,11 @@ import { validarTotpDoUsuario } from "../identidade/servico";
 import { calcularFolha, EntradaMotor, ErroMotor, VariavelMotor } from "./calculo";
 import { calcularFerias, ResultadoMotorFerias } from "./calculo-ferias";
 import {
+  calcularDecimo,
+  ParcelaDecimo,
+  ResultadoMotorDecimo,
+} from "./calculo-13";
+import {
   AbrirCompetencia,
   CODIGO_ADICIONAL_NOTURNO,
   CODIGO_DESCONTO_BENEFICIO,
@@ -55,6 +60,7 @@ import {
 } from "./esquemas";
 import {
   apagarFolhasDaCompetencia,
+  buscarColaboradorParaDecimo,
   buscarColaboradorParaFerias,
   buscarCompetencia,
   buscarCompetenciaParaAtualizar,
@@ -1854,6 +1860,140 @@ export async function calcularPreviaFerias(
 
   return {
     programacao,
+    data_referencia: dataRef,
+    dependentes_irrf: colaborador.dependentes_irrf,
+    resultado,
+  };
+}
+
+// ------------------------------------------------------------------ prévia de 13º (onda 2)
+
+export interface PreviaDecimo {
+  colaborador: {
+    id: number;
+    nome_completo: string;
+    matricula: string;
+    data_admissao: string;
+  };
+  ano: number;
+  parcela: ParcelaDecimo;
+  /** A data que resolveu TODAS as vigências da prévia (ver o comentário). */
+  data_referencia: string;
+  dependentes_irrf: number;
+  resultado: ResultadoMotorDecimo;
+}
+
+/**
+ * A data legal de cada parcela é a data de referência das vigências: a 1ª
+ * parcela vence em 30/11 (Lei 4.749/65, art. 2º) e a 2ª em 20/12 (art. 1º) —
+ * salário, dependentes, versão de rubrica e tabelas legais se resolvem na data
+ * da PARCELA calculada, a mesma mecânica de vigência do cálculo mensal
+ * (dataReferenciaCompetencia) e da prévia de férias (art. 142).
+ */
+export function dataReferenciaDecimo(
+  ano: number,
+  parcela: ParcelaDecimo
+): string {
+  return parcela === 1 ? `${ano}-11-30` : `${ano}-12-20`;
+}
+
+/**
+ * Prévia de UMA parcela do 13º de um colaborador — SÓ LEITURA: nada é gravado
+ * em folha nenhuma; o resultado sai com a memória de cálculo de cada item.
+ *
+ * DESLIGADO NÃO PASSA: o 13º proporcional de quem desliga é verba rescisória e
+ * pertence ao motor de rescisão (estágio 3) — calcular aqui projetaria avos
+ * até 31/12 para um vínculo que não chega lá. A recusa é explicável, não um
+ * resultado errado.
+ *
+ * MÉDIAS e AFASTAMENTOS entram como "não disponíveis" (os importadores de
+ * variáveis e a leitura de afastamento sem remuneração ainda não existem) — o
+ * motor aplica os defaults conservadores e os AVISOS ficam na saída.
+ */
+export async function calcularPreviaDecimo(
+  sessao: PayloadSessao,
+  colaboradorId: number,
+  ano: number,
+  parcela: ParcelaDecimo
+): Promise<PreviaDecimo> {
+  const dataRef = dataReferenciaDecimo(ano, parcela);
+  const [colaborador, { tabelas, faltantes }, rubricas] = await Promise.all([
+    buscarColaboradorParaDecimo(colaboradorId, dataRef),
+    tabelasVigentes(dataRef),
+    listarRubricasVigentes(dataRef),
+  ]);
+  if (!colaborador) {
+    throw new ErroHttp(404, "Colaborador não encontrado.");
+  }
+  if (
+    colaborador.data_desligamento !== null &&
+    colaborador.data_desligamento <= `${ano}-12-31`
+  ) {
+    throw new ErroHttp(
+      409,
+      `${colaborador.nome_completo} (${colaborador.matricula}) tem desligamento em ${colaborador.data_desligamento}: o 13º proporcional de quem desliga é verba rescisória — motor de rescisão (estágio 3), não esta prévia.`
+    );
+  }
+  if (colaborador.salario_centavos === null) {
+    throw new ErroHttp(
+      409,
+      `Sem posição com salário vigente em ${dataRef} para ${colaborador.nome_completo} (${colaborador.matricula}) — a prévia não tem remuneração de referência.`
+    );
+  }
+  if (!tabelas) {
+    throw new ErroHttp(
+      409,
+      `Sem tabela legal vigente em ${dataRef}: ${faltantes
+        .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
+        .join(", ")} — cadastre em Parâmetros antes da prévia.`
+    );
+  }
+
+  let resultado: ResultadoMotorDecimo;
+  try {
+    resultado = calcularDecimo({
+      ano,
+      parcela,
+      data_admissao: colaborador.data_admissao,
+      salario_base_centavos: colaborador.salario_centavos,
+      dependentes_irrf: colaborador.dependentes_irrf,
+      // Importadores de variáveis e leitura de afastamento sem remuneração
+      // ainda não existem — o motor avisa na saída (defaults conservadores).
+      media_variaveis_centavos: null,
+      avos_afastamento: null,
+      adiantamento_pago_centavos: null,
+      rubricas,
+      tabela_inss: tabelas.inss,
+      tabela_irrf: tabelas.irrf,
+    });
+  } catch (erro) {
+    if (erro instanceof ErroMotor) {
+      throw new ErroHttp(
+        409,
+        `Prévia de 13º de ${colaborador.nome_completo} (${colaborador.matricula}): ${erro.message}.`
+      );
+    }
+    throw erro;
+  }
+
+  // Valor de 13º deriva do salário — dado mais sensível do sistema: toda
+  // leitura autorizada deixa trilha, com a chave que DE FATO autorizou.
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.ver",
+    recurso: "rh.colaborador",
+    registroId: String(colaboradorId),
+  });
+
+  return {
+    colaborador: {
+      id: colaborador.colaborador_id,
+      nome_completo: colaborador.nome_completo,
+      matricula: colaborador.matricula,
+      data_admissao: colaborador.data_admissao,
+    },
+    ano,
+    parcela,
     data_referencia: dataRef,
     dependentes_irrf: colaborador.dependentes_irrf,
     resultado,

@@ -162,6 +162,17 @@ export const CODIGO_FERIAS = "0136";
 export const CODIGO_ADICIONAL_FERIAS = "0137";
 export const CODIGO_ABONO_PECUNIARIO = "1401";
 
+// Códigos do MOTOR DE 13º (calculo-13.ts), migração 0094. 0138 é o código REAL
+// da folha da Fast (docs/18 §2e — planilha do Diego); 1601/1602/2003/2004 são
+// PLACEHOLDERS no esquema-exemplo da casa, porque a planilha não dá o código
+// real inequívoco dessas verbas (pendência #17) — a adoção dos reais vai junto
+// dos importadores, com as demais duplicatas (docs/18 §2a).
+export const CODIGO_DECIMO = "0138";
+export const CODIGO_ADIANTAMENTO_DECIMO = "1601";
+export const CODIGO_DESCONTO_ADIANTAMENTO_DECIMO = "1602";
+export const CODIGO_INSS_DECIMO = "2003";
+export const CODIGO_IRRF_DECIMO = "2004";
+
 /** Rubricas que o motor gera sozinho — lançar variável nelas é erro. */
 export const CODIGOS_AUTOMATICOS: readonly string[] = [
   CODIGO_SALARIO_BASE,
@@ -175,9 +186,10 @@ export const CODIGOS_AUTOMATICOS: readonly string[] = [
  * Rubricas que o sistema procura PELO CÓDIGO: as automáticas do motor mais as
  * que a importação do ponto (HE 50/100, adicional noturno, faltas) e o desconto
  * de benefício lançam sozinhas — e as do MOTOR DE FÉRIAS (calculo-ferias.ts),
- * que também resolve 0136/0137/1401 pelo código. Encerrar qualquer uma derruba
- * o cálculo da competência inteira, a importação ou a prévia/folha de férias —
- * o encerramento recusa, e a tela nem oferece o botão.
+ * que resolve 0136/0137/1401 pelo código, e as do MOTOR DE 13º (calculo-13.ts),
+ * que resolve 0138/1601/1602/2003/2004. Encerrar qualquer uma derruba o
+ * cálculo da competência inteira, a importação ou a prévia/folha de férias e
+ * de 13º — o encerramento recusa, e a tela nem oferece o botão.
  */
 export const CODIGOS_DO_MOTOR: readonly string[] = [
   ...CODIGOS_AUTOMATICOS,
@@ -189,6 +201,11 @@ export const CODIGOS_DO_MOTOR: readonly string[] = [
   CODIGO_FERIAS,
   CODIGO_ADICIONAL_FERIAS,
   CODIGO_ABONO_PECUNIARIO,
+  CODIGO_DECIMO,
+  CODIGO_ADIANTAMENTO_DECIMO,
+  CODIGO_DESCONTO_ADIANTAMENTO_DECIMO,
+  CODIGO_INSS_DECIMO,
+  CODIGO_IRRF_DECIMO,
 ];
 
 const esquemaDinheiro = z

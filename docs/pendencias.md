@@ -922,3 +922,43 @@ registrados, com dono e desenho, os de política/raridade:
     simples/texto (já registrado no follow-up da 1.5).
 11. A2:a alcançou ficha/lista/ponto/portal-gestor; aprovações de demandas/admissão ainda têm
     recorte próprio de liderado direto — alinhar quando aquelas telas forem tocadas.
+---
+
+## 19 · Motor de 13º — os defaults conservadores que precisam de confirmação (DP/contador)
+
+O motor de 13º (onda 2 da lane Folha — `src/dominios/folha/calculo-13.ts`, prévia em
+`GET /api/folha/decimo-previa`) tomou quatro decisões pelo caminho conservador, cada uma com AVISO
+explícito na saída. Nenhuma trava a prévia; todas merecem sentença do DP/contador antes de o 13º
+virar folha de verdade (integrar competência 13o_1a/13o_2a):
+
+1. **IRRF do 13º usa a mecânica completo × simplificado do mensal (vale o imposto MENOR).** O 13º
+   tem tributação EXCLUSIVA na fonte (RIR/2018 art. 700) e o motor registra isso em aviso; o que é
+   interpretação nossa é aplicar o DESCONTO SIMPLIFICADO também ao 13º. A IN RFB que criou o
+   simplificado fala do cálculo mensal; aplicá-lo ao 13º beneficia o colaborador (imposto nunca
+   maior que o regime completo). **Recomendação:** manter até o contador sentenciar — se a Fast
+   (ou o eSocial) apurar só pelo completo, é tirar UMA linha da entrada.
+   *Prós:* nunca desconta mais que o devido no regime completo; mesma mecânica já auditada do
+   mensal. *Contras:* se a regra correta for só o completo, a prévia mostra IRRF menor que o real.
+
+2. **Adiantamento deduzido na 2ª parcela é RECALCULADO (metade do 13º na data da 2ª parcela)**,
+   a menos que o valor efetivamente pago venha na entrada (`adiantamento_pago_centavos`). Se o
+   salário mudou entre 30/11 e 20/12, o recalculado diverge do pago. Quando a folha real de 13º
+   existir, o certo é deduzir o PAGO (lido da 1ª parcela gravada). **Recomendação:** a integração
+   com a competência 13o_2a deve ler o valor da 13o_1a — o parâmetro já existe para isso.
+
+3. **Avos PROJETADOS até 31/12 nas duas parcelas** (vínculo assumido ativo o ano inteiro;
+   desligamento é recusado — 13º de rescisão é do motor de rescisão, estágio 3). A alternativa
+   (1ª parcela = metade dos avos ATÉ novembro) pagaria adiantamento menor a admitidos no 2º
+   semestre. A prática comum de folha é a projeção. **Recomendação:** manter.
+
+4. **Afastamento sem remuneração só reduz avos se vier como parâmetro** (`avos_afastamento`) — o
+   sistema ainda não distingue afastamento COM e SEM remuneração para esse fim (serviço militar,
+   licença não remunerada > 15 dias no mês etc.). Default: não reduz + aviso. Quando o módulo de
+   afastamentos souber classificar, o serviço passa a preencher o parâmetro.
+
+5. **Códigos das rubricas (migração 0094):** `0138` 13º Salário é o código REAL (docs/18 §2e);
+   `1601` Adiantamento de 13º, `1602` Desconto do Adiantamento, `2003` INSS sobre 13º e `2004`
+   IRRF sobre 13º são PLACEHOLDERS — a planilha do Diego cita "0024/0056 (INSS de 13º e férias)"
+   sem dizer qual é qual, e o adiantamento fica num intervalo ("0008–0018"). A adoção dos códigos
+   reais vai JUNTO dos importadores, com as demais duplicatas (docs/18 §2a, decisão do dono).
+

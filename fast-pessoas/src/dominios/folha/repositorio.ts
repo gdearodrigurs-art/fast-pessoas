@@ -2151,6 +2151,76 @@ export async function buscarColaboradorParaFerias(
   };
 }
 
+// ------------------------------------------------------------------ prévia de 13º (onda 2)
+
+export interface ColaboradorParaDecimo {
+  colaborador_id: number;
+  nome_completo: string;
+  matricula: string;
+  data_admissao: string;
+  data_desligamento: string | null;
+  /** Null quando não há posição com salário vigente na data de referência. */
+  salario_centavos: number | null;
+  dependentes_irrf: number;
+}
+
+/**
+ * O colaborador como o MOTOR DE 13º (calculo-13.ts) o lê: admissão (que dá os
+ * avos), desligamento (que o serviço usa para RECUSAR — 13º de quem desliga é
+ * do motor de rescisão) e salário + dependentes COMO ESTAVAM na data da
+ * PARCELA — a mesma mecânica de `buscarColaboradorParaFerias` (LATERAL com
+ * LIMIT 1 pela vigência mais recente; dependente conta por NASCIMENTO e só o
+ * ELEGÍVEL, deduz_irrf = true, pendência #9 / migration 0061).
+ *
+ * O LATERAL é LEFT de propósito: colaborador sem posição vigente na data volta
+ * com salário NULL — o serviço distingue "não existe" (404) de "existe mas não
+ * tem remuneração de referência" (409 explicável), em vez de chutar o salário
+ * de hoje.
+ */
+export async function buscarColaboradorParaDecimo(
+  colaboradorId: number,
+  dataRef: string
+): Promise<ColaboradorParaDecimo | null> {
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    matricula: string;
+    data_admissao: string;
+    data_desligamento: string | null;
+    salario: string | null;
+    dependentes: string;
+  }>(
+    `SELECT c.id, c.nome_completo, c.matricula,
+            c.data_admissao::text AS data_admissao,
+            c.data_desligamento::text AS data_desligamento,
+            p.salario::text AS salario,
+            (SELECT COUNT(*) FROM rh.dependente d
+              WHERE d.colaborador_id = c.id
+                AND d.deduz_irrf = true
+                AND (d.nascimento IS NULL OR d.nascimento <= $2)) AS dependentes
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+              SELECT p.salario
+                FROM rh.posicao_colaborador p
+               WHERE p.colaborador_id = c.id AND ${vigenteEm("p", "$2")}
+               ORDER BY p.inicio_vigencia DESC, p.id DESC
+               LIMIT 1) p ON TRUE
+      WHERE c.id = $1`,
+    [colaboradorId, dataRef]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    colaborador_id: Number(linha.id),
+    nome_completo: linha.nome_completo,
+    matricula: linha.matricula,
+    data_admissao: linha.data_admissao,
+    data_desligamento: linha.data_desligamento,
+    salario_centavos: linha.salario === null ? null : paraCentavos(linha.salario),
+    dependentes_irrf: Number(linha.dependentes),
+  };
+}
+
 // ------------------------------------------------------------------ indicador
 
 /**
