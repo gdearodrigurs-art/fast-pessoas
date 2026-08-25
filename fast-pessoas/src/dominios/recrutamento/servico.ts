@@ -1380,16 +1380,41 @@ export async function baixarAnexoPesquisaSocial(
 export interface ContagemExpurgo {
   expurgadas: number;
   anexos_apagados: number;
+  /** Itens que a rodada PULOU (ex.: FK inesperada no anexo) — nada abortou. */
+  puladas: number;
+}
+
+/**
+ * Motivo curto e sem dado pessoal para o relatório da rodada. FK (23503) é o
+ * caso conhecido: alguém criou vínculo (ex.: rh.ciencia) sobre o anexo — o A4
+ * fecha a porta nova, mas dado antigo não se conserta sozinho.
+ */
+function motivoDoPulo(erro: unknown): string {
+  if (
+    typeof erro === "object" &&
+    erro !== null &&
+    "code" in erro &&
+    (erro as { code?: unknown }).code === "23503"
+  ) {
+    return "o documento do anexo tem vínculo (ex.: ciência) que impede o DELETE";
+  }
+  return erro instanceof Error ? erro.message : String(erro);
 }
 
 /**
  * EXPURGO da retenção (G3:a, 6 meses): para cada candidatura DESCARTADA
  * (reprovada/desistiu) há mais de 6 meses, apaga o anexo do GED (a linha de
- * rh.documento leva o BYTEA junto) e ANONIMIZA o desfecho (resultado -> NULL,
- * expurgado_em carimbado) — tudo numa transação, auditado SEM repetir o
- * desfecho (repeti-lo no audit recriaria o dado que se está apagando; o audit
- * nunca é tocado, molde 0012). Rota administrativa manual — o projeto não tem
- * agendador; o cron é follow-up registrado.
+ * rh.documento leva o BYTEA junto — o trigger da 0101 abre a exceção só para
+ * a categoria 'pesquisa_social') e ANONIMIZA o desfecho (resultado -> NULL,
+ * expurgado_em carimbado) — auditado SEM repetir o desfecho (repeti-lo no
+ * audit recriaria o dado que se está apagando; o audit nunca é tocado, molde
+ * 0012). Rota administrativa manual — o projeto não tem agendador; o cron é
+ * follow-up registrado.
+ *
+ * A3 — a rodada é blindada POR ITEM: cada pesquisa roda dentro de um
+ * SAVEPOINT. Um documento que não deleta (ex.: FK de rh.ciencia criada antes
+ * do A4 fechar essa porta) NÃO aborta a rodada inteira: aquele item é
+ * revertido e PULADO, com o motivo no ato da rodada — os demais expurgam.
  */
 export async function expurgarPesquisasSociais(
   sessao: PayloadSessao,
@@ -1399,38 +1424,51 @@ export async function expurgarPesquisasSociais(
   const corte = dataCorteExpurgo(hoje);
   return deps.comTransacao(sessao.usuario_id, async (cliente) => {
     const linhas = await deps.listarPesquisasParaExpurgo(cliente, corte);
+    let expurgadas = 0;
     let anexosApagados = 0;
-    for (const linha of linhas) {
-      // Ordem obrigatória: primeiro o vínculo zera (expurgo), depois a linha
-      // do documento sai — a FK barraria a ordem inversa.
-      await deps.expurgarPesquisa(cliente, linha.id);
-      if (linha.documento_id !== null) {
-        await deps.apagarDocumentoDoExpurgo(cliente, linha.documento_id);
-        anexosApagados += 1;
+    const pulos: { id: number; motivo: string }[] = [];
+    for (const [indice, linha] of linhas.entries()) {
+      const savepoint = `expurgo_item_${indice}`;
+      await cliente.query(`SAVEPOINT ${savepoint}`);
+      try {
+        // Ordem obrigatória: primeiro o vínculo zera (expurgo), depois a
+        // linha do documento sai — a FK barraria a ordem inversa.
+        await deps.expurgarPesquisa(cliente, linha.id);
+        if (linha.documento_id !== null) {
+          await deps.apagarDocumentoDoExpurgo(cliente, linha.documento_id);
+        }
+        await deps.registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "expurgo",
+          tabela: TABELA_PESQUISA_SOCIAL,
+          registroId: String(linha.id),
+          diff: {
+            "Pesquisa social": {
+              de: "registrada",
+              para: "expurgada (retenção de 6 meses após o descarte)",
+            },
+            Anexo: {
+              de: null,
+              para:
+                linha.documento_id !== null
+                  ? "apagado do GED (conteúdo incluído)"
+                  : "sem anexo",
+            },
+          },
+        });
+        await cliente.query(`RELEASE SAVEPOINT ${savepoint}`);
+        expurgadas += 1;
+        if (linha.documento_id !== null) {
+          anexosApagados += 1;
+        }
+      } catch (erro) {
+        await cliente.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        pulos.push({ id: linha.id, motivo: motivoDoPulo(erro) });
       }
-      await deps.registrarAlteracao(cliente, {
-        usuarioId: sessao.usuario_id,
-        papel: sessao.papel,
-        acao: "expurgo",
-        tabela: TABELA_PESQUISA_SOCIAL,
-        registroId: String(linha.id),
-        diff: {
-          "Pesquisa social": {
-            de: "registrada",
-            para: "expurgada (retenção de 6 meses após o descarte)",
-          },
-          Anexo: {
-            de: null,
-            para:
-              linha.documento_id !== null
-                ? "apagado do GED (conteúdo incluído)"
-                : "sem anexo",
-          },
-        },
-      });
     }
     // O ATO da rodada fica sempre na trilha, mesmo com zero expurgos — quem
-    // rodou a retenção, quando, e com que resultado.
+    // rodou a retenção, quando, com que resultado e o que ficou para trás.
     await deps.registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
@@ -1439,11 +1477,24 @@ export async function expurgarPesquisasSociais(
       registroId: `rodada:${hoje}`,
       diff: {
         Corte: { de: null, para: `descartes até ${formatarData(corte)}` },
-        "Pesquisas expurgadas": { de: null, para: String(linhas.length) },
+        "Pesquisas expurgadas": { de: null, para: String(expurgadas) },
         "Anexos apagados": { de: null, para: String(anexosApagados) },
+        Puladas: {
+          de: null,
+          para:
+            pulos.length === 0
+              ? "nenhuma"
+              : pulos
+                  .map((pulo) => `#${pulo.id}: ${pulo.motivo}`)
+                  .join(" · "),
+        },
       },
     });
-    return { expurgadas: linhas.length, anexos_apagados: anexosApagados };
+    return {
+      expurgadas,
+      anexos_apagados: anexosApagados,
+      puladas: pulos.length,
+    };
   });
 }
 

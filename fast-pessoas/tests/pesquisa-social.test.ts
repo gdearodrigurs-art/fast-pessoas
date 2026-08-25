@@ -380,13 +380,33 @@ test("o corte da janela anda 6 meses para trás no calendário", () => {
   assert.equal(dataCorteExpurgo("2026-01-15"), "2025-07-15");
 });
 
+/**
+ * Cliente de mentira que registra os comandos crus (SAVEPOINT/RELEASE/
+ * ROLLBACK do laço por item do A3) — o resto do expurgo passa pelas costuras.
+ */
+function transacaoComSavepoints(
+  comandos: string[]
+): DepsPesquisaSocial["comTransacao"] {
+  const cliente = {
+    query: async (sql: string) => {
+      comandos.push(sql);
+      return { rows: [] };
+    },
+  } as unknown as PoolClient;
+  return (async (
+    usuarioId: number,
+    fn: (cliente: PoolClient) => Promise<unknown>
+  ) => fn(cliente)) as DepsPesquisaSocial["comTransacao"];
+}
+
 test("expurgo respeita a janela: consulta com o corte de 6 meses e só expurga o que ela devolve", async () => {
   const cortes: string[] = [];
   const expurgadas: number[] = [];
   const docsApagados: number[] = [];
   const auditadas: { registroId: string; acao: string }[] = [];
+  const comandos: string[] = [];
   const deps = depsDuble({
-    comTransacao: transacaoDeMentira,
+    comTransacao: transacaoComSavepoints(comandos),
     listarPesquisasParaExpurgo: async (_cliente, corte) => {
       cortes.push(corte);
       return [
@@ -412,13 +432,70 @@ test("expurgo respeita a janela: consulta com o corte de 6 meses e só expurga o
   // As duas expurgadas; documento apagado SÓ de quem tinha anexo.
   assert.deepEqual(expurgadas, [1, 2]);
   assert.deepEqual(docsApagados, [555]);
-  assert.deepEqual(contagem, { expurgadas: 2, anexos_apagados: 1 });
+  assert.deepEqual(contagem, { expurgadas: 2, anexos_apagados: 1, puladas: 0 });
   // Trilha por linha + o ato da rodada.
   assert.deepEqual(
     auditadas.map((a) => a.registroId),
     ["1", "2", "rodada:2026-08-25"]
   );
   assert.ok(auditadas.every((a) => a.acao === "expurgo"));
+  // Cada item rodou em SAVEPOINT próprio e liberou ao terminar (A3).
+  assert.deepEqual(comandos, [
+    "SAVEPOINT expurgo_item_0",
+    "RELEASE SAVEPOINT expurgo_item_0",
+    "SAVEPOINT expurgo_item_1",
+    "RELEASE SAVEPOINT expurgo_item_1",
+  ]);
+});
+
+test("documento que não deleta (FK de ciência) NÃO aborta a rodada: reverte o item, pula com motivo e segue (A3)", async () => {
+  const comandos: string[] = [];
+  const auditadas: { registroId: string; diff: Record<string, unknown> }[] = [];
+  const deps = depsDuble({
+    comTransacao: transacaoComSavepoints(comandos),
+    listarPesquisasParaExpurgo: async () => [
+      { id: 1, candidatura_id: 31, documento_id: 555 },
+      { id: 2, candidatura_id: 32, documento_id: 666 },
+      { id: 3, candidatura_id: 33, documento_id: null },
+    ],
+    expurgarPesquisa: async () => {},
+    apagarDocumentoDoExpurgo: async (_cliente, documentoId) => {
+      if (documentoId === 666) {
+        // A FK que trava o expurgo: alguém deu ciência no anexo (dado antigo,
+        // anterior ao A4). O Postgres devolveria foreign_key_violation.
+        const erro = new Error(
+          'delete em "documento" viola a FK "ciencia_documento_id_fkey"'
+        ) as Error & { code: string };
+        erro.code = "23503";
+        throw erro;
+      }
+    },
+    registrarAlteracao: async (_cliente, entrada) => {
+      auditadas.push({ registroId: entrada.registroId, diff: entrada.diff });
+    },
+  });
+  const contagem = await expurgarPesquisasSociais(SESSAO, "2026-08-25", deps);
+  // O item 2 pulou; 1 e 3 expurgaram; a rodada terminou.
+  assert.deepEqual(contagem, { expurgadas: 2, anexos_apagados: 1, puladas: 1 });
+  // O item que falhou foi REVERTIDO (rollback ao savepoint dele) e os demais
+  // liberaram o próprio savepoint.
+  assert.deepEqual(comandos, [
+    "SAVEPOINT expurgo_item_0",
+    "RELEASE SAVEPOINT expurgo_item_0",
+    "SAVEPOINT expurgo_item_1",
+    "ROLLBACK TO SAVEPOINT expurgo_item_1",
+    "SAVEPOINT expurgo_item_2",
+    "RELEASE SAVEPOINT expurgo_item_2",
+  ]);
+  // Trilha: só os itens que EXPURGARAM + o ato da rodada, com o pulo narrado.
+  assert.deepEqual(
+    auditadas.map((a) => a.registroId),
+    ["1", "3", "rodada:2026-08-25"]
+  );
+  const rodada = auditadas[auditadas.length - 1];
+  const pulada = rodada.diff.Puladas as { de: null; para: string };
+  assert.match(pulada.para, /#2: /);
+  assert.match(pulada.para, /vínculo .*impede o DELETE/);
 });
 
 test("rodada sem nada a expurgar ainda deixa o ato na trilha e devolve zero", async () => {
@@ -431,6 +508,10 @@ test("rodada sem nada a expurgar ainda deixa o ato na trilha e devolve zero", as
     },
   });
   const contagem = await expurgarPesquisasSociais(SESSAO, "2026-08-25", deps);
-  assert.deepEqual(contagem, { expurgadas: 0, anexos_apagados: 0 });
+  assert.deepEqual(contagem, {
+    expurgadas: 0,
+    anexos_apagados: 0,
+    puladas: 0,
+  });
   assert.deepEqual(auditadas, ["rodada:2026-08-25"]);
 });
