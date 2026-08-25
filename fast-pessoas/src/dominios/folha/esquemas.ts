@@ -510,6 +510,31 @@ export const esquemaNovosParametrosFolha = z.object({
 
 export type NovosParametrosFolha = z.infer<typeof esquemaNovosParametrosFolha>;
 
+// ------------------------------------------------------------------ OLAC — de-para conta contábil (E3:a)
+
+/**
+ * Conta contábil é TEXTO LIVRE de propósito: o plano de contas é da
+ * contabilidade ("3.1.1.01.001"), não nosso — validar máscara aqui quebraria
+ * no primeiro plano de contas diferente.
+ */
+export const esquemaNovaContaContabil = z.object({
+  rubrica_id: z.number().int().positive(),
+  conta_contabil: z
+    .string({ error: "Informe a conta contábil" })
+    .trim()
+    .min(1, "Informe a conta contábil")
+    .max(60, "Conta contábil acima do limite"),
+  inicio_vigencia: esquemaData,
+});
+
+export type NovaContaContabil = z.infer<typeof esquemaNovaContaContabil>;
+
+export const esquemaEncerrarContaContabil = z.object({
+  fim_vigencia: esquemaData,
+});
+
+export type EncerrarContaContabil = z.infer<typeof esquemaEncerrarContaContabil>;
+
 // ------------------------------------------------------------------ suite de casos de teste
 
 /** Entrada de rh_folha.caso_teste_folha (JSONB) — validada antes de ir ao motor. */

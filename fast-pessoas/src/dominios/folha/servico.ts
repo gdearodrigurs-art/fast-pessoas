@@ -34,6 +34,17 @@ import {
   ResultadoMotorRescisao,
 } from "./calculo-rescisao";
 import {
+  analisarLinhaOlac,
+  casarLinhaOlac,
+  ehCabecalhoOlac,
+  gerarArquivoOlac,
+  LinhaOlac,
+  nomeArquivoOlac,
+  SEPARADOR_OLAC,
+  SituacaoEspelho,
+} from "./olac";
+import { dividirLinhas } from "../estrutura/importacao-analise";
+import {
   AbrirCompetencia,
   CODIGO_ADICIONAL_NOTURNO,
   CODIGO_DESCONTO_BENEFICIO,
@@ -46,6 +57,8 @@ import {
   competenciaEhRetroativa,
   dataReferenciaCompetencia,
   EncerramentoRubrica,
+  EncerrarContaContabil,
+  NovaContaContabil,
   esquemaEntradaCasoTeste,
   esquemaSaidaCasoTeste,
   EstadoCompetencia,
@@ -63,8 +76,26 @@ import {
   TipoTabelaLegal,
 } from "./esquemas";
 import {
+  apagarEspelhoOlacAnterior,
   apagarFolhasDaCompetencia,
   buscarColaboradorParaDecimo,
+  buscarContaContabilAtivaParaAtualizar,
+  buscarContaContabilParaAtualizar,
+  ContaContabilRubrica,
+  encerrarContaContabilNoBanco,
+  EspelhoNaoCasado,
+  inserirContaContabil,
+  inserirEspelhoOlac,
+  inserirLoteOlac,
+  listarCatalogoContaContabil,
+  listarEspelhoNaoCasado,
+  listarLinhasParaExportarOlac,
+  LoteOlacResumo,
+  mapaColaboradorPorMatricula,
+  mapaEmpresaPorCnpj,
+  TotalEspelhoOlac,
+  totaisEspelhoOlac,
+  ultimosLotesOlac,
   buscarColaboradorParaFerias,
   buscarDesligamentoParaRescisao,
   DesligamentoParaRescisao,
@@ -315,6 +346,17 @@ export interface VisaoCompetencia {
     total_descontos_centavos: number;
     liquido_centavos: number;
   };
+  /**
+   * OLAC (E1:a/E2:a): o espelho de conciliação da folha externa, LADO A LADO
+   * com a folha interna — nunca somado a ela. Sempre da competência inteira
+   * (conciliação não tem recorte): totais por situação × empresa, o não-casado
+   * em destaque e a última troca de arquivo em cada direção.
+   */
+  olac: {
+    totais: TotalEspelhoOlac[];
+    nao_casadas: EspelhoNaoCasado[];
+    lotes: LoteOlacResumo[];
+  };
 }
 
 function classificarLancavel(
@@ -375,6 +417,9 @@ export async function montarVisaoCompetencia(
     estrutura,
     porRubrica,
     porCentro,
+    olacTotais,
+    olacNaoCasadas,
+    olacLotes,
   ] = await Promise.all([
     permissoesFolha(sessao.usuario_id),
     listarImpedidos(dataRef),
@@ -388,6 +433,9 @@ export async function montarVisaoCompetencia(
     resumoEstruturaDaCompetencia(competenciaId),
     totaisPorRubrica(competenciaId, filtro),
     totaisPorCentroCusto(competenciaId, filtro),
+    totaisEspelhoOlac(competencia.ano, competencia.mes),
+    listarEspelhoNaoCasado(competencia.ano, competencia.mes),
+    ultimosLotesOlac(competencia.ano, competencia.mes),
   ]);
 
   if (folhas.length > 0 || variaveis.length > 0) {
@@ -400,6 +448,17 @@ export async function montarVisaoCompetencia(
       usuarioId: sessao.usuario_id,
       chavePermissao: "folha.ver",
       recurso: "rh_folha.folha_colaborador",
+      registroId: String(competenciaId),
+    });
+  }
+  if (olacTotais.length > 0) {
+    // O espelho da contabilidade também carrega valor por pessoa nominada
+    // (matrícula + valor nas linhas não casadas): leitura própria na trilha,
+    // com o recurso certo — é outro dado, de outra origem, na mesma tela.
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "folha.ver",
+      recurso: "rh_folha.espelho_olac",
       registroId: String(competenciaId),
     });
   }
@@ -446,6 +505,11 @@ export async function montarVisaoCompetencia(
     por_centro_custo: porCentro,
     opcoes_estrutura: estrutura.opcoes,
     totais,
+    olac: {
+      totais: olacTotais,
+      nao_casadas: olacNaoCasadas,
+      lotes: olacLotes,
+    },
   };
 }
 
@@ -1385,20 +1449,31 @@ export interface VisaoParametros {
   irrf: VersaoTabelaIrrf[];
   gerais: VersaoParametros[];
   conferencia: SituacaoConferencia[];
+  /** De-para rubrica → conta contábil da OLAC (E3:a), com todas as vigências. */
+  contas_contabeis: ContaContabilRubrica[];
 }
 
 export async function montarVisaoParametros(): Promise<VisaoParametros> {
   // Tela de catálogo: mostra o que vale HOJE, e não fala de competência. O gate
   // da aprovação é que confere na data da competência (aprovarCompetencia).
   const hoje = await hojeParaFolha();
-  const [rubricas, inss, irrf, gerais, conferencia] = await Promise.all([
-    listarCatalogoRubricas(),
-    listarVersoesInss(),
-    listarVersoesIrrf(),
-    listarVersoesParametros(),
-    situacaoConferenciaTabelas(hoje),
-  ]);
-  return { rubricas, inss, irrf, gerais, conferencia };
+  const [rubricas, inss, irrf, gerais, conferencia, contasContabeis] =
+    await Promise.all([
+      listarCatalogoRubricas(),
+      listarVersoesInss(),
+      listarVersoesIrrf(),
+      listarVersoesParametros(),
+      situacaoConferenciaTabelas(hoje),
+      listarCatalogoContaContabil(),
+    ]);
+  return {
+    rubricas,
+    inss,
+    irrf,
+    gerais,
+    conferencia,
+    contas_contabeis: contasContabeis,
+  };
 }
 
 /**
@@ -2142,4 +2217,446 @@ export async function calcularPreviaRescisao(
     dependentes_irrf: colaborador.dependentes_irrf,
     resultado,
   };
+}
+
+// ------------------------------------------------------------------ OLAC (frente 3.2 — E1–E4)
+
+const TABELA_LOTE_OLAC = "rh_folha.lote_olac";
+const TABELA_CONTA_CONTABIL = "rh_folha.conta_contabil_rubrica";
+
+export interface ArquivoOlacGerado {
+  nome_arquivo: string;
+  conteudo: string;
+  linhas: number;
+  colaboradores: number;
+  /** Linhas cuja rubrica não tem de-para vigente — saem com a conta vazia. */
+  linhas_sem_de_para: number;
+}
+
+/**
+ * EXPORTAÇÃO (a ida): gera o arquivo do layout NOSSO (E4) a partir dos itens
+ * calculados da competência — uma linha por colaborador × rubrica, com a conta
+ * contábil do de-para vigente NA DATA DE REFERÊNCIA da competência (E3:a).
+ * Registra o lote (direção 'exportacao') e a leitura sensível: o arquivo leva
+ * valor por pessoa para fora do sistema — é a leitura mais literal que existe.
+ *
+ * Rubrica sem de-para NÃO bloqueia: a coluna sai vazia e a contagem volta na
+ * resposta — quem decide se o arquivo serve assim é o DP, não o código.
+ */
+export async function exportarOlac(
+  sessao: PayloadSessao,
+  competenciaId: number
+): Promise<ArquivoOlacGerado> {
+  const competencia = await buscarCompetencia(competenciaId);
+  if (!competencia) {
+    throw new ErroHttp(404, "Competência não encontrada.");
+  }
+  const dataRef = dataReferenciaCompetencia(competencia.ano, competencia.mes);
+  const linhasExportacao = await listarLinhasParaExportarOlac(
+    competenciaId,
+    dataRef
+  );
+  if (linhasExportacao.length === 0) {
+    throw new ErroHttp(
+      409,
+      `A competência ${formatarCompetencia(competencia.ano, competencia.mes)} não tem folha calculada — calcule antes de exportar o arquivo OLAC.`
+    );
+  }
+  const linhas: LinhaOlac[] = linhasExportacao.map((linha) => ({
+    competencia_ano: competencia.ano,
+    competencia_mes: competencia.mes,
+    empresa_cnpj: linha.empresa_cnpj,
+    matricula: linha.matricula,
+    colaborador_nome: linha.colaborador_nome,
+    codigo_rubrica: linha.codigo_rubrica,
+    rubrica_nome: linha.rubrica_nome,
+    natureza: linha.natureza,
+    conta_contabil: linha.conta_contabil,
+    valor_centavos: linha.valor_centavos,
+  }));
+  const nomeArquivo = nomeArquivoOlac(competencia.ano, competencia.mes);
+  const conteudo = gerarArquivoOlac(linhas);
+  const colaboradores = new Set(linhas.map((linha) => linha.matricula)).size;
+  const semDePara = linhas.filter(
+    (linha) => linha.conta_contabil === null
+  ).length;
+
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const loteId = await inserirLoteOlac(cliente, {
+      direcao: "exportacao",
+      arquivo: nomeArquivo,
+      competencia_ano: competencia.ano,
+      competencia_mes: competencia.mes,
+      empresa_id: null, // a ida cobre o grupo inteiro; a empresa vai por linha
+      linhas_lidas: linhas.length,
+      linhas_aceitas: linhas.length,
+      linhas_rejeitadas: 0,
+      relatorio: {
+        colaboradores,
+        linhas_sem_de_para: semDePara,
+      },
+      gerado_por: sessao.usuario_id,
+    });
+    // Sem valores no diff — só contagens (folha é o dado mais sensível).
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "exportacao_olac",
+      tabela: TABELA_LOTE_OLAC,
+      registroId: String(loteId),
+      diff: {
+        Competência: {
+          de: null,
+          para: formatarCompetencia(competencia.ano, competencia.mes),
+        },
+        Arquivo: { de: null, para: nomeArquivo },
+        Linhas: { de: null, para: String(linhas.length) },
+        Colaboradores: { de: null, para: String(colaboradores) },
+        "Linhas sem de-para de conta contábil": {
+          de: null,
+          para: String(semDePara),
+        },
+      },
+    });
+  });
+  // O arquivo carrega salário e descontos por pessoa nominada: trilha com a
+  // chave que DE FATO autorizou a rota (eixo 8).
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.operar",
+    recurso: "rh_folha.item_calculo",
+    registroId: `competencia:${competenciaId}`,
+  });
+  return {
+    nome_arquivo: nomeArquivo,
+    conteudo,
+    linhas: linhas.length,
+    colaboradores,
+    linhas_sem_de_para: semDePara,
+  };
+}
+
+export interface ResultadoImportacaoOlac {
+  lote_id: number;
+  linhas_lidas: number;
+  linhas_aceitas: number;
+  linhas_rejeitadas: number;
+  situacoes: Record<SituacaoEspelho, number>;
+  /** Linhas do espelho anterior substituídas (mesma competência+empresa). */
+  substituidas: number;
+  rejeicoes: { linha: number; motivo: string; conteudo: string }[];
+}
+
+/**
+ * IMPORTAÇÃO (a volta): lê o MESMO layout da exportação (E4), casa matrícula e
+ * rubrica com o cadastro e grava o ESPELHO de conciliação (E1:a/E2:a) com a
+ * situação linha a linha — linha ruim vira rejeição com motivo e NUNCA aborta
+ * o lote (regra de ouro dos importadores da casa).
+ *
+ * REIMPORTAR SUBSTITUI: antes de gravar, o espelho anterior da MESMA
+ * competência+empresa (vindo de importação) é apagado — o padrão dos lotes por
+ * origem da folha (importarDescontosBeneficios / importarVariaveisDoPonto).
+ *
+ * SEM trava de estado da competência, de propósito: conciliação contábil
+ * acontece depois do fechamento, e o espelho não toca a folha calculada (E2:a
+ * — somente-leitura, tabela paralela).
+ *
+ * O que rejeita (a linha, nunca o lote): análise de formato; competência da
+ * linha diferente da competência da rota (arquivo trocado); CNPJ que não é de
+ * nenhuma empresa do grupo (sem empresa não há par empresa+competência para o
+ * espelho conciliar).
+ */
+export async function importarOlac(
+  sessao: PayloadSessao,
+  competenciaId: number,
+  dados: { arquivo: string; conteudo: string }
+): Promise<ResultadoImportacaoOlac> {
+  const competencia = await buscarCompetencia(competenciaId);
+  if (!competencia) {
+    throw new ErroHttp(404, "Competência não encontrada.");
+  }
+  const linhasArquivo = dividirLinhas(dados.conteudo).filter(
+    (item, indice) => !(indice === 0 && ehCabecalhoOlac(item.bruta))
+  );
+  if (linhasArquivo.length === 0) {
+    throw new ErroHttpCampo(
+      400,
+      "O arquivo está vazio — nenhuma linha além do cabeçalho.",
+      "conteudo"
+    );
+  }
+  const dataRef = dataReferenciaCompetencia(competencia.ano, competencia.mes);
+  const rotuloCompetencia = formatarCompetencia(
+    competencia.ano,
+    competencia.mes
+  );
+
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    const [colaboradorPorMatricula, empresaPorCnpj, rubricas] =
+      await Promise.all([
+        mapaColaboradorPorMatricula(cliente),
+        mapaEmpresaPorCnpj(cliente),
+        // As rubricas VIGENTES NA COMPETÊNCIA — a mesma régua do cálculo: o
+        // arquivo devolvido referencia os códigos que exportamos para aquele
+        // mês, não o catálogo de hoje.
+        listarRubricasVigentes(dataRef, cliente),
+      ]);
+    const rubricasPorCodigo = new Set(rubricas.map((item) => item.codigo));
+
+    const rejeicoes: { linha: number; motivo: string; conteudo: string }[] = [];
+    const aceitas: {
+      linha: LinhaOlac;
+      empresa_id: number | null;
+      colaborador_id: number | null;
+      codigo_rubrica_interno: string | null;
+      situacao: SituacaoEspelho;
+    }[] = [];
+    const situacoes: Record<SituacaoEspelho, number> = {
+      casada: 0,
+      sem_rubrica: 0,
+      sem_colaborador: 0,
+    };
+
+    for (const { numero, bruta } of linhasArquivo) {
+      const analise = analisarLinhaOlac(bruta.split(SEPARADOR_OLAC));
+      if (!analise.ok) {
+        rejeicoes.push({ linha: numero, motivo: analise.motivo, conteudo: bruta });
+        continue;
+      }
+      const linha = analise.dados;
+      if (
+        linha.competencia_ano !== competencia.ano ||
+        linha.competencia_mes !== competencia.mes
+      ) {
+        rejeicoes.push({
+          linha: numero,
+          motivo: `Linha da competência ${formatarCompetencia(linha.competencia_ano, linha.competencia_mes)} num arquivo importado em ${rotuloCompetencia} — confira se o arquivo é o certo`,
+          conteudo: bruta,
+        });
+        continue;
+      }
+      let empresaId: number | null = null;
+      if (linha.empresa_cnpj !== null) {
+        empresaId = empresaPorCnpj.get(linha.empresa_cnpj) ?? null;
+        if (empresaId === null) {
+          rejeicoes.push({
+            linha: numero,
+            motivo: `CNPJ ${linha.empresa_cnpj} não é de nenhuma empresa do grupo`,
+            conteudo: bruta,
+          });
+          continue;
+        }
+      }
+      const casamento = casarLinhaOlac(linha, {
+        colaboradorPorMatricula,
+        rubricasPorCodigo,
+      });
+      situacoes[casamento.situacao] += 1;
+      aceitas.push({
+        linha,
+        empresa_id: empresaId,
+        colaborador_id: casamento.colaborador_id,
+        codigo_rubrica_interno: casamento.codigo_rubrica_interno,
+        situacao: casamento.situacao,
+      });
+    }
+
+    // Substituição por empresa+competência (E1:a) ANTES de gravar o lote novo.
+    const empresasTocadas = new Map<string, number | null>();
+    for (const item of aceitas) {
+      empresasTocadas.set(String(item.empresa_id), item.empresa_id);
+    }
+    let substituidas = 0;
+    for (const empresaId of empresasTocadas.values()) {
+      substituidas += await apagarEspelhoOlacAnterior(
+        cliente,
+        competencia.ano,
+        competencia.mes,
+        empresaId
+      );
+    }
+
+    // A empresa do LOTE: quando o arquivo é de UMA empresa (a volta da OLAC
+    // vem por empresa processada fora), ela fica no lote; misto fica NULL e a
+    // empresa vale linha a linha no espelho.
+    const empresasDistintas = [...empresasTocadas.values()];
+    const empresaDoLote =
+      empresasDistintas.length === 1 ? empresasDistintas[0] : null;
+
+    const loteId = await inserirLoteOlac(cliente, {
+      direcao: "importacao",
+      arquivo: dados.arquivo,
+      competencia_ano: competencia.ano,
+      competencia_mes: competencia.mes,
+      empresa_id: empresaDoLote,
+      linhas_lidas: linhasArquivo.length,
+      linhas_aceitas: aceitas.length,
+      linhas_rejeitadas: rejeicoes.length,
+      relatorio: {
+        rejeitadas: rejeicoes,
+        situacoes,
+        substituidas,
+      },
+      gerado_por: sessao.usuario_id,
+    });
+    for (const item of aceitas) {
+      await inserirEspelhoOlac(cliente, {
+        lote_id: loteId,
+        competencia_ano: competencia.ano,
+        competencia_mes: competencia.mes,
+        empresa_id: item.empresa_id,
+        empresa_cnpj: item.linha.empresa_cnpj,
+        matricula: item.linha.matricula,
+        colaborador_id: item.colaborador_id,
+        codigo_rubrica_externo: item.linha.codigo_rubrica,
+        codigo_rubrica_interno: item.codigo_rubrica_interno,
+        conta_contabil: item.linha.conta_contabil,
+        valor_centavos: item.linha.valor_centavos,
+        situacao: item.situacao,
+      });
+    }
+
+    // Sem valores no diff — contagens e situações apenas.
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "importacao_olac",
+      tabela: TABELA_LOTE_OLAC,
+      registroId: String(loteId),
+      diff: {
+        Competência: { de: null, para: rotuloCompetencia },
+        Arquivo: { de: null, para: dados.arquivo },
+        "Linhas lidas": { de: null, para: String(linhasArquivo.length) },
+        "Linhas aceitas": { de: null, para: String(aceitas.length) },
+        "Linhas rejeitadas": { de: null, para: String(rejeicoes.length) },
+        "Casadas / sem rubrica / sem colaborador": {
+          de: null,
+          para: `${situacoes.casada} / ${situacoes.sem_rubrica} / ${situacoes.sem_colaborador}`,
+        },
+        "Espelho anterior substituído": {
+          de: null,
+          para: `${substituidas} linha(s)`,
+        },
+      },
+    });
+
+    return {
+      lote_id: loteId,
+      linhas_lidas: linhasArquivo.length,
+      linhas_aceitas: aceitas.length,
+      linhas_rejeitadas: rejeicoes.length,
+      situacoes,
+      substituidas,
+      rejeicoes,
+    };
+  });
+}
+
+// ------------------------------------------------------------------ de-para conta contábil (E3:a)
+
+/** Um dia antes, em aritmética de calendário UTC (molde dataReferencia…). */
+function diaAnterior(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1, dia - 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * Cria a vigência do de-para de uma rubrica. Se já existe uma ATIVA, ela é
+ * encerrada NO DIA ANTERIOR ao início da nova, na mesma transação — o catálogo
+ * nunca fica com duas contas valendo no mesmo dia (o índice parcial do banco
+ * é o cinto; isto é a regra).
+ */
+export async function criarContaContabil(
+  sessao: PayloadSessao,
+  dados: NovaContaContabil
+): Promise<{ id: number }> {
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    const rubrica = await buscarRubricaParaAtualizar(cliente, dados.rubrica_id);
+    if (!rubrica) {
+      throw new ErroHttpCampo(404, "Rubrica não encontrada.", "rubrica_id");
+    }
+    const ativa = await buscarContaContabilAtivaParaAtualizar(
+      cliente,
+      dados.rubrica_id
+    );
+    let contaAnterior: string | null = null;
+    if (ativa) {
+      if (dados.inicio_vigencia <= ativa.inicio_vigencia) {
+        throw new ErroHttpCampo(
+          400,
+          `A nova vigência precisa começar depois de ${ativa.inicio_vigencia}, o início da vigência atual.`,
+          "inicio_vigencia"
+        );
+      }
+      await encerrarContaContabilNoBanco(
+        cliente,
+        ativa.id,
+        diaAnterior(dados.inicio_vigencia)
+      );
+      contaAnterior = `versão ${ativa.id} encerrada em ${diaAnterior(dados.inicio_vigencia)}`;
+    }
+    const id = await inserirContaContabil(cliente, {
+      rubrica_id: dados.rubrica_id,
+      conta_contabil: dados.conta_contabil,
+      inicio_vigencia: dados.inicio_vigencia,
+      criado_por: sessao.usuario_id,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_CONTA_CONTABIL,
+      registroId: String(id),
+      diff: {
+        Rubrica: { de: null, para: `${rubrica.codigo} — ${rubrica.nome}` },
+        "Conta contábil": { de: null, para: dados.conta_contabil },
+        "Início de vigência": { de: null, para: dados.inicio_vigencia },
+        "Vigência anterior": { de: null, para: contaAnterior ?? "não havia" },
+      },
+    });
+    return { id };
+  });
+}
+
+/** Encerra a vigência ativa do de-para — a rubrica volta a sair sem conta. */
+export async function encerrarContaContabil(
+  sessao: PayloadSessao,
+  id: number,
+  dados: EncerrarContaContabil
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const vigencia = await buscarContaContabilParaAtualizar(cliente, id);
+    if (!vigencia) {
+      throw new ErroHttp(404, "Vigência de conta contábil não encontrada.");
+    }
+    if (vigencia.status !== "ativa") {
+      throw new ErroHttp(
+        409,
+        "Esta vigência já está encerrada — encerrada é imutável."
+      );
+    }
+    if (dados.fim_vigencia < vigencia.inicio_vigencia) {
+      throw new ErroHttpCampo(
+        400,
+        `O fim de vigência não pode ser anterior ao início (${vigencia.inicio_vigencia}).`,
+        "fim_vigencia"
+      );
+    }
+    await encerrarContaContabilNoBanco(cliente, id, dados.fim_vigencia);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "encerramento",
+      tabela: TABELA_CONTA_CONTABIL,
+      registroId: String(id),
+      diff: {
+        Rubrica: {
+          de: null,
+          para: `${vigencia.codigo} — ${vigencia.rubrica_nome}`,
+        },
+        "Conta contábil": { de: vigencia.conta_contabil, para: null },
+        "Fim de vigência": { de: null, para: dados.fim_vigencia },
+      },
+    });
+  });
 }

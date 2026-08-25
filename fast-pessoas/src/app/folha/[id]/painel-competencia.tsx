@@ -29,6 +29,10 @@ import {
   ROTULOS_TABELA_LEGAL,
   TipoTabelaLegal,
 } from "@/dominios/folha/esquemas";
+import {
+  ROTULOS_SITUACAO_ESPELHO,
+  type SituacaoEspelho,
+} from "@/dominios/folha/olac";
 import { classeEtiquetaEstado } from "../painel-competencias";
 import estilos from "../folha.module.css";
 
@@ -142,6 +146,43 @@ interface TotalCentro {
   liquido_centavos: number;
 }
 
+interface TotalEspelhoOlac {
+  situacao: SituacaoEspelho;
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  linhas: number;
+  valor_centavos: number;
+}
+
+interface EspelhoNaoCasado {
+  id: number;
+  empresa_cnpj: string | null;
+  matricula: string;
+  codigo_rubrica_externo: string;
+  valor_centavos: number;
+  situacao: SituacaoEspelho;
+}
+
+interface LoteOlacResumo {
+  id: number;
+  direcao: string;
+  arquivo: string;
+  linhas_lidas: number;
+  linhas_aceitas: number;
+  linhas_rejeitadas: number;
+  gerado_em: string;
+}
+
+/** Corpo devolvido por POST /api/folha/[id]/importar-olac. */
+interface RetornoImportacaoOlac {
+  linhas_lidas: number;
+  linhas_aceitas: number;
+  linhas_rejeitadas: number;
+  situacoes: Record<SituacaoEspelho, number>;
+  substituidas: number;
+  rejeicoes: { linha: number; motivo: string; conteudo: string }[];
+}
+
 interface Visao {
   pode: {
     ver: boolean;
@@ -170,6 +211,12 @@ interface Visao {
     total_proventos_centavos: number;
     total_descontos_centavos: number;
     liquido_centavos: number;
+  };
+  /** Espelho de conciliação da OLAC — sempre da competência inteira. */
+  olac: {
+    totais: TotalEspelhoOlac[];
+    nao_casadas: EspelhoNaoCasado[];
+    lotes: LoteOlacResumo[];
   };
 }
 
@@ -233,6 +280,10 @@ export function PainelCompetencia({ id }: { id: number }) {
   const [acaoEmCurso, setAcaoEmCurso] = useState<string | null>(null);
   const [erroAcao, setErroAcao] = useState<string | null>(null);
   const [avisoAcao, setAvisoAcao] = useState<AvisoAcao | null>(null);
+  const [arquivoOlac, setArquivoOlac] = useState<File | null>(null);
+  const [importandoOlac, setImportandoOlac] = useState(false);
+  const [erroOlac, setErroOlac] = useState<string | null>(null);
+  const [avisoOlac, setAvisoOlac] = useState<AvisoAcao | null>(null);
   const [detalheAberto, setDetalheAberto] = useState<number | null>(null);
   const [codigoAprovacao, setCodigoAprovacao] = useState("");
   // Recorte dos três campos: nasce VAZIO (em branco = a competência inteira).
@@ -395,6 +446,57 @@ export function PainelCompetencia({ id }: { id: number }) {
     }
   }
 
+  /**
+   * Importa o retorno da OLAC (multipart, campo `arquivo`). Fora do
+   * `executarAcao` porque manda FormData, não JSON — e o resultado tem o
+   * relatório do lote (situações e rejeições), que merece frase própria.
+   */
+  async function importarRetornoOlac(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    if (!arquivoOlac) return;
+    setErroOlac(null);
+    setAvisoOlac(null);
+    setImportandoOlac(true);
+    try {
+      const corpo = new FormData();
+      corpo.append("arquivo", arquivoOlac);
+      const resposta = await fetch(`/api/folha/${id}/importar-olac`, {
+        method: "POST",
+        body: corpo,
+      });
+      const dados = (await resposta.json().catch(() => ({}))) as
+        | RetornoImportacaoOlac
+        | { erro?: string };
+      if (resposta.ok) {
+        const retorno = dados as RetornoImportacaoOlac;
+        setAvisoOlac({
+          texto:
+            `Retorno importado: ${retorno.linhas_aceitas} de ${retorno.linhas_lidas} linha(s) no espelho` +
+            ` (${retorno.substituidas} do espelho anterior substituída(s)).` +
+            ` Situação — casadas: ${retorno.situacoes.casada};` +
+            ` sem rubrica: ${retorno.situacoes.sem_rubrica};` +
+            ` sem colaborador: ${retorno.situacoes.sem_colaborador}.`,
+          alerta:
+            retorno.linhas_rejeitadas > 0
+              ? `${retorno.linhas_rejeitadas} linha(s) rejeitada(s) — a primeira: linha ${retorno.rejeicoes[0]?.linha}, ${retorno.rejeicoes[0]?.motivo}. O relatório completo fica no lote.`
+              : undefined,
+        });
+        setArquivoOlac(null);
+        (evento.target as HTMLFormElement).reset();
+        recarregar();
+      } else {
+        setErroOlac(
+          (dados as { erro?: string }).erro ??
+            "Não foi possível importar o retorno."
+        );
+      }
+    } catch {
+      setErroOlac("Falha de conexão. Tente novamente.");
+    } finally {
+      setImportandoOlac(false);
+    }
+  }
+
   const competencia = visao?.competencia;
   const rotuloCompetencia = competencia
     ? formatarCompetencia(competencia.ano, competencia.mes)
@@ -410,6 +512,11 @@ export function PainelCompetencia({ id }: { id: number }) {
   const folhasDoRecorte = visao?.folhas ?? [];
   const porRubrica = visao?.por_rubrica ?? [];
   const porCentro = visao?.por_centro_custo ?? [];
+  const olac = visao?.olac ?? { totais: [], nao_casadas: [], lotes: [] };
+  const olacCasadas = olac.totais.filter((t) => t.situacao === "casada");
+  const olacNaoCasadasTotais = olac.totais.filter(
+    (t) => t.situacao !== "casada"
+  );
   const opcoesEstrutura = visao?.opcoes_estrutura ?? null;
   const folhasNaCompetencia = visao?.folhas_na_competencia ?? 0;
   const recorteAtivo = filtroEstruturaAtivo(estrutura);
@@ -1077,6 +1184,168 @@ export function PainelCompetencia({ id }: { id: number }) {
                     </tbody>
                   </table>
                 </div>
+              </section>
+            )}
+
+            {/* OLAC (E1:a/E2:a/E4): a troca de arquivo com a contabilidade. O
+                espelho fica LADO A LADO com a folha interna — nunca somado a
+                ela — e a tela diz isso com todas as letras, porque duas
+                "verdades" de competência convivem de propósito. */}
+            {(visao.pode.operar ||
+              olac.totais.length > 0 ||
+              olac.lotes.length > 0) && (
+              <section className={estilos.cartao}>
+                <h2>OLAC — troca de arquivo com a contabilidade</h2>
+                <p className={estilos.subtitulo}>
+                  Layout <strong>nosso</strong>, o mesmo na ida e na volta
+                  (docs/anexos/layout-olac.md). O retorno vira um{" "}
+                  <strong>espelho de conciliação</strong>: registro
+                  somente-leitura, lado a lado com a folha calculada —{" "}
+                  <strong>nunca</strong> somado aos totais internos.
+                </p>
+                {visao.pode.operar && (
+                  <div className={estilos.barraAcoes}>
+                    {folhasNaCompetencia > 0 ? (
+                      <a
+                        className={estilos.botaoLinha}
+                        href={`/api/folha/${id}/exportar-olac`}
+                      >
+                        Exportar arquivo OLAC ({rotuloCompetencia})
+                      </a>
+                    ) : (
+                      <span className={estilos.notaRodape}>
+                        A exportação abre depois do cálculo — o arquivo sai dos
+                        itens calculados.
+                      </span>
+                    )}
+                    <form
+                      className={estilos.campoGrupoCurto}
+                      onSubmit={importarRetornoOlac}
+                    >
+                      <input
+                        className={estilos.campo}
+                        type="file"
+                        accept=".csv,text/csv,text/plain"
+                        onChange={(e) =>
+                          setArquivoOlac(e.target.files?.[0] ?? null)
+                        }
+                      />
+                      <button
+                        className={estilos.botaoLinha}
+                        type="submit"
+                        disabled={importandoOlac || !arquivoOlac}
+                      >
+                        {importandoOlac
+                          ? "Importando…"
+                          : "Importar retorno da OLAC"}
+                      </button>
+                    </form>
+                  </div>
+                )}
+                {erroOlac && <p className={estilos.erro}>{erroOlac}</p>}
+                {avisoOlac && (
+                  <p className={estilos.sucesso}>{avisoOlac.texto}</p>
+                )}
+                {avisoOlac?.alerta && (
+                  <div className={estilos.aviso}>{avisoOlac.alerta}</div>
+                )}
+                {olac.lotes.length > 0 && (
+                  <p className={estilos.notaRodape}>
+                    {olac.lotes.map((lote) => (
+                      <span key={lote.id}>
+                        Última {lote.direcao === "exportacao"
+                          ? "exportação"
+                          : "importação"}
+                        : {lote.arquivo} ({lote.linhas_aceitas} de{" "}
+                        {lote.linhas_lidas} linha(s)
+                        {lote.linhas_rejeitadas > 0
+                          ? `, ${lote.linhas_rejeitadas} rejeitada(s)`
+                          : ""}
+                        ) em {lote.gerado_em.slice(0, 10)}.{" "}
+                      </span>
+                    ))}
+                  </p>
+                )}
+                {olac.totais.length > 0 && (
+                  <div className={estilos.tabelaEnvolucro}>
+                    <table className={estilos.tabela}>
+                      <thead>
+                        <tr>
+                          <th>Empresa</th>
+                          <th>Situação</th>
+                          <th className={estilos.numero}>Linhas</th>
+                          <th className={estilos.numero}>Total espelhado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...olacCasadas, ...olacNaoCasadasTotais].map(
+                          (total) => (
+                            <tr
+                              key={`${total.empresa_id ?? "sem"}-${total.situacao}`}
+                            >
+                              <td>
+                                {total.empresa_nome ?? "Sem apropriação"}
+                              </td>
+                              <td>
+                                {ROTULOS_SITUACAO_ESPELHO[total.situacao]}
+                              </td>
+                              <td className={estilos.numero}>{total.linhas}</td>
+                              <td className={estilos.numero}>
+                                {formatarMoedaCentavos(total.valor_centavos)}
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {olac.nao_casadas.length > 0 && (
+                  <>
+                    <div className={estilos.avisoCritico}>
+                      {olac.nao_casadas.length} linha(s) do retorno{" "}
+                      <strong>não casaram</strong> com o cadastro — matrícula ou
+                      rubrica desconhecida. Elas ficam no espelho aguardando
+                      correção: ajuste o cadastro (ou peça o arquivo corrigido)
+                      e reimporte.
+                    </div>
+                    <div className={estilos.tabelaEnvolucro}>
+                      <table className={estilos.tabela}>
+                        <thead>
+                          <tr>
+                            <th>CNPJ</th>
+                            <th>Matrícula</th>
+                            <th>Rubrica (arquivo)</th>
+                            <th>O que faltou</th>
+                            <th className={estilos.numero}>Valor</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {olac.nao_casadas.map((linha) => (
+                            <tr key={linha.id}>
+                              <td>{linha.empresa_cnpj ?? "—"}</td>
+                              <td>{linha.matricula}</td>
+                              <td>{linha.codigo_rubrica_externo}</td>
+                              <td>
+                                {ROTULOS_SITUACAO_ESPELHO[linha.situacao]}
+                              </td>
+                              <td className={estilos.numero}>
+                                {formatarMoedaCentavos(linha.valor_centavos)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+                {olac.totais.length === 0 && (
+                  <p className={estilos.notaRodape}>
+                    Nenhum retorno importado nesta competência ainda — o quadro
+                    do espelho aparece aqui quando o arquivo da contabilidade
+                    entrar.
+                  </p>
+                )}
               </section>
             )}
           </>
