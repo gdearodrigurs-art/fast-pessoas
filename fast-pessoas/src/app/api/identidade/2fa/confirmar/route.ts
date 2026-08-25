@@ -36,12 +36,14 @@ export async function POST(request: Request) {
     await limparCookiePendente();
 
     // Reemite a sessão SEM o claim pendente_2fa: o acesso é liberado na
-    // hora, sem exigir novo login.
+    // hora, sem exigir novo login. O claim ciencia_pendente SOBREVIVE à
+    // configuração do 2FA — só a regularização (ciência/liberação) o limpa.
     if (sessao.pendente_2fa) {
       await criarSessao({
         usuario_id: sessao.usuario_id,
         papel: sessao.papel,
         nome: sessao.nome,
+        ...(sessao.ciencia_pendente ? { ciencia_pendente: true } : {}),
       });
     }
     return Response.json({ ok: true });

@@ -57,6 +57,7 @@ export async function lerSessao(): Promise<PayloadSessao | null> {
       papel: payload.papel,
       nome: payload.nome,
       pendente_2fa: payload.pendente_2fa,
+      ciencia_pendente: payload.ciencia_pendente,
     });
     return analise.success ? analise.data : null;
   } catch {

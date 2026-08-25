@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
-import { ErroHttp } from "../../lib/sessao";
+import { criarSessao, ErroHttp } from "../../lib/sessao";
 import { PayloadSessao } from "../identidade/esquemas";
 import { notificar, notificarLote } from "../notificacoes/servico";
 import { ArmazenamentoDocumentos, armazenamentoBytea } from "./armazenamento";
@@ -390,8 +390,9 @@ export async function darCiencia(
       "Este documento foi substituído por uma versão nova — registre a ciência na versão vigente."
     );
   }
+  let resultado: { dada_em: string; hash_no_momento: string };
   try {
-    return await comTransacao(sessao.usuario_id, async (cliente) => {
+    resultado = await comTransacao(sessao.usuario_id, async (cliente) => {
       const ciencia = await inserirCiencia(cliente, {
         documentoId,
         usuarioId: sessao.usuario_id,
@@ -422,6 +423,11 @@ export async function darCiencia(
     }
     throw erro;
   }
+  // LIMPEZA DO CLAIM (Onda 2): se esta ciência era a que bloqueava o acesso,
+  // o usuário sai do bloqueio SEM relogar — molde da limpeza do pendente_2fa
+  // em /api/identidade/2fa/confirmar.
+  await regularizarClaimCiencia(sessao);
+  return resultado;
 }
 
 // ===========================================================================
@@ -499,7 +505,40 @@ export async function minhasPendencias(
   ]);
   const pendencias = linhas.map(paraVisao);
   const bloqueio = pendencias.find((pendencia) => pendencia.bloqueia) ?? null;
+  // LIMPEZA DO CLAIM pela via INDIRETA (Onda 2): a liberação de terceiro
+  // (liberarAcesso) não alcança o cookie do bloqueado — cookie mora no browser
+  // dele. A sessão é reemitida aqui, na primeira consulta às PRÓPRIAS
+  // pendências depois da regularização (o /ciencia-pendente e o /documentos
+  // passam por esta visão), e o bloqueio cai sem relogar.
+  if (sessao.ciencia_pendente === true && bloqueio === null) {
+    await reemitirSessaoSemClaimCiencia(sessao);
+  }
   return { bloqueada: bloqueio !== null, bloqueio, pendencias, testemunhos };
+}
+
+/**
+ * Reemite o cookie de sessão SEM o claim `ciencia_pendente` — o mesmo molde da
+ * limpeza do `pendente_2fa` na confirmação do 2FA. Só pode rodar onde cookie
+ * se escreve (Route Handler / Server Action); os chamadores daqui são rotas.
+ */
+async function reemitirSessaoSemClaimCiencia(
+  sessao: PayloadSessao
+): Promise<void> {
+  const semClaim = { ...sessao };
+  delete semClaim.ciencia_pendente;
+  await criarSessao(semClaim);
+}
+
+/**
+ * LIMPEZA DO CLAIM pela via DIRETA (Onda 2): depois de uma ciência dada pelo
+ * próprio usuário, reconfere no banco se ainda resta pendência bloqueante —
+ * a ciência de UM documento não apaga as outras — e, se não resta, reemite a
+ * sessão sem o claim. No-op para sessões que não nasceram bloqueadas.
+ */
+async function regularizarClaimCiencia(sessao: PayloadSessao): Promise<void> {
+  if (sessao.ciencia_pendente !== true) return;
+  if (await pendenciaBloqueante(sessao.usuario_id)) return;
+  await reemitirSessaoSemClaimCiencia(sessao);
 }
 
 /**
@@ -843,6 +882,11 @@ const DEPS_LIBERAR_REAIS: DepsLiberar = {
  * liberar quem não está bloqueado viraria ruído na trilha — e que a liberação
  * é de OUTRA pessoa: quem se auto-liberasse esvaziaria o bloqueio (B4 diz que
  * ele vale para todos, inclusive quem tem a chave).
+ *
+ * Claim `ciencia_pendente` do LIBERADO: não dá para reemitir aqui — a sessão
+ * desta requisição é a do LIBERADOR, e cookie de terceiro não se escreve. O
+ * liberado sai do bloqueio sem relogar na primeira consulta às próprias
+ * pendências (minhasPendencias), que o /ciencia-pendente dispara sozinho.
  */
 export async function liberarAcesso(
   sessao: PayloadSessao,

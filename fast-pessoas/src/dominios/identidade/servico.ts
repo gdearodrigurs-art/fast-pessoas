@@ -4,6 +4,7 @@ import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
+import { pendenciaBloqueante } from "../documentos/servico";
 import { chaveSensivel } from "../usuarios/esquemas";
 import {
   Credenciais,
@@ -259,6 +260,14 @@ export async function autenticar(
     papel: usuario.papel,
   });
 
+  // Gate do Código de Conduta (Onda 2 — decisões B1/B4 de docs/20): a pendência
+  // bloqueante é calculada AQUI, no login, e viaja como claim no JWT — o proxy
+  // roda no edge sem banco e decide só pelo claim (molde do pendente_2fa).
+  // Consequência assumida: pendência que NASCE depois do login só bloqueia no
+  // PRÓXIMO login; e a saída do bloqueio sem relogar é a reemissão da sessão
+  // na regularização (documentos/servico.ts).
+  const bloqueioConduta = await pendenciaBloqueante(usuario.id);
+
   return {
     ok: true,
     sessao: {
@@ -268,6 +277,7 @@ export async function autenticar(
       // Claim no próprio JWT: o proxy restringe a sessão pendente ao fluxo
       // de configuração do 2FA sem precisar consultar o banco no edge.
       ...(precisaConfigurar2fa ? { pendente_2fa: true } : {}),
+      ...(bloqueioConduta ? { ciencia_pendente: true } : {}),
     },
     precisa_configurar_2fa: precisaConfigurar2fa,
   };
