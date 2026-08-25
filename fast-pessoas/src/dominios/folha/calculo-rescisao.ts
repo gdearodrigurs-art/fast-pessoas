@@ -42,7 +42,8 @@
 //
 // DEFAULTS CONSERVADORES COM AVISO (molde pendências #17/#19):
 // • saldo_fgts_centavos é EXTERNO (o sistema não controla a conta vinculada):
-//   ausente → multa zerada + AVISO.
+//   ausente → a multa sai SÓ sobre os depósitos da própria rescisão + AVISO
+//   (a base da multa inclui esses depósitos — Lei 8.036/90, art. 18, §1º).
 // • Projeção do aviso indenizado no tempo de serviço (art. 487 §1º) NÃO é
 //   aplicada aos avos de férias/13º — AVISO.
 // • Férias vencidas além do limite concessivo NÃO saem em dobro (art. 137) —
@@ -79,6 +80,7 @@ import {
 import {
   CODIGO_ADICIONAL_FERIAS,
   CODIGO_AVISO_INDENIZADO,
+  CODIGO_DECIMO,
   CODIGO_FERIAS,
   CODIGO_INSS,
   CODIGO_IRRF,
@@ -151,8 +153,8 @@ export interface EntradaMotorRescisao {
   periodo_aquisitivo_em_curso_inicio?: string | null;
   /**
    * Saldo da conta vinculada do FGTS, em centavos inteiros — dado EXTERNO
-   * (extrato da Caixa). null/ausente = multa zerada + AVISO (decisão
-   * registrada, molde das médias).
+   * (extrato da Caixa). null/ausente = a multa sai SÓ sobre os depósitos da
+   * própria rescisão + AVISO (decisão registrada, molde das médias).
    */
   saldo_fgts_centavos?: number | null;
   /**
@@ -211,7 +213,7 @@ export const AVISO_MEDIAS_PENDENTES_RESCISAO =
   "médias não disponíveis — importadores pendentes: rescisão calculada sem médias de variáveis (comissões, horas extras)";
 
 export const AVISO_FGTS_SALDO_EXTERNO =
-  "saldo do FGTS não informado — a multa rescisória saiu ZERADA: o saldo da conta vinculada é dado externo (extrato da Caixa); informe saldo_fgts_centavos para a multa entrar na conta";
+  "saldo do FGTS não informado — a multa rescisória saiu SÓ sobre os depósitos da própria rescisão: o saldo da conta vinculada é dado externo (extrato da Caixa); informe saldo_fgts_centavos para a base incluir o que já está depositado";
 
 export const AVISO_AVISO_TRABALHADO_NO_SALDO =
   "aviso prévio TRABALHADO: os 30 primeiros dias são remunerados como salário do período (folha do mês/saldo de salário) — só os dias proporcionais excedentes da Lei 12.506, que não podem ser exigidos em trabalho, saem indenizados";
@@ -461,6 +463,21 @@ export function diasDeAvisoProporcional(anosDeServico: number): number {
   );
 }
 
+/**
+ * As verbas DESTA rescisão que geram depósito de FGTS no acerto — a metade
+ * "o motor decide O QUE deposita" da dupla trava (molde das bases do mês):
+ * saldo de salário (1701), aviso indenizado (1702 — Súmula 305 TST) e 13º
+ * (0138). A outra metade é a flag incide_fgts da versão VIGENTE de cada uma.
+ * Férias indenizadas + 1/3 e a própria multa ficam FORA por decisão do motor
+ * (indenizatórias sem depósito — Lei 8.036/90, art. 15, §6º), mesmo que a
+ * versão da rubrica incida FGTS para o uso salarial (férias GOZADAS).
+ */
+const CODIGOS_DEPOSITO_RESCISAO = [
+  CODIGO_SALDO_SALARIO,
+  CODIGO_AVISO_INDENIZADO,
+  CODIGO_DECIMO,
+] as const;
+
 // ------------------------------------------------------------------ motor
 
 export function calcularRescisao(
@@ -656,8 +673,11 @@ export function calcularRescisao(
 
   // 1) Saldo de salário (1701) — dias corridos do mês do término -------------
   // Do dia 1 (ou da admissão, se no mesmo mês) até o dia do término; valor-dia
-  // = remuneração ÷ divisor (30). Dia 31 encosta no divisor: mês comercial não
-  // paga o 31º dia — o cap fica na memória.
+  // = remuneração ÷ divisor (30). Quando o período do saldo cobre o mês CIVIL
+  // inteiro (início no dia 1º e término no último dia do mês), vale o mês
+  // comercial COMPLETO (divisor/divisor): fevereiro trabalhado inteiro paga o
+  // salário cheio, não 28/30 — e janeiro inteiro continua 30/30 (o 31º dia não
+  // é pago; o cap fica na memória). Mês parcial segue proporcional aos dias.
   const anoTermino = Number(entrada.data_termino.slice(0, 4));
   const mesTermino = Number(entrada.data_termino.slice(5, 7));
   const diaTermino = Number(entrada.data_termino.slice(8, 10));
@@ -667,7 +687,12 @@ export function calcularRescisao(
     ? Number(entrada.data_admissao.slice(8, 10))
     : 1;
   const diasCorridos = diaTermino - diaInicioSaldo + 1;
-  const diasSaldo = Math.min(diasCorridos, divisorDias);
+  const ultimoDiaDoMesTermino = diasNoMes(anoTermino, mesTermino);
+  const mesCivilCompleto =
+    diaInicioSaldo === 1 && diaTermino === ultimoDiaDoMesTermino;
+  const diasSaldo = mesCivilCompleto
+    ? divisorDias
+    : Math.min(diasCorridos, divisorDias);
   const rubricaSaldo = rubricaObrigatoria(CODIGO_SALDO_SALARIO);
   const saldoSemArredondar =
     (remuneracaoBase * Math.round(diasSaldo * 100)) / (divisorDias * 100);
@@ -680,6 +705,9 @@ export function calcularRescisao(
       formula: `dias corridos no mês do término × ((salário + média) ÷ ${divisorDias})`,
       dias_corridos: diasCorridos,
       dias_pagos: diasSaldo,
+      mes_civil_completo: mesCivilCompleto
+        ? `período do saldo cobre o mês civil inteiro (01 a ${dois(ultimoDiaDoMesTermino)}): saldo pago pelo mês comercial completo (${divisorDias}/${divisorDias})`
+        : null,
       cap_divisor:
         diasCorridos > diasSaldo
           ? `mês com ${diasCorridos} dias corridos pago pelo divisor comercial de ${divisorDias}`
@@ -968,37 +996,72 @@ export function calcularRescisao(
     }
   }
 
-  // 5) Multa do FGTS (1703) — saldo EXTERNO, percentual pelo tipo ------------
+  // 5) Multa do FGTS (1703) — saldo EXTERNO + depósitos DA rescisão ----------
+  // Lei 8.036/90, art. 18: no acerto o empregador ainda deposita o FGTS das
+  // verbas da própria rescisão, e o §1º manda a multa incidir sobre o TOTAL
+  // dos depósitos — inclusive esses. Base = saldo informado (externo) + a
+  // alíquota vigente sobre as verbas de CODIGOS_DEPOSITO_RESCISAO cuja versão
+  // vigente incide FGTS (dupla trava; nada chumbado — alíquota dos parâmetros,
+  // flag do catálogo). Sem o saldo externo a multa sai SÓ sobre os depósitos
+  // da rescisão, com o MESMO aviso de sempre.
   if (direitos.multa_fgts_percentual > 0) {
-    if (saldoFgts === null) {
-      avisos.push(AVISO_FGTS_SALDO_EXTERNO);
-    } else {
-      const rubricaMulta = rubricaObrigatoria(CODIGO_MULTA_FGTS);
-      const multaSemArredondar = aplicarPercentual(
-        saldoFgts,
-        direitos.multa_fgts_percentual
-      );
-      incluir(
-        rubricaMulta,
-        multaSemArredondar,
-        direitos.multa_fgts_percentual,
-        saldoFgts,
-        {
-          formula: `saldo do FGTS × ${direitos.multa_fgts_percentual}%`,
-          saldo_fgts: reais(saldoFgts),
-          origem_saldo:
-            "saldo da conta vinculada informado pelo chamador (dado externo — extrato da Caixa)",
-          percentual: direitos.multa_fgts_percentual,
-          regra:
-            direitos.multa_fgts_percentual === 40
-              ? "indenização compensatória de 40% (Lei 8.036/90, art. 18, §1º)"
-              : "indenização compensatória pela metade — 20% (CLT, art. 484-A, I, 'b')",
-          tributacao:
-            "indenização — fora da base de INSS (não é salário-de-contribuição) e de IRRF (Lei 7.713/88, art. 6º, V); não gera novo depósito de FGTS",
-          ...memoriaProcesso,
-        }
-      );
+    const rubricaMulta = rubricaObrigatoria(CODIGO_MULTA_FGTS);
+    const aliquotaFgts = entrada.parametros.aliquota_fgts;
+    const depositosDetalhe: Record<string, unknown>[] = [];
+    let depositosSemArredondar = 0;
+    for (const codigo of CODIGOS_DEPOSITO_RESCISAO) {
+      const rubricaDeposito = porCodigo.get(codigo);
+      // Dupla trava: o motor apontou a verba; a versão VIGENTE confirma.
+      if (!rubricaDeposito?.incide_fgts) continue;
+      for (const item of itens) {
+        if (item.codigo !== codigo) continue;
+        const deposito = aplicarPercentual(item.valor_centavos, aliquotaFgts);
+        depositosSemArredondar += deposito;
+        depositosDetalhe.push({
+          codigo,
+          nome: item.nome,
+          valor: reais(item.valor_centavos),
+          deposito: reaisIntermediario(deposito),
+        });
+      }
     }
+    if (saldoFgts === null) avisos.push(AVISO_FGTS_SALDO_EXTERNO);
+    const baseSemArredondar = (saldoFgts ?? 0) + depositosSemArredondar;
+    const multaSemArredondar = aplicarPercentual(
+      baseSemArredondar,
+      direitos.multa_fgts_percentual
+    );
+    incluir(
+      rubricaMulta,
+      multaSemArredondar,
+      direitos.multa_fgts_percentual,
+      arredondarCentavos(baseSemArredondar),
+      {
+        formula: `(saldo externo do FGTS + depósitos da própria rescisão) × ${direitos.multa_fgts_percentual}%`,
+        saldo_fgts: reais(saldoFgts ?? 0),
+        origem_saldo:
+          saldoFgts === null
+            ? AVISO_FGTS_SALDO_EXTERNO
+            : "saldo da conta vinculada informado pelo chamador (dado externo — extrato da Caixa)",
+        aliquota_fgts: aliquotaFgts,
+        depositos_rescisao: depositosDetalhe,
+        total_depositos_rescisao: reaisIntermediario(depositosSemArredondar),
+        base_multa: reaisIntermediario(baseSemArredondar),
+        composicao_base:
+          "Lei 8.036/90, art. 18, §1º: a base da multa inclui os depósitos devidos NA rescisão — " +
+          `${aliquotaFgts}% das verbas rescisórias cuja versão vigente incide FGTS ` +
+          "(saldo 1701, aviso indenizado 1702 — Súmula 305 TST — e 13º 0138); férias " +
+          "indenizadas + 1/3 e a própria multa ficam fora (indenizatórias, sem depósito)",
+        percentual: direitos.multa_fgts_percentual,
+        regra:
+          direitos.multa_fgts_percentual === 40
+            ? "indenização compensatória de 40% (Lei 8.036/90, art. 18, §1º)"
+            : "indenização compensatória pela metade — 20% (CLT, art. 484-A, I, 'b')",
+        tributacao:
+          "indenização — fora da base de INSS (não é salário-de-contribuição) e de IRRF (Lei 7.713/88, art. 6º, V); não gera novo depósito de FGTS",
+        ...memoriaProcesso,
+      }
+    );
   }
 
   // 6) Bases do MÊS da rescisão — só a verba salarial entra ------------------

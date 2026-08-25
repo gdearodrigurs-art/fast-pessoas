@@ -194,7 +194,9 @@ test("sem justa causa com tudo: saldo, aviso, vencidas + proporcionais + 1/3, 13
   //   750,00 + 1/3 = 250,00 (7,5 dias fora da janela de gozo → mesma fórmula).
   // • 13º (REUSO parcela 2): 6 avos até 30/06 → 1.500,00; INSS do 13º em
   //   separado: 1.500,00 × 7,5% = 112,50; IRRF do 13º isento nos 2 regimes.
-  // • Multa: 10.000,00 × 40% = 4.000,00.
+  // • Multa (Lei 8.036 art. 18 §1º — base inclui os depósitos DA rescisão):
+  //   depósitos = 8% × (3.000,00 + 4.800,00 + 1.500,00) = 744,00; base =
+  //   10.000,00 + 744,00 = 10.744,00 × 40% = 4.297,60.
   // • INSS do mês SÓ sobre o saldo: 1.631,00×7,5% + 1.302,57×9% + 66,43×12%
   //   = 247,5279 → 247,53. IRRF do mês: completo 24,275; simplificado 0 → 0.
   const resultado = rescisao({
@@ -224,7 +226,7 @@ test("sem justa causa com tudo: saldo, aviso, vencidas + proporcionais + 1/3, 13
   assert.equal(valorDe(resultado, CODIGO_IRRF_DECIMO), null);
   // Adiantamento não informado = considerado NÃO pago: nenhum desconto 1602.
   assert.equal(valorDe(resultado, CODIGO_DESCONTO_ADIANTAMENTO_DECIMO), null);
-  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 400_000);
+  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 429_760);
   assert.equal(valorDe(resultado, CODIGO_INSS), 24_753);
   assert.equal(valorDe(resultado, CODIGO_IRRF), null);
 
@@ -234,9 +236,9 @@ test("sem justa causa com tudo: saldo, aviso, vencidas + proporcionais + 1/3, 13
   assert.equal(resultado.base_inss_decimo_centavos, 150_000);
   assert.equal(resultado.base_irrf_decimo_centavos, 150_000);
 
-  assert.equal(resultado.total_proventos_centavos, 1_830_000);
+  assert.equal(resultado.total_proventos_centavos, 1_859_760);
   assert.equal(resultado.total_descontos_centavos, 36_003);
-  assert.equal(resultado.liquido_centavos, 1_793_997);
+  assert.equal(resultado.liquido_centavos, 1_823_757);
 
   // Memória explicável: cada exclusão de base citada no próprio item.
   assert.match(String(memoriaDe(resultado, CODIGO_SALDO_SALARIO).tributacao), /SALARIAL/);
@@ -256,6 +258,67 @@ test("sem justa causa com tudo: saldo, aviso, vencidas + proporcionais + 1/3, 13
   assert.ok(resultado.avisos.includes(AVISO_PROJECAO_AVISO_NAO_APLICADA));
   assert.ok(!resultado.avisos.includes(AVISO_DOBRA_ART137_NAO_APLICADA));
   assert.ok(!resultado.avisos.includes(AVISO_FGTS_SALDO_EXTERNO));
+});
+
+// ------------------------------------------------------------------ mês civil completo no saldo
+
+test("fevereiro trabalhado INTEIRO: término no último dia do mês paga o salário cheio (30/30), não 28/30", () => {
+  // Período do saldo cobre o mês civil todo (01 a 28/02/2026) → mês comercial
+  // completo: 30 × 100,00 = 3.000,00 — não 28 × 100,00 = 2.800,00.
+  const resultado = rescisao({
+    data_comunicacao: "2026-02-28",
+    data_termino: "2026-02-28",
+    periodo_aquisitivo_em_curso_inicio: "2025-04-01",
+    saldo_fgts_centavos: null,
+  });
+  assert.equal(resultado.dias_saldo_salario, 30);
+  assert.equal(valorDe(resultado, CODIGO_SALDO_SALARIO), 300_000);
+  const memoria = memoriaDe(resultado, CODIGO_SALDO_SALARIO);
+  assert.equal(memoria.dias_corridos, 28);
+  assert.equal(memoria.dias_pagos, 30);
+  assert.match(String(memoria.mes_civil_completo), /mês civil inteiro/);
+});
+
+test("janeiro trabalhado inteiro continua 30/30: os 31 dias corridos param no divisor, como antes", () => {
+  const resultado = rescisao({
+    data_comunicacao: "2026-01-31",
+    data_termino: "2026-01-31",
+    periodo_aquisitivo_em_curso_inicio: "2025-04-01",
+    saldo_fgts_centavos: null,
+  });
+  assert.equal(resultado.dias_saldo_salario, 30);
+  assert.equal(valorDe(resultado, CODIGO_SALDO_SALARIO), 300_000);
+  assert.match(
+    String(memoriaDe(resultado, CODIGO_SALDO_SALARIO).cap_divisor),
+    /31 dias corridos/
+  );
+});
+
+test("fevereiro PARCIAL segue proporcional: término no dia 27 paga 27/30", () => {
+  const resultado = rescisao({
+    data_comunicacao: "2026-02-27",
+    data_termino: "2026-02-27",
+    periodo_aquisitivo_em_curso_inicio: "2025-04-01",
+    saldo_fgts_centavos: null,
+  });
+  assert.equal(resultado.dias_saldo_salario, 27);
+  assert.equal(valorDe(resultado, CODIGO_SALDO_SALARIO), 270_000);
+  assert.equal(
+    memoriaDe(resultado, CODIGO_SALDO_SALARIO).mes_civil_completo,
+    null
+  );
+});
+
+test("admitido no dia 1º e desligado no último dia de fevereiro: o mês civil inteiro também vale na admissão do próprio mês", () => {
+  const resultado = rescisao({
+    data_admissao: "2026-02-01",
+    data_comunicacao: "2026-02-28",
+    data_termino: "2026-02-28",
+    periodo_aquisitivo_em_curso_inicio: "2026-02-01",
+    saldo_fgts_centavos: null,
+  });
+  assert.equal(resultado.dias_saldo_salario, 30);
+  assert.equal(valorDe(resultado, CODIGO_SALDO_SALARIO), 300_000);
 });
 
 // ------------------------------------------------------------------ pedido de demissão
@@ -333,7 +396,9 @@ test("justa causa: só saldo + férias VENCIDAS + 1/3 — sem proporcionais, sem
 
 test("acordo 484-A: METADE do aviso indenizado e multa de 20%", () => {
   // Aviso cheio seria 48 dias × 100,00 = 4.800,00 → metade = 2.400,00.
-  // Multa: 10.000,00 × 20% = 2.000,00. Demais verbas integrais (§1º).
+  // Multa: depósitos da rescisão = 8% × (3.000,00 + 2.400,00 + 1.500,00) =
+  // 552,00; base = 10.000,00 + 552,00 = 10.552,00 × 20% = 2.110,40 (o aviso
+  // deposita sobre o que É pago — a metade). Demais verbas integrais (§1º).
   const resultado = rescisao({
     tipo_desligamento: "acordo_484a",
     iniciativa: "acordo",
@@ -341,14 +406,14 @@ test("acordo 484-A: METADE do aviso indenizado e multa de 20%", () => {
   assert.equal(resultado.dias_aviso_proporcional, 48);
   assert.equal(resultado.dias_aviso_indenizados, 48);
   assert.equal(valorDe(resultado, CODIGO_AVISO_INDENIZADO), 240_000);
-  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 200_000);
+  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 211_040);
   assert.equal(memoriaDe(resultado, CODIGO_AVISO_INDENIZADO).fator, 0.5);
   assert.equal(memoriaDe(resultado, CODIGO_MULTA_FGTS).percentual, 20);
   assert.deepEqual(valoresDe(resultado, CODIGO_FERIAS), [75_000]);
   assert.equal(valorDe(resultado, CODIGO_DECIMO), 150_000);
-  assert.equal(resultado.total_proventos_centavos, 990_000);
+  assert.equal(resultado.total_proventos_centavos, 1_001_040);
   assert.equal(resultado.total_descontos_centavos, 36_003);
-  assert.equal(resultado.liquido_centavos, 953_997);
+  assert.equal(resultado.liquido_centavos, 965_037);
 });
 
 // ------------------------------------------------------------------ aviso da Lei 12.506
@@ -391,19 +456,63 @@ test("cumprimento DISPENSADO pelo empregador: pagamento continua devido (Súmula
 
 // ------------------------------------------------------------------ multa do FGTS: saldo é EXTERNO
 
-test("sem saldo do FGTS informado: multa ZERADA com aviso explícito; com saldo, 40% no centavo", () => {
+test("sem saldo do FGTS informado: multa sai SÓ sobre os depósitos da rescisão, com o mesmo aviso; com saldo, ele entra na base", () => {
+  // Depósitos da rescisão (caso padrão): 8% × (3.000,00 + 4.800,00 + 1.500,00)
+  // = 744,00. Sem saldo externo: 744,00 × 40% = 297,60 — e o aviso continua.
   const semSaldo = rescisao({ saldo_fgts_centavos: null });
-  assert.equal(valorDe(semSaldo, CODIGO_MULTA_FGTS), null);
+  assert.equal(valorDe(semSaldo, CODIGO_MULTA_FGTS), 29_760);
   assert.ok(semSaldo.avisos.includes(AVISO_FGTS_SALDO_EXTERNO));
+  assert.match(
+    String(memoriaDe(semSaldo, CODIGO_MULTA_FGTS).origem_saldo),
+    /não informado/
+  );
 
-  // 1.234,56 × 40% = 493,824 → 493,82 (meio-para-cima só no final).
+  // 1.234,56 + 744,00 = 1.978,56 × 40% = 791,424 → 791,42 (meio-para-cima só
+  // no final).
   const comSaldo = rescisao({ saldo_fgts_centavos: 123_456 });
-  assert.equal(valorDe(comSaldo, CODIGO_MULTA_FGTS), 49_382);
+  assert.equal(valorDe(comSaldo, CODIGO_MULTA_FGTS), 79_142);
   assert.ok(!comSaldo.avisos.includes(AVISO_FGTS_SALDO_EXTERNO));
   assert.match(
     String(memoriaDe(comSaldo, CODIGO_MULTA_FGTS).origem_saldo),
     /dado externo/
   );
+});
+
+test("multa do FGTS soma os depósitos da PRÓPRIA rescisão à base (Lei 8.036, art. 18, §1º) — conta à mão", () => {
+  // Verbas de depósito da rescisão padrão: saldo 3.000,00 + aviso 4.800,00 +
+  // 13º 1.500,00 = 9.300,00 → depósitos 8% = 744,00. As férias proporcionais
+  // (750,00 + 250,00) ficam FORA mesmo com incide_fgts na versão: indenizadas
+  // não depositam — decisão do motor, exclusão citada na memória.
+  // Base = 10.000,00 (externo) + 744,00 = 10.744,00 → 40% = 4.297,60.
+  const resultado = rescisao({});
+  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 429_760);
+  const memoria = memoriaDe(resultado, CODIGO_MULTA_FGTS);
+  assert.equal(memoria.total_depositos_rescisao, 744);
+  assert.equal(memoria.base_multa, 10_744);
+  assert.equal(memoria.aliquota_fgts, 8);
+  const composicao = memoria.depositos_rescisao as { codigo: string }[];
+  assert.deepEqual(
+    composicao.map((verba) => verba.codigo),
+    [CODIGO_SALDO_SALARIO, CODIGO_AVISO_INDENIZADO, CODIGO_DECIMO]
+  );
+  assert.match(String(memoria.composicao_base), /art\. 18, §1º/);
+  assert.match(String(memoria.composicao_base), /férias/);
+});
+
+test("a flag incide_fgts da versão VIGENTE decide o depósito: 1702 sem FGTS sai da base da multa", () => {
+  // Dupla trava (nada chumbado): com a versão vigente do aviso indenizado sem
+  // incide_fgts, os depósitos caem para 8% × (3.000,00 + 1.500,00) = 360,00 →
+  // multa de 40% sem saldo externo = 144,00.
+  const catalogoSemFgtsNoAviso = CATALOGO.map((rubrica) =>
+    rubrica.codigo === CODIGO_AVISO_INDENIZADO
+      ? { ...rubrica, incide_fgts: false }
+      : rubrica
+  );
+  const resultado = rescisao({
+    rubricas: catalogoSemFgtsNoAviso,
+    saldo_fgts_centavos: null,
+  });
+  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 14_400);
 });
 
 // ------------------------------------------------------------------ centavo exato
@@ -417,7 +526,11 @@ test("fronteira do meio centavo: aviso e 13º caem em ,5 exato e sobem — líqu
   // • Saldo: mês inteiro = 3.000,05. INSS do mês: 122,325 + 117,2313 +
   //   6,648×12% = 0,79776 → total 247,5339 → 247,53. IRRF: simplificado
   //   2.392,85 → isento → 0.
-  // Proventos 3.000,05 + 3.300,06 + 1.500,03 = 7.800,14; descontos 360,03.
+  // • Multa (sem saldo externo, só os depósitos da rescisão): 8% ×
+  //   (3.000,05 + 3.300,06 + 1.500,03 = 7.800,14) = 624,0112 → base; × 40% =
+  //   249,60448 → 249,60.
+  // Proventos 3.000,05 + 3.300,06 + 1.500,03 + 249,60 = 8.049,74; descontos
+  // 360,03.
   const resultado = rescisao({
     data_admissao: "2025-06-01",
     salario_base_centavos: 300_005,
@@ -429,9 +542,10 @@ test("fronteira do meio centavo: aviso e 13º caem em ,5 exato e sobem — líqu
   assert.equal(valorDe(resultado, CODIGO_DECIMO), 150_003);
   assert.equal(valorDe(resultado, CODIGO_INSS_DECIMO), 11_250);
   assert.equal(valorDe(resultado, CODIGO_INSS), 24_753);
-  assert.equal(resultado.total_proventos_centavos, 780_014);
+  assert.equal(valorDe(resultado, CODIGO_MULTA_FGTS), 24_960);
+  assert.equal(resultado.total_proventos_centavos, 804_974);
   assert.equal(resultado.total_descontos_centavos, 36_003);
-  assert.equal(resultado.liquido_centavos, 744_011);
+  assert.equal(resultado.liquido_centavos, 768_971);
   // Sem o período em curso as proporcionais não saem — e a saída avisa.
   assert.deepEqual(valoresDe(resultado, CODIGO_FERIAS), []);
   assert.ok(resultado.avisos.includes(AVISO_PERIODO_EM_CURSO_AUSENTE));
