@@ -9,11 +9,21 @@ import {
   listarDocumentos,
 } from "@/dominios/documentos/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import {
+  exigirPermissao,
+  exigirPermissaoParaRegularizacao,
+} from "@/lib/sessao";
 
+/**
+ * A LEITURA usa a variante de regularização (A8): o proxy lista GET
+ * /api/documentos no conjunto do bloqueado de propósito — é por esta lista
+ * que o painel de /documentos acha o documento bloqueante para ler e dar
+ * ciência (B4). A chave continua a mesma (documento.ver); só a tranca do
+ * `ciencia_pendente` fica de fora. O ENVIO (POST) herda a tranca normalmente.
+ */
 export async function GET(request: NextRequest) {
   try {
-    const sessao = await exigirPermissao("documento.ver");
+    const sessao = await exigirPermissaoParaRegularizacao("documento.ver");
     const incluirSensiveis =
       request.nextUrl.searchParams.get("sensivel") === "true";
     const documentos = await listarDocumentos(sessao, incluirSensiveis);

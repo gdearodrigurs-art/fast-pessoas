@@ -73,6 +73,9 @@ test("as rotas de REGULARIZAÇÃO usam as variantes sem a tranca da ciência (A8
   const comChave = [
     join("app", "api", "documentos", "[id]", "recusa", "route.ts"),
     join("app", "api", "documentos", "[id]", "download", "route.ts"),
+    // GET /api/documentos está no conjunto do bloqueado NO PROXY ("o painel
+    // acha o documento por ela") — a tranca da aplicação não pode fechá-la.
+    join("app", "api", "documentos", "route.ts"),
   ];
   for (const caminho of comChave) {
     assert.match(
@@ -81,6 +84,12 @@ test("as rotas de REGULARIZAÇÃO usam as variantes sem a tranca da ciência (A8
       `${caminho} deveria conferir documento.ver pela variante de regularização`
     );
   }
+  // O ENVIO (POST /api/documentos) continua herdando a tranca (A8): quem deve
+  // ciência não publica documento.
+  assert.match(
+    fonte(join("app", "api", "documentos", "route.ts")),
+    /exigirPermissao\("documento\.enviar"\)/
+  );
 
   const paginas = [
     join("app", "documentos", "page.tsx"),
