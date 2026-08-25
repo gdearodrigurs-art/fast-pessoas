@@ -1027,6 +1027,64 @@ function BlocoPosseFicha({
   );
 }
 
+// ------------------------------------------------------------------ raça-cor (A5:b — leitura do DP, com trilha)
+// O dado é AUTODECLARADO pela pessoa (portal); o DP o VÊ na ficha por decisão
+// registrada do dono. O campo busca o próprio dado
+// (/api/colaboradores/[id]/raca-cor, chave rh.colaborador.sensivel.ver) e cada
+// leitura grava trilha no serviço — por isso ele NÃO vem no payload da ficha:
+// abrir a ficha não é ler raça-cor; ler raça-cor é um ato próprio, logado.
+
+function CampoRacaCor({ colaboradorId }: { colaboradorId: number }) {
+  const [valor, setValor] = useState<{
+    raca_cor: string | null;
+    rotulo: string | null;
+  } | null>(null);
+  const [visivel, setVisivel] = useState(true);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/colaboradores/${colaboradorId}/raca-cor`,
+          { cache: "no-store" }
+        );
+        if (!ativo) return;
+        if (resposta.status === 403 || resposta.status === 404) {
+          setVisivel(false);
+          return;
+        }
+        if (!resposta.ok) return;
+        setValor(
+          (await resposta.json()) as {
+            raca_cor: string | null;
+            rotulo: string | null;
+          }
+        );
+      } catch {
+        /* a ficha segue sem o campo */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  if (!visivel) return null;
+  return (
+    <div className={`${estilos.campoDado} ${estilos.campoRestrito}`}>
+      <div className={estilos.rot}>Raça-cor (autodeclarada)</div>
+      <div className={estilos.val}>
+        {valor === null ? "…" : (valor.rotulo ?? "não declarada")}
+      </div>
+      <div className={estilos.notaRestrito}>
+        autodeclarada pela pessoa, no portal · dado sensível · leitura gravada
+        na trilha
+      </div>
+    </div>
+  );
+}
+
 /** RCF vigente do cargo da posição atual — documento de gestão, não sensível. */
 interface Rcf {
   cargo_id: number;
@@ -1062,6 +1120,9 @@ interface Ficha {
   retrato: string | null;
   contexto: string | null;
   email: string;
+  /** Contato corporativo DA PESSOA (A7:b) — o mesmo em todos os vínculos. */
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
   usuario_ativo: boolean;
   cargo_nome: string | null;
   /** REGISTRO vigente: em qual empresa do grupo este vínculo está registrado. */
@@ -1414,6 +1475,8 @@ export function FichaColaborador({
     // "" = não alterar. O valor guardado NUNCA vem no payload da ficha (LGPD:
     // gênero autodeclarado só existe em agregado), então o campo é de escrita.
     genero: "" as Genero | "",
+    telefone_corporativo: "",
+    email_corporativo: "",
     retrato: "",
     contexto: "",
   });
@@ -1456,6 +1519,8 @@ export function FichaColaborador({
         data_desligamento: dados.colaborador.data_desligamento ?? "",
         data_nascimento: dados.colaborador.data_nascimento ?? "",
         genero: "",
+        telefone_corporativo: dados.colaborador.telefone_corporativo ?? "",
+        email_corporativo: dados.colaborador.email_corporativo ?? "",
         retrato: dados.colaborador.retrato ?? "",
         contexto: dados.colaborador.contexto ?? "",
       });
@@ -1698,6 +1763,9 @@ export function FichaColaborador({
         status: edicao.status,
         retrato: edicao.retrato.trim() || null,
         contexto: edicao.contexto.trim() || null,
+        // Da pessoa (A7:b): vazio limpa (null); o servidor grava em rh.pessoa.
+        telefone_corporativo: edicao.telefone_corporativo.trim() || null,
+        email_corporativo: edicao.email_corporativo.trim() || null,
       };
       if (edicao.status === "desligado" && edicao.data_desligamento) {
         corpo.data_desligamento = edicao.data_desligamento;
@@ -2066,8 +2134,23 @@ export function FichaColaborador({
                 <div className={estilos.val}>{formatarCpf(ficha.cpf)}</div>
               </div>
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>E-mail</div>
+                <div className={estilos.rot}>E-mail (login)</div>
                 <div className={estilos.val}>{ficha.email}</div>
+              </div>
+              {/* Contato corporativo é DA PESSOA (A7:b): o mesmo nos dois
+                  vínculos de quem foi readmitido em outro CNPJ. Faz parte do
+                  crachá público (A4:a). */}
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Telefone corporativo</div>
+                <div className={estilos.val}>
+                  {ficha.telefone_corporativo ?? "—"}
+                </div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>E-mail corporativo</div>
+                <div className={estilos.val}>
+                  {ficha.email_corporativo ?? "—"}
+                </div>
               </div>
               <div className={estilos.campoDado}>
                 <div className={estilos.rot}>Tipo de vínculo</div>
@@ -2153,6 +2236,11 @@ export function FichaColaborador({
                     dado sensível · leitura gravada na trilha
                   </div>
                 </div>
+              )}
+              {/* A5:b — raça-cor individual, visível ao DP (chave sensível);
+                  o campo busca o próprio dado e a leitura fica na trilha. */}
+              {permissoes.podeVerSensivel && (
+                <CampoRacaCor colaboradorId={colaboradorId} />
               )}
             </div>
 
@@ -2455,6 +2543,46 @@ export function FichaColaborador({
                           </option>
                         ))}
                       </select>
+                    </div>
+                    {/* Contato corporativo é DA PESSOA (A7:b): corrigir aqui
+                        corrige em todos os vínculos dela. Vazio = limpar.
+                        Raça-cor NÃO se edita aqui: é autodeclaração da
+                        pessoa, pelo portal (A5:b). */}
+                    <div className={estilos.campoGrupo}>
+                      <label className={estilos.rotulo} htmlFor="edTelCorp">
+                        Telefone corporativo
+                      </label>
+                      <input
+                        className={estilos.campo}
+                        id="edTelCorp"
+                        type="text"
+                        maxLength={40}
+                        value={edicao.telefone_corporativo}
+                        onChange={(e) =>
+                          setEdicao((atual) => ({
+                            ...atual,
+                            telefone_corporativo: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className={estilos.campoGrupo}>
+                      <label className={estilos.rotulo} htmlFor="edEmailCorp">
+                        E-mail corporativo
+                      </label>
+                      <input
+                        className={estilos.campo}
+                        id="edEmailCorp"
+                        type="email"
+                        maxLength={254}
+                        value={edicao.email_corporativo}
+                        onChange={(e) =>
+                          setEdicao((atual) => ({
+                            ...atual,
+                            email_corporativo: e.target.value,
+                          }))
+                        }
+                      />
                     </div>
                     <div className={estilos.campoGrupoLargo}>
                       <label className={estilos.rotulo} htmlFor="edRetrato">

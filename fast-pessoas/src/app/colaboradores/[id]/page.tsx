@@ -8,6 +8,8 @@ import { FichaColaborador } from "./ficha-colaborador";
 export interface PermissoesFicha {
   podeEditar: boolean;
   podeVerSalario: boolean;
+  /** rh.colaborador.sensivel.ver — habilita o bloco de raça-cor (A5:b). */
+  podeVerSensivel: boolean;
   podeEditarPosicao: boolean;
   podeVerRestrita: boolean;
   podeRegistrarOcorrencia: boolean;
@@ -46,6 +48,7 @@ export default async function PaginaFichaColaborador({
     pode_ver_salario: boolean;
     pode_ver_salario_equipe: boolean;
     pode_ver_disciplinar_equipe: boolean;
+    pode_ver_sensivel: boolean;
     pode_editar_posicao: boolean;
     pode_ver_restrita: boolean;
     pode_registrar_ocorrencia: boolean;
@@ -63,6 +66,7 @@ export default async function PaginaFichaColaborador({
             sistema.tem_permissao($1, 'rh.posicao.ver')             AS pode_ver_salario,
             sistema.tem_permissao($1, 'rh.posicao.ver.equipe')      AS pode_ver_salario_equipe,
             sistema.tem_permissao($1, 'rh.disciplinar.ver.equipe')  AS pode_ver_disciplinar_equipe,
+            sistema.tem_permissao($1, 'rh.colaborador.sensivel.ver') AS pode_ver_sensivel,
             sistema.tem_permissao($1, 'rh.posicao.editar')          AS pode_editar_posicao,
             sistema.tem_permissao($1, 'rh.ocorrencia.restrita.ver') AS pode_ver_restrita,
             sistema.tem_permissao($1, 'rh.ocorrencia.registrar')    AS pode_registrar_ocorrencia,
@@ -103,6 +107,7 @@ export default async function PaginaFichaColaborador({
   const permissoes: PermissoesFicha = {
     podeEditar: Boolean(linha?.pode_editar),
     podeVerSalario: Boolean(linha?.pode_ver_salario) || salarioPelaEquipe,
+    podeVerSensivel: Boolean(linha?.pode_ver_sensivel),
     podeEditarPosicao: Boolean(linha?.pode_editar_posicao),
     podeVerRestrita: Boolean(linha?.pode_ver_restrita),
     podeRegistrarOcorrencia: Boolean(linha?.pode_registrar_ocorrencia),

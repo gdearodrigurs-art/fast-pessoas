@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  esquemaAtualizacaoColaborador,
+  esquemaDeclaracaoRacaCor,
   esquemaNovaFaixaSalarial,
   hojeNaOperacao,
 } from "../src/dominios/colaboradores/esquemas";
@@ -111,4 +113,48 @@ test("quem só alcança a si mesmo nunca gera trilha", () => {
     chaveQueAmpliouAFicha({ alcance: "proprio", colaboradorId: 10 }, false),
     null
   );
+});
+
+// ------------------------------------------------------- raça-cor (A5:b) e contato corporativo (A7:b)
+// A autodeclaração aceita exatamente o padrão IBGE + a recusa explícita —
+// valor fora disso é recusado na borda, antes do CHECK do banco (0085).
+
+test("autodeclaração de raça-cor aceita os valores IBGE e a recusa explícita", () => {
+  for (const valor of [
+    "branca",
+    "preta",
+    "parda",
+    "amarela",
+    "indigena",
+    "prefiro_nao_declarar",
+  ]) {
+    assert.equal(
+      esquemaDeclaracaoRacaCor.safeParse({ raca_cor: valor }).success,
+      true,
+      `deveria aceitar "${valor}"`
+    );
+  }
+});
+
+test("autodeclaração de raça-cor recusa valor fora do padrão IBGE", () => {
+  assert.equal(
+    esquemaDeclaracaoRacaCor.safeParse({ raca_cor: "outra" }).success,
+    false
+  );
+  assert.equal(esquemaDeclaracaoRacaCor.safeParse({}).success, false);
+});
+
+test("edição da ficha aceita limpar o contato corporativo com null (A7:b)", () => {
+  const analise = esquemaAtualizacaoColaborador.safeParse({
+    telefone_corporativo: null,
+    email_corporativo: null,
+  });
+  assert.equal(analise.success, true);
+});
+
+test("e-mail corporativo inválido é recusado na borda", () => {
+  const analise = esquemaAtualizacaoColaborador.safeParse({
+    email_corporativo: "nao-e-email",
+  });
+  assert.equal(analise.success, false);
 });

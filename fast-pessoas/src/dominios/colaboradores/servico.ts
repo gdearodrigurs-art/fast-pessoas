@@ -55,6 +55,8 @@ import {
   NovaFaixaSalarial,
   NovaVersaoCargo,
   NovaVersaoEstabelecimento,
+  CriacaoNivelHierarquico,
+  DeclaracaoRacaCor,
   FAIXAS_IDADE,
   FiltroAniversariantes,
   Genero,
@@ -63,7 +65,10 @@ import {
   MINIMO_POR_RECORTE_MAX,
   MINIMO_POR_RECORTE_MIN,
   MINIMO_POR_RECORTE_PADRAO,
+  RacaCor,
+  RACAS_COR,
   ROTULOS_GENERO,
+  ROTULOS_RACA_COR,
   ROTULOS_MOTIVO_POSICAO,
   ROTULOS_OCORRENCIA,
   ROTULOS_STATUS,
@@ -105,9 +110,20 @@ import {
   buscarEstabelecimentoVersaoAtiva,
   buscarFaixaAtivaParaAtualizar,
   buscarFicha,
+  buscarNivelAtivo,
+  buscarNivelParaAtualizar,
   ColegaMinimo,
   CrachaColaborador,
+  gravarRacaCorDaPessoa,
+  inativarNivelHierarquico,
+  inserirNivelHierarquico,
+  lerRacaCorDaPessoa,
+  lerRacaCorDoColaborador,
   listarCatalogoMinimo,
+  listarNiveisHierarquicos,
+  NivelHierarquico,
+  pessoaIdDoUsuario,
+  travarRacaCorParaAtualizar,
   buscarLotacaoVigenteParaAtualizar,
   buscarParaAtualizar,
   buscarPosicaoVigenteParaAtualizar,
@@ -585,6 +601,8 @@ async function admitirPessoaNova(
           genero: dados.genero,
           retrato: dados.retrato ?? null,
           contexto: dados.contexto ?? null,
+          telefone_corporativo: dados.telefone_corporativo ?? null,
+          email_corporativo: dados.email_corporativo ?? null,
         });
         const usuario = await criarUsuario(cliente, {
           email: dados.email,
@@ -644,6 +662,18 @@ async function admitirPessoaNova(
             para: ROTULOS_GENERO[dados.genero],
           },
         };
+        if (dados.telefone_corporativo) {
+          diffPessoa["Telefone corporativo"] = {
+            de: null,
+            para: dados.telefone_corporativo,
+          };
+        }
+        if (dados.email_corporativo) {
+          diffPessoa["E-mail corporativo"] = {
+            de: null,
+            para: dados.email_corporativo,
+          };
+        }
         if (dados.retrato) {
           diffPessoa.Retrato = { de: null, para: dados.retrato };
         }
@@ -897,6 +927,27 @@ export async function atualizarColaborador(
       diffPessoa["Data de nascimento"] = {
         de: atual.data_nascimento ? formatarData(atual.data_nascimento) : null,
         para: formatarData(dados.data_nascimento),
+      };
+    }
+    // Contato corporativo é da PESSOA (A7:b): muda num contrato, vale nos dois.
+    if (
+      dados.telefone_corporativo !== undefined &&
+      dados.telefone_corporativo !== atual.telefone_corporativo
+    ) {
+      camposPessoa.telefone_corporativo = dados.telefone_corporativo;
+      diffPessoa["Telefone corporativo"] = {
+        de: atual.telefone_corporativo,
+        para: dados.telefone_corporativo,
+      };
+    }
+    if (
+      dados.email_corporativo !== undefined &&
+      dados.email_corporativo !== atual.email_corporativo
+    ) {
+      camposPessoa.email_corporativo = dados.email_corporativo;
+      diffPessoa["E-mail corporativo"] = {
+        de: atual.email_corporativo,
+        para: dados.email_corporativo,
       };
     }
     // Gênero é autodeclarado: gravamos o que a pessoa declarou sem devolver o
@@ -1860,6 +1911,7 @@ function camposRcf(dados: {
   missao?: string;
   atividades?: string[];
   observacoes?: string;
+  nivel_hierarquico_id?: number | null;
 }) {
   return {
     setor: dados.setor ?? null,
@@ -1868,7 +1920,29 @@ function camposRcf(dados: {
     missao: dados.missao ?? null,
     atividades: dados.atividades ?? [],
     observacoes: dados.observacoes ?? null,
+    nivel_hierarquico_id: dados.nivel_hierarquico_id ?? null,
   };
+}
+
+/**
+ * Valida o nível hierárquico do catálogo (A6:a) e devolve o nome para a
+ * trilha. Nulo é aceito ("ainda não classificado"); id inativo/inexistente é
+ * recusado com erro de campo — o trigger da 0085 é a segunda tranca.
+ */
+async function validarNivelHierarquico(
+  cliente: Parameters<typeof buscarNivelAtivo>[0],
+  nivelId: number | null
+): Promise<string | null> {
+  if (nivelId === null) return null;
+  const nivel = await buscarNivelAtivo(cliente, nivelId);
+  if (!nivel) {
+    throw new ErroHttpCampo(
+      400,
+      "Nível hierárquico inexistente ou inativo — escolha um do catálogo.",
+      "nivel_hierarquico_id"
+    );
+  }
+  return nivel.nome;
 }
 
 /** Diff legível do RCF para a trilha (audit.alteracao). */
@@ -1959,6 +2033,10 @@ export async function criarCargo(
         );
       }
     }
+    const nivelNome = await validarNivelHierarquico(
+      cliente,
+      rcf.nivel_hierarquico_id
+    );
     const cha = chaCompleto(dados.cha);
     const versaoId = await inserirVersaoCargo(cliente, {
       cargo_id: cargoId,
@@ -1974,6 +2052,9 @@ export async function criarCargo(
     };
     if (dados.descricao) {
       diff["Descrição"] = { de: null, para: truncar(dados.descricao, 500) };
+    }
+    if (nivelNome !== null) {
+      diff["Nível hierárquico"] = { de: null, para: nivelNome };
     }
     diffRcf(diff, null, { ...rcf, cha });
     await registrarAlteracao(cliente, {
@@ -2048,6 +2129,17 @@ export async function criarVersaoCargo(
         );
       }
     }
+    const nivelNome = await validarNivelHierarquico(
+      cliente,
+      rcf.nivel_hierarquico_id
+    );
+    // O nome do nível ANTERIOR para a trilha — mesmo que ele esteja inativo
+    // hoje (a versão antiga aponta para o que valia na época).
+    const nivelAnteriorNome =
+      ativa?.nivel_hierarquico_id == null
+        ? null
+        : ((await buscarNivelParaAtualizar(cliente, ativa.nivel_hierarquico_id))
+            ?.nome ?? null);
     const cha = chaCompleto(dados.cha);
     const versaoId = await inserirVersaoCargo(cliente, {
       cargo_id: cargoId,
@@ -2068,6 +2160,9 @@ export async function criarVersaoCargo(
         para: formatarData(dados.inicio_vigencia),
       },
     };
+    if (nivelNome !== null || nivelAnteriorNome !== null) {
+      diff["Nível hierárquico"] = { de: nivelAnteriorNome, para: nivelNome };
+    }
     diffRcf(diff, ativa, { ...rcf, cha });
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
@@ -2557,6 +2652,190 @@ export async function obterParametroPrivacidade(): Promise<PainelPrivacidade> {
     maximo: MINIMO_POR_RECORTE_MAX,
     padrao: MINIMO_POR_RECORTE_PADRAO,
   };
+}
+
+// ------------------------------------------------------------------ raça-cor (A5:b — autodeclarada; DP vê com trilha)
+
+export interface RacaCorVisao {
+  /** null = a pessoa nunca declarou. */
+  raca_cor: RacaCor | null;
+  rotulo: string | null;
+}
+
+function projetarRacaCor(bruto: string | null): RacaCorVisao {
+  const valor = (bruto ?? null) as RacaCor | null;
+  return {
+    raca_cor: valor,
+    rotulo: valor === null ? null : ROTULOS_RACA_COR[valor],
+  };
+}
+
+/**
+ * A leitura INDIVIDUAL do DP na ficha (decisão A5:b — escolha consciente do
+ * dono, registrada em docs/20). A rota exige `rh.colaborador.sensivel.ver`
+ * (a chave de dado sensível da ficha, que já obriga 2FA); aqui a leitura
+ * grava trilha SEMPRE, no molde salário/ASO — inclusive quando o valor é
+ * "não declarada", que também é informação sobre a pessoa.
+ */
+export async function obterRacaCorColaborador(
+  sessao: PayloadSessao,
+  colaboradorId: number
+): Promise<RacaCorVisao> {
+  const linha = await lerRacaCorDoColaborador(colaboradorId);
+  if (!linha) {
+    throw new ErroHttp(404, "Colaborador não encontrado.");
+  }
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "rh.colaborador.sensivel.ver",
+    recurso: "colaborador.raca_cor",
+    registroId: String(colaboradorId),
+  });
+  return projetarRacaCor(linha.raca_cor);
+}
+
+/** O titular sem ficha de pessoa não tem o que declarar. */
+async function exigirMinhaPessoa(sessao: PayloadSessao): Promise<number> {
+  const pessoaId = await pessoaIdDoUsuario(sessao.usuario_id);
+  if (pessoaId === null) {
+    throw new ErroHttp(
+      409,
+      "Sua conta não está ligada a uma pessoa do quadro — fale com o DP."
+    );
+  }
+  return pessoaId;
+}
+
+/**
+ * A PRÓPRIA raça-cor, para o cartão do portal. Leitura do titular sobre si —
+ * sem trilha, pela mesma razão do portal inteiro (trilha é para dado de
+ * TERCEIRO). Devolve também as opções, para a tela não chumbar lista nenhuma.
+ */
+export async function minhaRacaCor(sessao: PayloadSessao): Promise<{
+  declaracao: RacaCorVisao;
+  opcoes: { valor: RacaCor; rotulo: string }[];
+}> {
+  const pessoaId = await exigirMinhaPessoa(sessao);
+  const bruto = await lerRacaCorDaPessoa(pessoaId);
+  return {
+    declaracao: projetarRacaCor(bruto),
+    opcoes: RACAS_COR.map((valor) => ({
+      valor,
+      rotulo: ROTULOS_RACA_COR[valor],
+    })),
+  };
+}
+
+/**
+ * A AUTODECLARAÇÃO (A5:b): só a própria pessoa grava a própria raça-cor —
+ * keyless por titularidade (molde da ciência de posse): o titular sai da
+ * SESSÃO, nunca de um id no corpo. Redeclarar é permitido (a pessoa pode
+ * mudar a declaração quando quiser); a trilha guarda o de/para com dono e
+ * data — é o controle de quem tocou num dado autodeclarado.
+ */
+export async function declararMinhaRacaCor(
+  sessao: PayloadSessao,
+  dados: DeclaracaoRacaCor
+): Promise<RacaCorVisao> {
+  const pessoaId = await exigirMinhaPessoa(sessao);
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const atual = await travarRacaCorParaAtualizar(cliente, pessoaId);
+    if (!atual) {
+      throw new ErroHttp(404, "Pessoa não encontrada.");
+    }
+    if (atual.raca_cor === dados.raca_cor) return;
+    await gravarRacaCorDaPessoa(cliente, pessoaId, dados.raca_cor);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "raca_cor.autodeclarar",
+      tabela: ORIGEM_PESSOA,
+      registroId: String(pessoaId),
+      diff: {
+        "Raça-cor (autodeclarada)": {
+          de:
+            atual.raca_cor === null
+              ? null
+              : ROTULOS_RACA_COR[atual.raca_cor as RacaCor],
+          para: ROTULOS_RACA_COR[dados.raca_cor],
+        },
+      },
+    });
+  });
+  return projetarRacaCor(dados.raca_cor);
+}
+
+// ------------------------------------------------------------------ nível hierárquico (A6:a — catálogo administrável)
+
+/** Quem administra vê inclusive os inativos (para reativar); o seletor, só ativos. */
+export async function obterNiveisHierarquicos(
+  apenasAtivos: boolean
+): Promise<{ niveis: NivelHierarquico[] }> {
+  return { niveis: await listarNiveisHierarquicos(apenasAtivos) };
+}
+
+export async function criarNivelHierarquico(
+  sessao: PayloadSessao,
+  dados: CriacaoNivelHierarquico
+): Promise<{ niveis: NivelHierarquico[] }> {
+  try {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      const id = await inserirNivelHierarquico(cliente, dados.nome);
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "rh.nivel_hierarquico",
+        registroId: String(id),
+        diff: { Nome: { de: null, para: dados.nome } },
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "nivel_hierarquico_nome_key") {
+      throw new ErroHttpCampo(
+        409,
+        `Já existe um nível chamado "${dados.nome}" — reative-o ou use outro nome.`,
+        "nome"
+      );
+    }
+    throw erro;
+  }
+  return obterNiveisHierarquicos(false);
+}
+
+/**
+ * Inativar/reativar — o lugar da exclusão (o DELETE é barrado na 0085).
+ * Versão de cargo já gravada continua apontando para o nível; o que muda é
+ * que ele some do seletor de versões NOVAS.
+ */
+export async function definirNivelHierarquicoInativo(
+  sessao: PayloadSessao,
+  id: number,
+  inativo: boolean
+): Promise<{ niveis: NivelHierarquico[] }> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const nivel = await buscarNivelParaAtualizar(cliente, id);
+    if (!nivel) {
+      throw new ErroHttp(404, "Nível hierárquico não encontrado.");
+    }
+    if (inativo === !nivel.ativo) return;
+    await inativarNivelHierarquico(cliente, id, inativo ? sessao.usuario_id : null);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "edicao",
+      tabela: "rh.nivel_hierarquico",
+      registroId: String(id),
+      diff: {
+        Nível: { de: null, para: nivel.nome },
+        "Situação": {
+          de: inativo ? "ativo" : "inativo",
+          para: inativo ? "inativo" : "ativo",
+        },
+      },
+    });
+  });
+  return obterNiveisHierarquicos(false);
 }
 
 /**

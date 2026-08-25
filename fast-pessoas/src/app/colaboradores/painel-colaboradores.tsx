@@ -137,6 +137,8 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
     data_admissao: "",
     data_nascimento: "",
     genero: "nao_informado" as Genero,
+    telefone_corporativo: "",
+    email_corporativo: "",
     retrato: "",
     contexto: "",
   });
@@ -203,6 +205,8 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
       data_admissao: "",
       data_nascimento: "",
       genero: "nao_informado",
+      telefone_corporativo: "",
+      email_corporativo: "",
       retrato: "",
       contexto: "",
     });
@@ -228,6 +232,10 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           data_admissao: novo.data_admissao,
           data_nascimento: novo.data_nascimento,
           genero: novo.genero,
+          // Da PESSOA (A7:b): opcionais na admissão. Raça-cor não entra —
+          // é autodeclaração da própria pessoa, pelo portal (A5:b).
+          telefone_corporativo: novo.telefone_corporativo.trim() || undefined,
+          email_corporativo: novo.email_corporativo.trim() || undefined,
           retrato: novo.retrato.trim() || undefined,
           contexto: novo.contexto.trim() || undefined,
         }),
@@ -486,6 +494,44 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
                       </option>
                     ))}
                   </select>
+                </div>
+                {/* Contato corporativo é DA PESSOA (A7:b) — o mesmo em todos
+                    os vínculos dela; faz parte do crachá público (A4:a). */}
+                <div className={estilos.campoGrupo}>
+                  <label className={estilos.rotulo} htmlFor="novoTelCorp">
+                    Telefone corporativo (opcional)
+                  </label>
+                  <input
+                    className={estilos.campo}
+                    id="novoTelCorp"
+                    type="text"
+                    maxLength={40}
+                    value={novo.telefone_corporativo}
+                    onChange={(e) =>
+                      setNovo((atual) => ({
+                        ...atual,
+                        telefone_corporativo: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className={estilos.campoGrupo}>
+                  <label className={estilos.rotulo} htmlFor="novoEmailCorp">
+                    E-mail corporativo (opcional)
+                  </label>
+                  <input
+                    className={estilos.campo}
+                    id="novoEmailCorp"
+                    type="email"
+                    maxLength={254}
+                    value={novo.email_corporativo}
+                    onChange={(e) =>
+                      setNovo((atual) => ({
+                        ...atual,
+                        email_corporativo: e.target.value,
+                      }))
+                    }
+                  />
                 </div>
                 <div className={estilos.campoGrupoLargo}>
                   <label className={estilos.rotulo} htmlFor="novoRetrato">

@@ -51,6 +51,40 @@ export const ROTULOS_GENERO: Record<Genero, string> = {
   nao_informado: "Não informado",
 };
 
+// Raça-cor padrão IBGE (decisão A5:b, migration 0085). AUTODECLARADA pela
+// PESSOA, no portal — o DP não escolhe por ninguém (por isso ela NÃO entra na
+// admissão nem na edição da ficha). Diferente do gênero, o DP VÊ o dado
+// individual na ficha — decisão de privacidade registrada do dono — e essa
+// leitura grava trilha de dado sensível (molde salário/ASO, chave
+// rh.colaborador.sensivel.ver). O valor NULO no banco é "nunca declarou";
+// 'prefiro_nao_declarar' é declaração ativa de recusa — estados diferentes.
+export const RACAS_COR = [
+  "branca",
+  "preta",
+  "parda",
+  "amarela",
+  "indigena",
+  "prefiro_nao_declarar",
+] as const;
+
+export type RacaCor = (typeof RACAS_COR)[number];
+
+export const ROTULOS_RACA_COR: Record<RacaCor, string> = {
+  branca: "Branca",
+  preta: "Preta",
+  parda: "Parda",
+  amarela: "Amarela",
+  indigena: "Indígena",
+  prefiro_nao_declarar: "Prefiro não declarar",
+};
+
+/** A autodeclaração que chega do portal — só o valor, o titular sai da sessão. */
+export const esquemaDeclaracaoRacaCor = z.object({
+  raca_cor: z.enum(RACAS_COR),
+});
+
+export type DeclaracaoRacaCor = z.infer<typeof esquemaDeclaracaoRacaCor>;
+
 export function cpfValido(cpf: string): boolean {
   if (!/^\d{11}$/.test(cpf) || /^(\d)\1{10}$/.test(cpf)) return false;
   for (const tamanho of [9, 10]) {
@@ -150,6 +184,11 @@ export const esquemaAdmissaoPessoaNova = z
     // Nasajon — ver a decisão documentada na migration 0020).
     data_nascimento: esquemaData,
     genero: z.enum(GENEROS).optional().default("nao_informado"),
+    // Contato corporativo é DA PESSOA (A7:b, migration 0085) — opcional: nem
+    // todo admitido já tem ramal e e-mail no dia um. Raça-cor NÃO entra aqui
+    // de propósito: é autodeclaração da pessoa, pelo portal (A5:b).
+    telefone_corporativo: z.string().trim().max(40).optional(),
+    email_corporativo: z.email("E-mail corporativo inválido").max(254).optional(),
     retrato: z.string().trim().max(2000).optional(),
     contexto: z.string().trim().max(4000).optional(),
   })
@@ -213,6 +252,14 @@ export const esquemaAtualizacaoColaborador = z
     data_desligamento: esquemaData.optional(),
     data_nascimento: esquemaData.optional(),
     genero: z.enum(GENEROS).optional(),
+    // Da PESSOA (A7:b): null = limpar; ausente = não alterar. Raça-cor fica
+    // FORA da edição do DP de propósito (autodeclaração pelo portal, A5:b).
+    telefone_corporativo: z.string().trim().max(40).nullable().optional(),
+    email_corporativo: z
+      .email("E-mail corporativo inválido")
+      .max(254)
+      .nullable()
+      .optional(),
   })
   .superRefine((dados, contexto) => {
     if (Object.values(dados).every((valor) => valor === undefined)) {
@@ -421,6 +468,8 @@ const camposVersaoCargo = {
   setor: z.string().trim().max(120).optional(),
   /** Cargo do "Líder Direto" do documento — estrutura, não pessoa. */
   cargo_lider_id: z.number().int().positive().nullable().optional(),
+  /** Nível hierárquico do catálogo administrável (A6:a, migration 0085). */
+  nivel_hierarquico_id: z.number().int().positive().nullable().optional(),
   tipo_contrato_previsto: z.enum(TIPOS_VINCULO).optional(),
   missao: z.string().trim().max(4000).optional(),
   atividades: esquemaAtividades.optional(),
@@ -464,6 +513,24 @@ export type CriacaoCargo = z.infer<typeof esquemaCriacaoCargo>;
 export const esquemaNovaVersaoCargo = z.object(camposVersaoCargo);
 
 export type NovaVersaoCargo = z.infer<typeof esquemaNovaVersaoCargo>;
+
+// ------------------------------------------------------------------ nível hierárquico (catálogo administrável — A6:a)
+
+export const esquemaCriacaoNivelHierarquico = z.object({
+  nome: z.string().trim().min(2, "Informe o nome do nível").max(120),
+});
+
+export type CriacaoNivelHierarquico = z.infer<
+  typeof esquemaCriacaoNivelHierarquico
+>;
+
+export const esquemaInativacaoNivelHierarquico = z.object({
+  inativo: z.boolean(),
+});
+
+export type InativacaoNivelHierarquico = z.infer<
+  typeof esquemaInativacaoNivelHierarquico
+>;
 
 export const esquemaNovaFaixaSalarial = z
   .object({

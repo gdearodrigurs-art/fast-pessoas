@@ -27,7 +27,19 @@ interface CargoResumo {
   missao: string | null;
   atividades: string[] | null;
   observacoes: string | null;
+  /** Nível hierárquico da versão ativa (A6:a — catálogo administrável). */
+  nivel_hierarquico_id: number | null;
+  nivel_hierarquico_nome: string | null;
   ocupantes: number;
+}
+
+/** Nível do catálogo administrável (A6:a, migration 0085). */
+interface NivelHierarquico {
+  id: number;
+  nome: string;
+  ordem: number;
+  ativo: boolean;
+  em_uso: number;
 }
 
 function formatarData(dataIso: string): string {
@@ -71,6 +83,7 @@ interface FormularioRcf {
   nome: string;
   setor: string;
   cargo_lider_id: string;
+  nivel_hierarquico_id: string;
   tipo_contrato_previsto: string;
   missao: string;
   atividades: string;
@@ -86,6 +99,7 @@ const RCF_VAZIO: FormularioRcf = {
   nome: "",
   setor: "",
   cargo_lider_id: "",
+  nivel_hierarquico_id: "",
   tipo_contrato_previsto: "",
   missao: "",
   atividades: "",
@@ -103,6 +117,10 @@ function rcfDoCargo(cargo: CargoResumo): FormularioRcf {
     setor: cargo.setor ?? "",
     cargo_lider_id:
       cargo.cargo_lider_id === null ? "" : String(cargo.cargo_lider_id),
+    nivel_hierarquico_id:
+      cargo.nivel_hierarquico_id === null
+        ? ""
+        : String(cargo.nivel_hierarquico_id),
     tipo_contrato_previsto: cargo.tipo_contrato_previsto ?? "",
     missao: cargo.missao ?? "",
     atividades: (cargo.atividades ?? []).join("\n"),
@@ -124,6 +142,10 @@ function corpoRcf(formulario: FormularioRcf): Record<string, unknown> {
       formulario.cargo_lider_id === ""
         ? null
         : Number(formulario.cargo_lider_id),
+    nivel_hierarquico_id:
+      formulario.nivel_hierarquico_id === ""
+        ? null
+        : Number(formulario.nivel_hierarquico_id),
     tipo_contrato_previsto: formulario.tipo_contrato_previsto || undefined,
     missao: formulario.missao.trim() || undefined,
     atividades: listaAtividades(formulario.atividades),
@@ -149,12 +171,15 @@ function CamposRcf({
   prefixo,
   valores,
   cargos,
+  niveis,
   cargoAtualId,
   aoAlterar,
 }: {
   prefixo: string;
   valores: FormularioRcf;
   cargos: CargoResumo[];
+  /** Níveis ATIVOS do catálogo (A6:a) — nada de lista chumbada aqui. */
+  niveis: NivelHierarquico[];
   cargoAtualId: number | null;
   aoAlterar: (campo: keyof FormularioRcf, valor: string) => void;
 }) {
@@ -205,6 +230,28 @@ function CamposRcf({
             .map((cargo) => (
               <option key={cargo.id} value={String(cargo.id)}>
                 {cargo.nome}
+              </option>
+            ))}
+        </select>
+      </div>
+      <div className={estilos.campoGrupo}>
+        <label className={estilos.rotulo} htmlFor={id("Nivel")}>
+          Nível hierárquico
+        </label>
+        {/* Opções do catálogo administrável (só ativos) — o dono acrescenta,
+            renomeia e inativa níveis na seção abaixo, nunca no código. */}
+        <select
+          className={estilos.campo}
+          id={id("Nivel")}
+          value={valores.nivel_hierarquico_id}
+          onChange={(e) => aoAlterar("nivel_hierarquico_id", e.target.value)}
+        >
+          <option value="">Não classificado</option>
+          {niveis
+            .filter((nivel) => nivel.ativo)
+            .map((nivel) => (
+              <option key={nivel.id} value={String(nivel.id)}>
+                {nivel.nome}
               </option>
             ))}
         </select>
@@ -349,6 +396,9 @@ export function PainelCargos({
   podeAdminEstrutura: boolean;
 }) {
   const [cargos, setCargos] = useState<CargoResumo[]>([]);
+  const [niveis, setNiveis] = useState<NivelHierarquico[]>([]);
+  const [novoNivel, setNovoNivel] = useState("");
+  const [erroNivel, setErroNivel] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
@@ -371,12 +421,21 @@ export function PainelCargos({
 
   const carregar = useCallback(async () => {
     try {
-      const resposta = await fetch("/api/cargos");
+      const [resposta, respostaNiveis] = await Promise.all([
+        fetch("/api/cargos"),
+        fetch("/api/cargos/niveis"),
+      ]);
       const dadosCargos = await resposta.json().catch(() => ({}));
       if (resposta.ok) {
         setCargos(dadosCargos.cargos ?? []);
       } else {
         setErro(dadosCargos.erro ?? "Não foi possível carregar os cargos.");
+      }
+      // Catálogo de níveis (A6:a): falha aqui não derruba a tela de cargos —
+      // o seletor fica vazio e a coluna mostra o nome que veio com o cargo.
+      if (respostaNiveis.ok) {
+        const dadosNiveis = await respostaNiveis.json().catch(() => ({}));
+        setNiveis(dadosNiveis.niveis ?? []);
       }
     } catch {
       setErro("Falha de conexão. Recarregue a página.");
@@ -442,6 +501,54 @@ export function PainelCargos({
       setNovaVersao(RCF_VAZIO);
     } catch {
       setErroEdicao("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  // -------------------------------------------------- catálogo de níveis (A6:a)
+
+  async function criarNivel(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErroNivel(null);
+    try {
+      const resposta = await fetch("/api/cargos/niveis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome: novoNivel }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) {
+        setErroNivel(dados.erro ?? "Não foi possível criar o nível.");
+        return;
+      }
+      setNiveis(dados.niveis ?? []);
+      setNovoNivel("");
+    } catch {
+      setErroNivel("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function alternarNivel(nivel: NivelHierarquico) {
+    setSalvando(true);
+    setErroNivel(null);
+    try {
+      const resposta = await fetch(`/api/cargos/niveis/${nivel.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inativo: nivel.ativo }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) {
+        setErroNivel(dados.erro ?? "Não foi possível atualizar o nível.");
+        return;
+      }
+      setNiveis(dados.niveis ?? []);
+    } catch {
+      setErroNivel("Falha de conexão. Tente novamente.");
     } finally {
       setSalvando(false);
     }
@@ -522,6 +629,7 @@ export function PainelCargos({
                   prefixo="cg"
                   valores={novoCargo}
                   cargos={cargos}
+                  niveis={niveis}
                   cargoAtualId={null}
                   aoAlterar={(campo, valor) =>
                     setNovoCargo((atual) => ({ ...atual, [campo]: valor }))
@@ -589,6 +697,7 @@ export function PainelCargos({
                   <tr>
                     <th>Cargo (versão ativa)</th>
                     <th>Setor</th>
+                    <th>Nível</th>
                     <th>Líder direto</th>
                     <th>RCF</th>
                     <th>Ocupantes</th>
@@ -609,6 +718,7 @@ export function PainelCargos({
                         )}
                       </td>
                       <td>{cargo.setor ?? "—"}</td>
+                      <td>{cargo.nivel_hierarquico_nome ?? "—"}</td>
                       <td>{cargo.cargo_lider_nome ?? "—"}</td>
                       <td>
                         {cargo.missao ? (
@@ -692,6 +802,7 @@ export function PainelCargos({
                   prefixo="vs"
                   valores={novaVersao}
                   cargos={cargos}
+                  niveis={niveis}
                   cargoAtualId={cargoEmEdicao.id}
                   aoAlterar={(campo, valor) =>
                     setNovaVersao((atual) => ({ ...atual, [campo]: valor }))
@@ -786,6 +897,76 @@ export function PainelCargos({
             </div>
           )}
         </section>
+
+        {/* A6:a — catálogo administrável de níveis hierárquicos (eixo 9):
+            criar e inativar/reativar pela tela; exclusão não existe (versões
+            de cargo antigas continuam apontando para o nível da época). */}
+        {podeAdministrar && (
+          <section className={estilos.cartao}>
+            <h2>Níveis hierárquicos (catálogo)</h2>
+            <p className={estilos.aviso}>
+              O nível fica na VERSÃO do cargo: reclassificar é abrir versão
+              nova, e o histórico continua apontando para o nível que valia na
+              época. Inativar tira o nível das versões novas sem apagar nada.
+            </p>
+            <form className={estilos.formulario} onSubmit={criarNivel}>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="nhNome">
+                  Novo nível
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="nhNome"
+                  type="text"
+                  required
+                  maxLength={120}
+                  placeholder="ex.: Especialista"
+                  value={novoNivel}
+                  onChange={(e) => setNovoNivel(e.target.value)}
+                />
+              </div>
+              <button className={estilos.botao} type="submit" disabled={salvando}>
+                {salvando ? "Criando…" : "Criar nível"}
+              </button>
+            </form>
+            {erroNivel && <p className={estilos.erro}>{erroNivel}</p>}
+            {niveis.length === 0 ? (
+              <p className={estilos.vazio}>Nenhum nível cadastrado.</p>
+            ) : (
+              <div className={estilos.tabelaEnvolucro}>
+                <table className={estilos.tabela}>
+                  <thead>
+                    <tr>
+                      <th>Nível</th>
+                      <th>Situação</th>
+                      <th>Em uso (versões de cargo)</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {niveis.map((nivel) => (
+                      <tr key={nivel.id}>
+                        <td>{nivel.nome}</td>
+                        <td>{nivel.ativo ? "ativo" : "inativo"}</td>
+                        <td className={estilos.numerico}>{nivel.em_uso}</td>
+                        <td className={estilos.acoesCelula}>
+                          <button
+                            className={estilos.botaoLinha}
+                            type="button"
+                            disabled={salvando}
+                            onClick={() => void alternarNivel(nivel)}
+                          >
+                            {nivel.ativo ? "Inativar" : "Reativar"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
 
         {podeAdminEstrutura && (
           <section className={estilos.cartao}>
