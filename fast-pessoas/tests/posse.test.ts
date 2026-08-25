@@ -153,6 +153,11 @@ const TERMO = {
   tamanho_bytes: 1234,
   sensivel: false,
   hash_sha256: "a".repeat(64),
+  // Campos do ciclo de ciência (frente 1.5) — o termo de posse não participa do ciclo.
+  exige_ciencia: false,
+  bloqueante: false,
+  prazo_ciencia_dias: null,
+  substituido_por_id: null,
 };
 
 /**
