@@ -79,6 +79,15 @@ test("cabeçalho é reconhecido com caixa e acento diferentes", () => {
   assert.equal(ehCabecalho("Supply", "empresa"), false);
 });
 
+test("B2: linha de DADOS que só começa com o nome da coluna NÃO é cabeçalho", () => {
+  // O caso exato do defeito: startsWith engolia a primeira linha de dados e a
+  // empresa sumia sem entrar em nenhuma conta do relatório.
+  assert.equal(ehCabecalho("Empresa Brasileira de Logística", "empresa"), false);
+  assert.equal(ehCabecalho("Cargo de Confiança", "cargo"), false);
+  // Cabeçalho real continua pulado — igualdade do nome normalizado.
+  assert.equal(ehCabecalho("  EMPRESA  ", "empresa"), true);
+});
+
 // ---------------------------------------------------------------- estrutura
 
 test("linha completa de estrutura sai com os sete campos resolvidos", () => {

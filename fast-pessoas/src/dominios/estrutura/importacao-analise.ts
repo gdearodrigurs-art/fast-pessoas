@@ -198,9 +198,14 @@ const LIMITES = {
   cargo: 120,
 } as const;
 
-/** A primeira linha é cabeçalho quando a 1ª coluna repete o nome do layout. */
+/**
+ * A primeira linha é cabeçalho quando a 1ª coluna repete EXATAMENTE o nome do
+ * layout (normalizado). Igualdade, nunca startsWith: com prefixo, uma linha de
+ * DADOS como "Empresa Brasileira de Logística;..." era engolida como cabeçalho
+ * e sumia sem entrar em nenhuma conta do relatório.
+ */
 export function ehCabecalho(primeiraColuna: string, nomeDaColuna: string): boolean {
-  return chaveDeNome(primeiraColuna).startsWith(nomeDaColuna);
+  return chaveDeNome(primeiraColuna) === nomeDaColuna;
 }
 
 export function analisarLinhaEstrutura(
