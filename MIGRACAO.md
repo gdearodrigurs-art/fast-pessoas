@@ -68,6 +68,38 @@ node --env-file=.env.local-db db/semear-demo.js --banco fast_pessoas_dev
 > Ferramentas de banco: ver `fast-pessoas/db/README.md`. Toda ferramenta segue
 > `node --env-file=<ambiente> db/<ferramenta>.js <args> --banco <nome>` e responde a `--help`.
 
+### 4b. Ambiente VAZIO (produção/go-live) — sem dados de demonstração
+
+Para montar um banco **real**, que vai receber os dados da empresa em vez dos
+fictícios, a sequência é outra — o `semear-demo.js` **não** entra:
+
+```bash
+cd "C:\sistema RH\fast-pessoas"
+
+# 1. Schema inteiro + catálogos semeados por migration (RBAC, modelo GERAL de avaliação…)
+node --env-file=.env.local-db db/migrar.js --banco fast_pessoas_prod
+
+# 2. Fundação: 1 empresa + 1 unidade + 1 centro de custo de exemplo (renomeáveis
+#    pela tela) e a conferência do modelo GERAL — o mínimo para as telas servirem
+node --env-file=.env.local-db db/semear-fundacao.js --banco fast_pessoas_prod
+
+# 3. A primeira conta (admin) — senha forte impressa uma única vez.
+#    ATENÇÃO: seed-admin.js não tem --banco; ele escreve no banco que a
+#    DATABASE_URL do --env-file apontar. Confira antes de rodar.
+node --env-file=.env.local-db db/seed-admin.js dono@empresa.com.br "Nome do Dono"
+```
+
+4. **Carga inicial pela tela**, logado como o admin: as telas `/estrutura` e
+   `/cargos` têm um bloco "Carga inicial — importar por planilha" (chave
+   `sistema.carga.importar`, dp/admin). O layout das colunas está documentado no
+   próprio bloco; linha ruim vira rejeição com motivo e reimportar o mesmo
+   arquivo não duplica nada. A carga **não cria usuários** (decisão F2:b) —
+   acessos nascem um a um, pela aplicação, depois.
+
+> Atenção ao `--env-file`/`--banco`: em servidor remoto, as ferramentas que
+> escrevem pedem `--permitir-remoto` explícito. Credenciais segregadas
+> (`app_rh`…) continuam vindo de `db/provisionar.sql`, uma vez por ambiente.
+
 ## 5. Validar que está funcionando (smoke test)
 
 ```bash
