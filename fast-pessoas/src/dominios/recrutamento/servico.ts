@@ -37,6 +37,7 @@ import {
   MESES_CONSENTIMENTO_PADRAO,
   Movimentacao,
   RespostaOferta,
+  TrocaModeloVaga,
   ROTULOS_MOTIVO_MOVIMENTACAO,
   ROTULOS_MOTIVO_REQUISICAO,
   ROTULOS_RECOMENDACAO,
@@ -48,6 +49,7 @@ import {
 import {
   apurarVagasNoPrazo,
   atualizarCandidatura,
+  atualizarModeloDaVaga,
   atualizarStatusVaga,
   buscarCandidaturaBasica,
   buscarCandidaturaParaMutacao,
@@ -66,6 +68,7 @@ import {
   CandidatoResumo,
   CandidaturaKanban,
   CargoDisponivel,
+  contarCandidaturasDaVaga,
   EstabelecimentoDisponivel,
   EtapaAtiva,
   gravarDecisaoRequisicao,
@@ -436,6 +439,74 @@ export async function criarVaga(
     }
     throw erro;
   }
+}
+
+/**
+ * Troca o modelo de processo CONGELADO de uma vaga. Decisão G1 (docs/20):
+ * reformular um modelo NÃO migra vaga aberta — ela fica na versão antiga e a
+ * troca é manual, por aqui, e só enquanto NINGUÉM entrou no pipeline. Com
+ * qualquer candidatura (ativa ou encerrada) o modelo é história congelada:
+ * trocá-lo reescreveria por qual processo as pessoas passaram.
+ */
+export async function trocarModeloDaVaga(
+  sessao: PayloadSessao,
+  vagaId: number,
+  dados: TrocaModeloVaga
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const vaga = await buscarVagaParaMutacao(cliente, vagaId);
+    if (!vaga) {
+      throw new ErroHttp(404, "Vaga não encontrada.");
+    }
+    if (vaga.status !== "aberta") {
+      throw new ErroHttp(
+        409,
+        `Vaga ${ROTULOS_STATUS_VAGA[vaga.status].toLowerCase()} não troca de modelo — só vaga aberta.`
+      );
+    }
+    const candidaturas = await contarCandidaturasDaVaga(cliente, vagaId);
+    if (candidaturas > 0) {
+      throw new ErroHttp(
+        409,
+        `Esta vaga já tem ${candidaturas} candidatura(s) — o processo segue na versão em que começou; o modelo não muda mais.`
+      );
+    }
+    if (dados.modelo_versao_id === vaga.modelo_versao_id) {
+      throw new ErroHttpCampo(
+        409,
+        "A vaga já usa este modelo.",
+        "modelo_versao_id"
+      );
+    }
+    const novoModeloId = await buscarModeloAtivo(
+      cliente,
+      dados.modelo_versao_id
+    );
+    if (novoModeloId === null) {
+      throw new ErroHttpCampo(
+        409,
+        "O modelo de processo escolhido não está ativo.",
+        "modelo_versao_id"
+      );
+    }
+    await atualizarModeloDaVaga(cliente, vagaId, novoModeloId);
+    const nomeAntigo =
+      (await buscarNomeModelo(cliente, vaga.modelo_versao_id)) ??
+      `#${vaga.modelo_versao_id}`;
+    const nomeNovo =
+      (await buscarNomeModelo(cliente, novoModeloId)) ?? `#${novoModeloId}`;
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_VAGA,
+      registroId: String(vagaId),
+      diff: {
+        "Título": { de: null, para: vaga.titulo },
+        "Modelo de processo": { de: nomeAntigo, para: nomeNovo },
+      },
+    });
+  });
 }
 
 // ------------------------------------------------------------------ administração dos modelos de processo

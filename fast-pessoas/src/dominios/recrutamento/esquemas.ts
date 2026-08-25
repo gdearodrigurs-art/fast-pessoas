@@ -189,6 +189,17 @@ export const esquemaCriacaoModelo = z.object({
 
 export type CriacaoModelo = z.infer<typeof esquemaCriacaoModelo>;
 
+/**
+ * Troca do modelo congelado de uma vaga ABERTA e SEM candidatura (decisão G1:
+ * reformular um modelo NÃO migra vaga aberta — quem quiser a versão nova troca
+ * manualmente por aqui, enquanto ninguém entrou no pipeline).
+ */
+export const esquemaTrocaModeloVaga = z.object({
+  modelo_versao_id: z.number().int().positive(),
+});
+
+export type TrocaModeloVaga = z.infer<typeof esquemaTrocaModeloVaga>;
+
 export const esquemaCriacaoCandidato = z.object({
   nome: z.string().trim().min(3, "Informe o nome do candidato").max(200),
   email: z.email("E-mail inválido").max(254),

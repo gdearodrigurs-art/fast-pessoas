@@ -510,6 +510,8 @@ export interface VagaResumo {
   /** Modelo de processo CONGELADO na abertura (0077). O kanban desenha as
    *  colunas pelas etapas deste modelo, não pela lista global viva. */
   modelo_versao_id: number;
+  /** Nome do modelo congelado — a tela mostra por qual processo a vaga corre. */
+  modelo_nome: string;
 }
 
 interface LinhaVaga extends Record<string, unknown> {
@@ -525,13 +527,14 @@ interface LinhaVaga extends Record<string, unknown> {
   dias_ate_prazo: number;
   status: StatusVaga;
   modelo_versao_id: string;
+  modelo_nome: string;
   candidaturas_ativas: number;
   criado_em: string;
 }
 
 const SELECT_VAGA = `
   SELECT v.id, v.requisicao_id, v.titulo, v.status, v.criado_em,
-         v.modelo_versao_id,
+         v.modelo_versao_id, m.nome AS modelo_nome,
          v.faixa_min::text AS faixa_min, v.faixa_max::text AS faixa_max,
          v.prazo_alvo::text AS prazo_alvo,
          (v.prazo_alvo - ${HOJE_SP})::int AS dias_ate_prazo,
@@ -542,6 +545,7 @@ const SELECT_VAGA = `
     FROM rh.vaga v
     JOIN rh.requisicao_vaga r ON r.id = v.requisicao_id
     JOIN rh.cargo_versao cv ON cv.id = r.cargo_versao_id
+    JOIN rh.modelo_selecao_versao m ON m.id = v.modelo_versao_id
     LEFT JOIN rh.estabelecimento_versao ev ON ev.id = r.estabelecimento_versao_id`;
 
 function paraVaga(linha: LinhaVaga): VagaResumo {
@@ -657,6 +661,34 @@ export async function atualizarStatusVaga(
     id,
     status,
   ]);
+}
+
+/**
+ * TODAS as candidaturas da vaga, encerradas incluídas: candidatura encerrada
+ * também é história ancorada nas etapas do modelo congelado — trocar o modelo
+ * depois dela reescreveria por qual processo aquela pessoa passou.
+ */
+export async function contarCandidaturasDaVaga(
+  cliente: PoolClient,
+  vagaId: number
+): Promise<number> {
+  const { rows } = await cliente.query<{ total: number }>(
+    `SELECT COUNT(*)::int AS total FROM rh.candidatura WHERE vaga_id = $1`,
+    [vagaId]
+  );
+  return rows[0].total;
+}
+
+/** Troca o modelo congelado — o serviço garante vaga aberta sem candidatura. */
+export async function atualizarModeloDaVaga(
+  cliente: PoolClient,
+  id: number,
+  modeloVersaoId: number
+): Promise<void> {
+  await cliente.query(
+    "UPDATE rh.vaga SET modelo_versao_id = $2 WHERE id = $1",
+    [id, modeloVersaoId]
+  );
 }
 
 // ------------------------------------------------------------------ candidato (titular externo)

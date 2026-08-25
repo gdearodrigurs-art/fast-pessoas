@@ -50,6 +50,9 @@ export interface Vaga {
   status: StatusVaga;
   candidaturas_ativas: number;
   criado_em: string;
+  /** Modelo de processo congelado na abertura (0077). */
+  modelo_versao_id: number;
+  modelo_nome: string;
 }
 
 export interface Etapa {

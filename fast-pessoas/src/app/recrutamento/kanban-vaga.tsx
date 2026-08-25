@@ -21,6 +21,7 @@ import {
   ROTULOS_STATUS_OFERTA,
   ROTULOS_STATUS_VAGA,
 } from "@/dominios/recrutamento/esquemas";
+import type { ModeloResumo } from "@/dominios/recrutamento/repositorio";
 import comum from "./comum.module.css";
 import {
   formatarData,
@@ -35,6 +36,7 @@ import {
   Kanban,
   Parecer,
   Permissoes,
+  Vaga,
 } from "./tipos";
 
 interface Alvo {
@@ -67,6 +69,7 @@ export function KanbanVaga({
     (Alvo & { resposta: "aceita" | "recusada" }) | null
   >(null);
   const [admissao, setAdmissao] = useState<Alvo | null>(null);
+  const [dialogoTrocarModelo, setDialogoTrocarModelo] = useState(false);
   const [senha, setSenha] = useState<{
     candidato_nome: string;
     senha_temporaria: string;
@@ -187,11 +190,21 @@ export function KanbanVaga({
             Banda congelada {formatarSalario(kanban.vaga.faixa_min)} a{" "}
             {formatarSalario(kanban.vaga.faixa_max)} · prazo-alvo{" "}
             {formatarData(kanban.vaga.prazo_alvo)}
-            {vagaAberta && ` (${textoPrazo(kanban.vaga.dias_ate_prazo)})`}
+            {vagaAberta && ` (${textoPrazo(kanban.vaga.dias_ate_prazo)})`} ·
+            modelo {kanban.vaga.modelo_nome}
           </p>
         </div>
         {pode.gerir && (
           <div className={comum.acoes}>
+            {vagaAberta && kanban.candidaturas.length === 0 && (
+              <button
+                className={comum.botaoSecundario}
+                type="button"
+                onClick={() => setDialogoTrocarModelo(true)}
+              >
+                Trocar modelo
+              </button>
+            )}
             <button
               className={comum.botaoSecundario}
               type="button"
@@ -248,6 +261,17 @@ export function KanbanVaga({
           </div>
         )}
       </div>
+
+      {dialogoTrocarModelo && (
+        <DialogoTrocarModelo
+          vaga={kanban.vaga}
+          aoFechar={() => setDialogoTrocarModelo(false)}
+          aoConcluir={() => {
+            setDialogoTrocarModelo(false);
+            recarregar();
+          }}
+        />
+      )}
 
       {dialogoNovoCandidato && (
         <DialogoNovoCandidato
@@ -647,6 +671,129 @@ function CartaoCandidatura({
 }
 
 // ------------------------------------------------------------------ diálogos
+
+function DialogoTrocarModelo({
+  vaga,
+  aoFechar,
+  aoConcluir,
+}: {
+  vaga: Vaga;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  const [modelos, setModelos] = useState<ModeloResumo[] | null>(null);
+  const [modeloId, setModeloId] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/recrutamento/modelos");
+        const corpo = await resposta.json().catch(() => ({}));
+        if (!ativo) return;
+        if (resposta.ok) {
+          setModelos((corpo.modelos ?? []) as ModeloResumo[]);
+        } else {
+          setErro(corpo.erro ?? "Não foi possível carregar os modelos.");
+        }
+      } catch {
+        if (ativo) setErro("Falha de conexão. Tente novamente.");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
+  const opcoes = (modelos ?? []).filter((m) => m.id !== vaga.modelo_versao_id);
+  const escolhido = opcoes.find((m) => String(m.id) === modeloId);
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setEnviando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(`/api/recrutamento/vagas/${vaga.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelo_versao_id: Number(modeloId) }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        aoConcluir();
+      } else {
+        setErro(dados.erro ?? "Não foi possível trocar o modelo.");
+      }
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className={comum.fundoDialogo}>
+      <div className={comum.dialogo} role="dialog" aria-modal="true">
+        <h3>Trocar modelo — {vaga.titulo}</h3>
+        <p className={comum.subDialogo}>
+          A vaga corre hoje pelo modelo <b>{vaga.modelo_nome}</b>. A troca só
+          vale enquanto a vaga não tem candidatura: assim que alguém entra no
+          pipeline, o modelo congela de vez.
+        </p>
+        <form onSubmit={enviar}>
+          <label className={comum.rotuloCampo} htmlFor="troca-modelo">
+            Novo modelo de processo
+          </label>
+          <select
+            className={comum.campo}
+            id="troca-modelo"
+            required
+            value={modeloId}
+            onChange={(e) => setModeloId(e.target.value)}
+          >
+            <option value="" disabled>
+              {modelos === null
+                ? "Carregando modelos…"
+                : opcoes.length === 0
+                  ? "Nenhum outro modelo ativo"
+                  : "Escolha o modelo…"}
+            </option>
+            {opcoes.map((m) => (
+              <option key={m.id} value={String(m.id)}>
+                {m.nome}
+                {m.padrao ? " (GERAL — padrão)" : ""}
+              </option>
+            ))}
+          </select>
+          {escolhido && (
+            <p className={comum.dica}>
+              {escolhido.etapas.map((e) => e.nome).join(" → ")}
+            </p>
+          )}
+          {erro && <p className={comum.erroAcao}>{erro}</p>}
+          <div className={comum.acoesDialogo}>
+            <button
+              className={comum.botaoSecundario}
+              type="button"
+              onClick={aoFechar}
+            >
+              Cancelar
+            </button>
+            <button
+              className={comum.botaoPrimario}
+              type="submit"
+              disabled={enviando || modeloId === ""}
+            >
+              {enviando ? "Trocando…" : "Trocar modelo"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 function DialogoNovoCandidato({
   vagaId,
