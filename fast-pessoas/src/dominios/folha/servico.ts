@@ -1107,12 +1107,15 @@ export async function calcularCompetencia(
         medida.inicio,
         medida.fim
       );
-      if (recorte.dias === 0 && recorte.domingos_dsr.length === 0) continue;
+      if (recorte.dias.length === 0 && recorte.domingos_dsr.length === 0)
+        continue;
       const lista = suspensoesPorColaborador.get(medida.colaborador_id) ?? [];
       lista.push({
         medida_id: medida.medida_id,
         inicio: medida.inicio,
         fim: medida.fim,
+        // DATAS, não contagem: o motor funde as medidas por UNIÃO (Set) antes
+        // de contar — sobreposição não desconta o mesmo dia/DSR duas vezes.
         dias_na_competencia: recorte.dias,
         domingos_dsr: recorte.domingos_dsr,
       });

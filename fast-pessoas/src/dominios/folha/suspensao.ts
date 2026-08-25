@@ -31,8 +31,13 @@
 
 /** O recorte de UMA janela de suspensão numa competência. */
 export interface SuspensaoNaCompetencia {
-  /** Dias corridos da janela dentro do mês (0 quando só o DSR sobrou aqui). */
-  dias: number;
+  /**
+   * Dias corridos da janela dentro do mês, um a um em ISO (vazio quando só o
+   * DSR sobrou aqui). São DATAS, não contagem, de propósito: o motor funde as
+   * medidas do colaborador por UNIÃO (Set) antes de contar — duas medidas
+   * sobrepostas não descontam o mesmo dia duas vezes (ver calculo.ts, 3b).
+   */
+  dias: string[];
   /** Domingos do mês (ISO) cujo DSR cai — semana anterior com suspensão. */
   domingos_dsr: string[];
 }
@@ -67,16 +72,16 @@ export function apurarSuspensaoNaCompetencia(
   const fim = fimIso === null ? ultimoDia : paraUtc(fimIso);
   if (fim < inicio) {
     // Janela invertida não existe (CHECK no banco); pura defesa.
-    return { dias: 0, domingos_dsr: [] };
+    return { dias: [], domingos_dsr: [] };
   }
 
-  // Dias corridos: |[inicio, fim] ∩ [primeiro, último dia do mês]|.
+  // Dias corridos: [inicio, fim] ∩ [primeiro, último dia do mês], dia a dia.
   const recorteInicio = Math.max(inicio, primeiroDia);
   const recorteFim = Math.min(fim, ultimoDia);
-  const dias =
-    recorteFim < recorteInicio
-      ? 0
-      : Math.round((recorteFim - recorteInicio) / DIA_MS) + 1;
+  const dias: string[] = [];
+  for (let dia = recorteInicio; dia <= recorteFim; dia += DIA_MS) {
+    dias.push(paraIso(dia));
+  }
 
   // DSR: para cada DOMINGO do mês, a semana de trabalho é [D−6, D−1]
   // (segunda a sábado). Havendo interseção com a janela, o domingo cai.

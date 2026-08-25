@@ -113,8 +113,12 @@ export interface SuspensaoMotor {
   /** Janela completa da medida (informativo na memória). */
   inicio: string;
   fim: string | null;
-  /** Dias corridos DENTRO da competência (inteiro ≥ 0). */
-  dias_na_competencia: number;
+  /**
+   * Dias corridos DENTRO da competência, um a um em ISO (AAAA-MM-DD). Datas e
+   * não contagem: o motor funde as medidas por UNIÃO (Set) antes de contar —
+   * medidas sobrepostas não descontam o mesmo dia duas vezes.
+   */
+  dias_na_competencia: string[];
   /** Domingos (ISO) desta competência cujo DSR a suspensão derruba. */
   domingos_dsr: string[];
 }
@@ -447,24 +451,44 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
   // parcelas. NÃO reusa a mecânica do DSR de faltas (1202): aquela é a
   // simplificação F1 "1 DSR por dia", presa ao lançamento de faltas, e
   // superdescontaria uma suspensão de 5 dias na mesma semana em 5 DSRs.
+  //
+  // UNIÃO ANTES DE CONTAR: as medidas do colaborador são FUNDIDAS por Set de
+  // datas (dias corridos) e Set de domingos (DSR) — duas medidas na mesma
+  // semana derrubam UM domingo, e janelas sobrepostas descontam cada dia UMA
+  // vez. Somar por medida descontava em dobro. A memória continua citando
+  // cada medida por id; só a contagem sai da união.
   const suspensoes = entrada.suspensoes ?? [];
-  let diasSuspensao = 0;
-  let semanasDsrSuspensao = 0;
+  const DATA_ISO_SUSPENSAO = /^\d{4}-\d{2}-\d{2}$/;
+  const diasSuspensaoUniao = new Set<string>();
+  const domingosDsrUniao = new Set<string>();
   for (const suspensao of suspensoes) {
-    if (
-      !Number.isInteger(suspensao.dias_na_competencia) ||
-      suspensao.dias_na_competencia < 0
-    ) {
-      throw new ErroMotor(
-        `Suspensão ${suspensao.medida_id} com dias inválidos na competência (inteiro ≥ 0)`
-      );
+    for (const dia of suspensao.dias_na_competencia) {
+      if (!DATA_ISO_SUSPENSAO.test(dia)) {
+        throw new ErroMotor(
+          `Suspensão ${suspensao.medida_id} com dia inválido na competência (AAAA-MM-DD): ${dia}`
+        );
+      }
+      diasSuspensaoUniao.add(dia);
     }
-    diasSuspensao += suspensao.dias_na_competencia;
-    semanasDsrSuspensao += suspensao.domingos_dsr.length;
+    for (const domingo of suspensao.domingos_dsr) {
+      if (!DATA_ISO_SUSPENSAO.test(domingo)) {
+        throw new ErroMotor(
+          `Suspensão ${suspensao.medida_id} com domingo de DSR inválido (AAAA-MM-DD): ${domingo}`
+        );
+      }
+      domingosDsrUniao.add(domingo);
+    }
   }
+  const diasSuspensao = diasSuspensaoUniao.size;
+  const semanasDsrSuspensao = domingosDsrUniao.size;
   if (diasSuspensao + semanasDsrSuspensao > 0) {
     const rubricaSuspensao = rubricaObrigatoria(CODIGO_DESCONTO_SUSPENSAO);
-    const diasDescontados = diasSuspensao + semanasDsrSuspensao;
+    const diasApurados = diasSuspensao + semanasDsrSuspensao;
+    // TETO NO DIVISOR: o mês remunera divisorDias valor-dias — descontar mais
+    // que isso (mês inteiro suspenso: 31 corridos + DSRs = 36/30) produziria
+    // líquido NEGATIVO persistido. Teta no divisor, com aviso na memória.
+    const tetoAplicado = diasApurados > divisorDias;
+    const diasDescontados = tetoAplicado ? divisorDias : diasApurados;
     // Dias aqui são INTEIROS (corridos + domingos): a razão inteira da falta
     // (× 100 ÷ 100) seria identidade — a divisão única já é exata até o limite.
     const valor = (salario * diasDescontados) / divisorDias;
@@ -472,11 +496,20 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
       formula: `(dias corridos + 1 dia de DSR por semana civil com suspensão) × (salário ÷ ${divisorDias})`,
       dias_corridos: diasSuspensao,
       semanas_com_dsr_perdido: semanasDsrSuspensao,
+      deduplicacao:
+        "dias e domingos contados por UNIÃO entre as medidas — dia ou DSR alcançado por mais de uma medida desconta UMA vez",
+      ...(tetoAplicado
+        ? {
+            dias_apurados: diasApurados,
+            teto_dias: divisorDias,
+            aviso_teto: `AVISO: apurados ${diasApurados} valor-dias (dias corridos + DSR), mais que os ${divisorDias} que o mês remunera — desconto TETADO em ${divisorDias} para o 1203 não passar do salário do mês`,
+          }
+        : {}),
       valor_dia: reaisIntermediario(salario / divisorDias),
       medidas: suspensoes.map((suspensao) => ({
         medida_disciplinar_id: suspensao.medida_id,
         janela: `${suspensao.inicio} → ${suspensao.fim ?? "aberta"}`,
-        dias_na_competencia: suspensao.dias_na_competencia,
+        dias_na_competencia: suspensao.dias_na_competencia.length,
         domingos_dsr: suspensao.domingos_dsr,
       })),
       regra_dsr:
