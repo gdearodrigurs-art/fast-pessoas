@@ -118,6 +118,14 @@ export interface Kanban {
   candidaturas: CandidaturaCartao[];
 }
 
+export interface TempoEtapa {
+  cargo_nome: string;
+  etapa_nome: string;
+  etapa_ordem: number;
+  mediana_dias: number;
+  amostras: number;
+}
+
 export interface Parecer {
   id: number;
   etapa_nome: string;

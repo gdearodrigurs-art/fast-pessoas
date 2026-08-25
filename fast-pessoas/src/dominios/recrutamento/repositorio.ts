@@ -1270,3 +1270,64 @@ export async function apurarVagasNoPrazo(): Promise<number | null> {
   if (total === 0) return null;
   return Math.round((Number(linhas[0].no_prazo) / total) * 1000) / 10;
 }
+
+export interface TempoPorEtapa {
+  cargo_nome: string;
+  etapa_nome: string;
+  /** Ordem do catálogo — só para a tela listar as etapas na ordem natural. */
+  etapa_ordem: number;
+  /** Mediana do tempo parado na etapa, em dias (fração de dia incluída). */
+  mediana_dias: number;
+  /** Quantos intervalos fechados sustentam a mediana. */
+  amostras: number;
+}
+
+/**
+ * Mediana (percentile_cont) do tempo que a candidatura passa em CADA etapa,
+ * por CARGO — nunca por vaga.titulo (título é texto livre; o cargo é a
+ * identidade estável) — e por ETAPA DO CATÁLOGO (nome: versões da mesma etapa
+ * e posições diferentes entre modelos somam no mesmo balde).
+ *
+ * O intervalo é o par de movimentações consecutivas da MESMA candidatura
+ * (índice candidatura+em da 0012): entrar na etapa (para_etapa_id) abre;
+ * a movimentação seguinte — avanço OU desfecho — fecha. Candidaturas abertas
+ * e encerradas contribuem igualmente com seus intervalos JÁ FECHADOS; a etapa
+ * onde alguém ainda está parado não tem dT e fica fora (mediana de tempo
+ * decorrido misturaria processo vivo com processo concluído).
+ */
+export async function apurarTempoPorEtapa(): Promise<TempoPorEtapa[]> {
+  const linhas = await consultar<{
+    cargo_nome: string;
+    etapa_nome: string;
+    etapa_ordem: number;
+    mediana_dias: string;
+    amostras: number;
+  }>(
+    `WITH passos AS (
+       SELECT m.candidatura_id, m.para_etapa_id, m.em,
+              LEAD(m.em) OVER (
+                PARTITION BY m.candidatura_id ORDER BY m.em, m.id
+              ) AS proxima_em
+         FROM rh.movimentacao_candidatura m
+     )
+     SELECT cv.nome AS cargo_nome, e.nome AS etapa_nome,
+            MIN(e.ordem)::int AS etapa_ordem,
+            (percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY EXTRACT(EPOCH FROM (p.proxima_em - p.em))
+             ) / 86400)::text AS mediana_dias,
+            COUNT(*)::int AS amostras
+       FROM passos p
+       JOIN rh.etapa_selecao_versao e ON e.id = p.para_etapa_id
+       JOIN rh.candidatura ca ON ca.id = p.candidatura_id
+       JOIN rh.vaga v ON v.id = ca.vaga_id
+       JOIN rh.requisicao_vaga r ON r.id = v.requisicao_id
+       JOIN rh.cargo_versao cv ON cv.id = r.cargo_versao_id
+      WHERE p.para_etapa_id IS NOT NULL AND p.proxima_em IS NOT NULL
+      GROUP BY cv.nome, e.nome
+      ORDER BY cargo_nome, etapa_ordem`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    mediana_dias: Number(linha.mediana_dias),
+  }));
+}

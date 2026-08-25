@@ -48,6 +48,7 @@ import {
   ROTULOS_STATUS_VAGA,
 } from "./esquemas";
 import {
+  apurarTempoPorEtapa,
   apurarVagasNoPrazo,
   atualizarCandidatura,
   atualizarModeloDaVaga,
@@ -99,6 +100,7 @@ import {
   ParecerSelecao,
   responderOferta as gravarRespostaOferta,
   RequisicaoResumo,
+  TempoPorEtapa,
   VagaResumo,
 } from "./repositorio";
 
@@ -1542,4 +1544,18 @@ export async function iniciarAdmissao(
 /** % de vagas fechadas até o prazo-alvo (12 meses) — fonte da Central de Metas. */
 export async function valorIndicadorVagasNoPrazo(): Promise<number | null> {
   return apurarVagasNoPrazo();
+}
+
+/**
+ * Relatório de tempo por etapa (mediana, por cargo × etapa do catálogo) —
+ * agregado operacional, sem dado de titular: quem vê o funil (rs.ver, e
+ * rs.gerir que o conduz) vê o relatório; nenhum recorte chega a indivíduo.
+ */
+export async function relatorioTempoPorEtapa(
+  pode: PermissoesRs
+): Promise<TempoPorEtapa[]> {
+  if (!pode.ver && !pode.gerir) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  return apurarTempoPorEtapa();
 }

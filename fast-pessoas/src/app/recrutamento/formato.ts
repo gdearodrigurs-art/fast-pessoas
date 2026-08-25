@@ -23,6 +23,19 @@ export function formatarSalario(valor: number): string {
   return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+/**
+ * Duração em dias (fração incluída) para gente ler: abaixo de 1 dia vira
+ * horas ("18 h"); a partir de 1 dia, uma casa decimal ("3,5 dias").
+ */
+export function formatarDuracaoDias(dias: number): string {
+  if (dias < 1) {
+    const horas = Math.round(dias * 24);
+    return horas < 1 ? "menos de 1 h" : `${horas} h`;
+  }
+  const texto = dias.toFixed(1).replace(".", ",").replace(/,0$/, "");
+  return `${texto} dia${dias >= 2 ? "s" : ""}`;
+}
+
 export function textoPrazo(dias: number): string {
   if (dias < 0) {
     const passados = -dias;
