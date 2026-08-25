@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelMeuPdi } from "./painel-meu-pdi";
 
 /**
@@ -9,9 +8,6 @@ import { PainelMeuPdi } from "./painel-meu-pdi";
  * a sessão e escopa pelo vínculo do dono a cada chamada.
  */
 export default async function PaginaMeuPdi() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  await exigirSessaoDePagina();
   return <PainelMeuPdi />;
 }

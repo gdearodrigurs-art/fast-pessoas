@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
 import { consultar } from "./banco";
 import {
@@ -126,6 +127,41 @@ export async function garantirUsuarioAtivo(usuarioId: number): Promise<void> {
 export async function exigirSessao(): Promise<PayloadSessao> {
   const sessao = exigirSessaoValida(await lerSessao());
   await garantirUsuarioAtivo(sessao.usuario_id);
+  return sessao;
+}
+
+/**
+ * Guarda das PÁGINAS server-side (Onda 2, decisão C2 modificada): o espelho de
+ * `exigirSessao` para quem renderiza em vez de responder JSON. Sessão ausente
+ * ou de usuário DESATIVADO vira redirect("/entrar") — desativado perde TUDO na
+ * hora, não no fim do JWT de 8h; pendente de 2FA volta para /configurar-2fa,
+ * o mesmo destino que o proxy dá (defesa em profundidade: a página não pode
+ * depender só da borda). Os redirects de PERMISSÃO de cada página continuam
+ * NELAS, depois deste guard — aqui só mora o que é igual nas 54.
+ */
+export async function exigirSessaoDePagina(): Promise<PayloadSessao> {
+  const sessao = await lerSessao();
+  if (!sessao) {
+    redirect("/entrar");
+  }
+  if (sessao.pendente_2fa) {
+    redirect("/configurar-2fa");
+  }
+  // garantirUsuarioAtivo lança ErroHttp; página não responde JSON — o lanço
+  // vira redirect. O redirect() do Next também lança (NEXT_REDIRECT), então
+  // ele fica FORA do try para não ser engolido pelo catch.
+  let ativo = true;
+  try {
+    await garantirUsuarioAtivo(sessao.usuario_id);
+  } catch (erro) {
+    if (!(erro instanceof ErroHttp)) {
+      throw erro;
+    }
+    ativo = false;
+  }
+  if (!ativo) {
+    redirect("/entrar");
+  }
   return sessao;
 }
 

@@ -1,10 +1,9 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import {
   ROTULOS_ESTADO_PENDENCIA,
 } from "@/dominios/documentos/esquemas";
 import { pendenciaBloqueante } from "@/dominios/documentos/servico";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { BotaoRevalidarAcesso } from "./botao-revalidar";
 import estilos from "./page.module.css";
 
@@ -24,10 +23,7 @@ function formatarData(dataIso: string): string {
  * leva de volta ao início, sem exigir novo login.
  */
 export default async function PaginaCienciaPendente() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const pendencia = await pendenciaBloqueante(sessao.usuario_id);
 
   if (!pendencia) {

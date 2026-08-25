@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelEstrutura } from "./painel-estrutura";
 
 /**
@@ -11,10 +11,7 @@ import { PainelEstrutura } from "./painel-estrutura";
  * inativa sem chamar dev.
  */
 export default async function PaginaEstrutura() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{
     pode_empresa: boolean;
     pode_centro_custo: boolean;

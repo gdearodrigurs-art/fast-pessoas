@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { EspelhoPontoTela } from "./espelho-ponto";
 
 /**
@@ -15,10 +15,7 @@ export default async function PaginaEspelhoPonto({
   params: Promise<{ colaboradorId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const { colaboradorId } = await params;
   const id = Number(colaboradorId);
   if (!Number.isInteger(id) || id <= 0) {

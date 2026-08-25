@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelResultado } from "./painel-resultado";
 
 export default async function PaginaResultadoPesquisa({
@@ -8,10 +8,7 @@ export default async function PaginaResultadoPesquisa({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Flags só de NAVEGAÇÃO: a API reconfere as chaves em toda chamada e é ela
   // que aplica o k-anonimato antes de o número sair do servidor.
   const linhas = await consultar<{ resultado: boolean; plano: boolean }>(

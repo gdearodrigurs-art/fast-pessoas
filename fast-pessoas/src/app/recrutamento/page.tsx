@@ -1,13 +1,10 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelRecrutamento } from "./painel-recrutamento";
 
 export default async function PaginaRecrutamento() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Entram: quem vê o módulo (rs.ver/rs.gerir) e o gestor que só solicita.
   const linhas = await consultar<{ autorizado: boolean }>(
     `SELECT sistema.tem_permissao($1, 'rs.ver')

@@ -1,13 +1,10 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelSst } from "./painel-sst";
 
 export default async function PaginaSst() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Flags só de NAVEGAÇÃO: a API reconfere a permissão em toda chamada e é
   // ela quem decide o formato do payload (conteúdo clínico ausente sem a
   // chave). tem_entregas deixa o titular sem chave de SST ver e dar ciência

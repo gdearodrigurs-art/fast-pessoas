@@ -1,13 +1,10 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelFerias } from "./painel-ferias";
 
 export default async function PaginaFerias() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Flags só de NAVEGAÇÃO: a API reconfere a permissão em toda chamada.
   const linhas = await consultar<{
     programar: boolean;

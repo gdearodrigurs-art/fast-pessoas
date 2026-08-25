@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelAutoavaliacao } from "./painel-autoavaliacao";
 
 /**
@@ -9,10 +9,7 @@ import { PainelAutoavaliacao } from "./painel-autoavaliacao";
  * o escopo (o alvo é sempre o colaborador da sessão) a cada chamada.
  */
 export default async function PaginaAutoavaliacao() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{ autorizado: boolean }>(
     `SELECT sistema.tem_permissao($1, 'avaliacao.autoavaliar') AS autorizado`,
     [sessao.usuario_id]

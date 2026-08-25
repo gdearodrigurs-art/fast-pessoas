@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 
 /**
  * Atalho do card "Ponto e banco de horas" da home (seção "Meu dia"): resolve o
@@ -13,10 +13,7 @@ import { lerSessao } from "@/lib/sessao";
  * O alcance real continua sendo conferido na API do espelho, a cada chamada.
  */
 export default async function PaginaMeuPonto() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
 
   // Última competência com apuração do PRÓPRIO colaborador — é o mês que tem o
   // que mostrar. Sem apuração ainda, o espelho abre no mês corrente sozinho.

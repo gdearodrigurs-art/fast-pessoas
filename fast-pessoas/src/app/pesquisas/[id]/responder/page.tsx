@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { FormularioResposta } from "./formulario-resposta";
 
 export default async function PaginaResponderPesquisa({
@@ -8,10 +8,7 @@ export default async function PaginaResponderPesquisa({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Flag só de NAVEGAÇÃO: a API reconfere a permissão em toda chamada.
   const linhas = await consultar<{ responder: boolean }>(
     "SELECT sistema.tem_permissao($1, 'pesquisa.responder') AS responder",

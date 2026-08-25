@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelInstrucao } from "./painel-instrucao";
 
 /**
@@ -8,9 +7,6 @@ import { PainelInstrucao } from "./painel-instrucao";
  * (pdi.homologar) a cada chamada; aqui só barramos quem nem está logado.
  */
 export default async function PaginaInstrucaoPdi() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  await exigirSessaoDePagina();
   return <PainelInstrucao />;
 }

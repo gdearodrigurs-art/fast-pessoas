@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelAvaliacaoPar } from "./painel-avaliacao-par";
 
 /**
@@ -9,10 +9,7 @@ import { PainelAvaliacaoPar } from "./painel-avaliacao-par";
  * cada chamada, se o usuário é de fato um par designado daquele ciclo.
  */
 export default async function PaginaAvaliacaoPar() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{ autorizado: boolean }>(
     `SELECT sistema.tem_permissao($1, 'avaliacao.avaliar_par') AS autorizado`,
     [sessao.usuario_id]

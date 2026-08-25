@@ -1,13 +1,10 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelCargos } from "./painel-cargos";
 
 export default async function PaginaCargos() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Dois níveis (migration 0019): `administrar` cria versão e vê faixa salarial;
   // `ver` só lê o descritivo/RCF (recrutador e líder de T&D — quem escreve a
   // vaga precisa do RCF, não da remuneração). Flags só de renderização: a API

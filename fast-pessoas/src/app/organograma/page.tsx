@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { ArvoreOrganograma } from "./arvore-organograma";
 
 /**
@@ -8,9 +7,6 @@ import { ArvoreOrganograma } from "./arvore-organograma";
  * GET /api/organograma a cada chamada. Ver o comentário da rota.
  */
 export default async function PaginaOrganograma() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  await exigirSessaoDePagina();
   return <ArvoreOrganograma />;
 }

@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { colaboradorNoEscopo } from "@/dominios/colaboradores/repositorio";
 import { escopoDaMinhaEquipe } from "@/dominios/colaboradores/servico";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { FichaColaborador } from "./ficha-colaborador";
 
 export interface PermissoesFicha {
@@ -32,10 +32,7 @@ export default async function PaginaFichaColaborador({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const { id } = await params;
   const idNumero = Number(id);
   if (!Number.isInteger(idNumero) || idNumero <= 0) {

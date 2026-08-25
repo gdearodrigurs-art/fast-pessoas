@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelCategorias } from "./painel-categorias";
 
 /**
@@ -12,10 +12,7 @@ import { PainelCategorias } from "./painel-categorias";
  * tem desligamento.ver entra para consultar e não vê botão de alteração.
  */
 export default async function PaginaCategoriasDevolucao() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{
     pode_administrar: boolean;
     pode_ver: boolean;

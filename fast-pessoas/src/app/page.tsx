@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { Cabecalho } from "./cabecalho";
 import estilos from "./page.module.css";
 
@@ -48,10 +47,7 @@ interface Cartao {
 }
 
 export default async function PaginaInicial() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
 
   // Flags só de NAVEGAÇÃO (quais cards aparecem): cada página e cada API
   // reconferem a permissão por conta própria em toda chamada.

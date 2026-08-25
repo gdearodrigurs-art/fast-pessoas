@@ -1,13 +1,10 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelPesquisas } from "./painel-pesquisas";
 
 export default async function PaginaPesquisas() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Flags só de NAVEGAÇÃO: a API reconfere toda chave em cada chamada e é ela
   // quem decide o formato do payload (lista administrativa e resultado ficam
   // AUSENTES para quem só responde).
