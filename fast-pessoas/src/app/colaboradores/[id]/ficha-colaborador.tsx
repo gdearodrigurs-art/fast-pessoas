@@ -1947,7 +1947,9 @@ export function FichaColaborador({
               </div>
               {permissoes.podeVerSalario && (
                 <div className={`${estilos.campoDado} ${estilos.campoRestrito}`}>
-                  <div className={estilos.rot}>Salário — chave rh.posicao.ver</div>
+                  {/* Autorizado por rh.posicao.ver (global) OU
+                      rh.posicao.ver.equipe (sub-árvore do gestor — A1:a). */}
+                  <div className={estilos.rot}>Salário — dado sensível</div>
                   <div className={estilos.val}>
                     {posicaoVigente ? formatarSalario(posicaoVigente.salario) : "—"}
                   </div>

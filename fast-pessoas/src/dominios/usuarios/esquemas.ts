@@ -111,6 +111,9 @@ const GRUPOS_POR_PREFIXO: ReadonlyArray<readonly [string, string]> = [
   ["rh.ocorrencia.", "Pessoas e ficha"],
   ["rh.feedback.", "Pessoas e ficha"],
   ["rh.gestor.", "Pessoas e ficha"],
+  // Disciplinar (0080/0084) caía em "Outros" — as quatro chaves são leitura e
+  // escrita sobre a ficha da pessoa, e é ali que o administrador as procura.
+  ["rh.disciplinar.", "Pessoas e ficha"],
   ["rh.auditar", "Administração do sistema"],
   ["usuario.", "Administração do sistema"],
   ["perfil.", "Administração do sistema"],
@@ -337,6 +340,18 @@ const CHAVES_SENSIVEIS = new Set<string>([
   // rosana.gomes e a persona gestor@fastdemo.local, que a documentação da demo
   // descreve como "só senha". Se o dono quiser gestor com segundo fator, o
   // caminho continua sendo `sistema.permissao.exige_2fa` na chave.
+  //
+  // NÃO ENTRAM, por DECISÃO EXPLÍCITA do dono (A1:a e A3:a, docs/20, migration
+  // 0084): `rh.posicao.ver.equipe` e `rh.disciplinar.ver.equipe`. As duas
+  // gravam audit.leitura_sensivel SEMPRE (passariam na porta (a)), mas o
+  // alcance é de EQUIPE — a mesma fronteira de ponto.ver.equipe e
+  // movimentacao.solicitar, decidida com a mesma conta: incluí-las mandaria as
+  // 6 contas do papel gestor (nenhuma com totp_secret) para o enrolamento de
+  // 2FA, que é exatamente o que a A1:a existe para evitar. As irmãs de alcance
+  // global (`rh.posicao.ver`, e o disciplinar amplo servido por
+  // `rh.disciplinar.ver` a dp/diretoria, que já exigem 2FA por papel-composição)
+  // continuam protegidas como sempre. Se o dono mudar de ideia, o caminho é
+  // `sistema.permissao.exige_2fa` na chave, não esta lista.
 ]);
 
 export function chaveSensivel(chave: string): boolean {

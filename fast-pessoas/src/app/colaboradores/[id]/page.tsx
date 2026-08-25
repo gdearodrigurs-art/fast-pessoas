@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import { colaboradorNoEscopo } from "@/dominios/colaboradores/repositorio";
+import { escopoDaMinhaEquipe } from "@/dominios/colaboradores/servico";
 import { consultar } from "@/lib/banco";
 import { lerSessao } from "@/lib/sessao";
 import { FichaColaborador } from "./ficha-colaborador";
@@ -42,6 +44,7 @@ export default async function PaginaFichaColaborador({
   const linhas = await consultar<{
     pode_editar: boolean;
     pode_ver_salario: boolean;
+    pode_ver_salario_equipe: boolean;
     pode_editar_posicao: boolean;
     pode_ver_restrita: boolean;
     pode_registrar_ocorrencia: boolean;
@@ -57,6 +60,7 @@ export default async function PaginaFichaColaborador({
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.colaborador.editar')      AS pode_editar,
             sistema.tem_permissao($1, 'rh.posicao.ver')             AS pode_ver_salario,
+            sistema.tem_permissao($1, 'rh.posicao.ver.equipe')      AS pode_ver_salario_equipe,
             sistema.tem_permissao($1, 'rh.posicao.editar')          AS pode_editar_posicao,
             sistema.tem_permissao($1, 'rh.ocorrencia.restrita.ver') AS pode_ver_restrita,
             sistema.tem_permissao($1, 'rh.ocorrencia.registrar')    AS pode_registrar_ocorrencia,
@@ -72,9 +76,19 @@ export default async function PaginaFichaColaborador({
     [sessao.usuario_id, idNumero]
   );
   const linha = linhas[0];
+  // A1:a — o salário aparece também para quem só tem a chave de EQUIPE, desde
+  // que a ficha aberta esteja na sub-árvore de quem olha (ou seja um vínculo
+  // dele). Flag só de render: a rota /posicao reconfere chave e alcance.
+  let salarioPelaEquipe = false;
+  if (!linha?.pode_ver_salario && linha?.pode_ver_salario_equipe) {
+    salarioPelaEquipe = await colaboradorNoEscopo(
+      idNumero,
+      await escopoDaMinhaEquipe(sessao)
+    );
+  }
   const permissoes: PermissoesFicha = {
     podeEditar: Boolean(linha?.pode_editar),
-    podeVerSalario: Boolean(linha?.pode_ver_salario),
+    podeVerSalario: Boolean(linha?.pode_ver_salario) || salarioPelaEquipe,
     podeEditarPosicao: Boolean(linha?.pode_editar_posicao),
     podeVerRestrita: Boolean(linha?.pode_ver_restrita),
     podeRegistrarOcorrencia: Boolean(linha?.pode_registrar_ocorrencia),

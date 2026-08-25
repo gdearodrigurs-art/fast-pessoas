@@ -28,6 +28,10 @@ import {
   encerrarLiderancaNoDesligamento,
   relacoesLiderancaAbertas,
 } from "../desligamento/repositorio";
+// Sub-árvore da equipe (A2:a): módulo próprio do organograma, sem ciclo de
+// import — organograma/servico importa este serviço, mas subarvore.ts só
+// depende do repositório e dos esquemas de lá.
+import { carregarLideradosDaSubArvore } from "../organograma/subarvore";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
@@ -183,7 +187,8 @@ function truncar(texto: string, limite: number): string {
 // Fonte única do "quem vê quem", e a régua inteira está em DUAS chaves — nunca
 // no nome do papel (migration 0039 conta o porquê):
 //   sem rh.colaborador.ver ................ só a própria ficha
-//   com rh.colaborador.ver ................ si e liderados com relação VIGENTE
+//   com rh.colaborador.ver ................ si e a SUB-ÁRVORE que lidera
+//                                           (diretos e indiretos — A2:a)
 //   mais rh.colaborador.ver.todos ......... empresa inteira
 // O default de quem só tem a primeira chave é "equipe": perfil novo composto
 // em /perfis nasce restrito, e o alcance amplo só existe se o administrador o
@@ -202,9 +207,17 @@ export async function resolverEscopo(sessao: PayloadSessao): Promise<Escopo> {
     "rh.colaborador.ver.todos"
   );
   if (!alcancaTodos) {
+    // A2:a — "equipe" é a SUB-ÁRVORE inteira (diretos e indiretos), resolvida
+    // aqui em JS (caminhada com visitados e teto; ciclo não trava) e entregue
+    // pronta ao repositório como lista de vínculos.
+    const colaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
     return {
       alcance: "equipe",
-      colaboradorId: await colaboradorIdDoUsuario(sessao.usuario_id),
+      colaboradorId,
+      equipeIds:
+        colaboradorId === null
+          ? []
+          : await carregarLideradosDaSubArvore(colaboradorId),
     };
   }
   return { alcance: "todos" };
@@ -1334,10 +1347,50 @@ export async function atualizarAcaoColaborador(
 
 // ------------------------------------------------------------------ posição (salário — dado sensível)
 
+/**
+ * O escopo de EQUIPE do usuário da sessão, para as leituras de alcance-equipe
+ * (salário A1:a, disciplinar A3:a). Não depende de rh.colaborador.ver — a chave
+ * de alcance-equipe autoriza sozinha; o que se resolve aqui é só QUEM é a
+ * sub-árvore de quem pergunta.
+ */
+export async function escopoDaMinhaEquipe(
+  sessao: PayloadSessao
+): Promise<Escopo> {
+  const colaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
+  return {
+    alcance: "equipe",
+    colaboradorId,
+    equipeIds:
+      colaboradorId === null
+        ? []
+        : await carregarLideradosDaSubArvore(colaboradorId),
+  };
+}
+
+/**
+ * Salário com DUAS chaves de alcances diferentes (decisão A1:a): a global
+ * `rh.posicao.ver` continua como sempre foi; a nova `rh.posicao.ver.equipe`
+ * alcança só a sub-árvore de quem pergunta (e os próprios vínculos, pela
+ * cláusula de pessoa). A trilha grava a chave que DE FATO autorizou — molde
+ * `chaveQueAmpliouAFicha`: gravar a global para um gestor que só alcança o
+ * próprio ramo seria trilha que mente.
+ */
 export async function obterPosicoes(
   sessao: PayloadSessao,
-  colaboradorId: number
+  colaboradorId: number,
+  chavesConcedidas: ReadonlySet<string> = new Set(["rh.posicao.ver"])
 ): Promise<{ posicoes: Posicao[] }> {
+  const global = chavesConcedidas.has("rh.posicao.ver");
+  if (!global) {
+    // Só a chave de equipe: o alvo precisa estar na MINHA sub-árvore (ou ser
+    // um vínculo meu). Fora dela = ausência, o mesmo 404 de inexistente.
+    const escopoEquipe = await escopoDaMinhaEquipe(sessao);
+    const visivel = await colaboradorNoEscopo(colaboradorId, escopoEquipe);
+    if (!visivel) {
+      throw new ErroHttp(404, "Colaborador não encontrado.");
+    }
+  }
+  const chaveDaLeitura = global ? "rh.posicao.ver" : "rh.posicao.ver.equipe";
   const posicoes = await listarPosicoes(colaboradorId);
   if (posicoes.length === 0) {
     // Sem posição não há dado sensível lido; confere só a existência da ficha.
@@ -1350,7 +1403,7 @@ export async function obterPosicoes(
   }
   await registrarLeituraSensivel({
     usuarioId: sessao.usuario_id,
-    chavePermissao: "rh.posicao.ver",
+    chavePermissao: chaveDaLeitura,
     recurso: "colaborador.salario",
     registroId: String(colaboradorId),
   });

@@ -85,7 +85,10 @@ test("ficha de terceiro lida com alcance amplo grava a chave rh.colaborador.ver.
 
 test("ficha de liderado grava rh.colaborador.ver — a chave que autorizou, não a mais ampla", () => {
   assert.equal(
-    chaveQueAmpliouAFicha({ alcance: "equipe", colaboradorId: 2 }, false),
+    chaveQueAmpliouAFicha(
+      { alcance: "equipe", colaboradorId: 2, equipeIds: [7] },
+      false
+    ),
     "rh.colaborador.ver"
   );
 });
@@ -95,7 +98,10 @@ test("a própria ficha não deixa trilha — não é leitura de dado de terceiro
   // abre a própria ficha, e essa leitura não é sobre ninguém mais.
   assert.equal(chaveQueAmpliouAFicha({ alcance: "todos" }, true), null);
   assert.equal(
-    chaveQueAmpliouAFicha({ alcance: "equipe", colaboradorId: 2 }, true),
+    chaveQueAmpliouAFicha(
+      { alcance: "equipe", colaboradorId: 2, equipeIds: [7] },
+      true
+    ),
     null
   );
 });

@@ -16,8 +16,9 @@ import {
 } from "./esquemas";
 
 // ------------------------------------------------------------------ escopo de visibilidade
-// A regra "quem vê quem" é do repositório: gestor enxerga a si e aos liderados
-// com relação VIGENTE; funcionário só a própria ficha; rh/dp/diretoria, todos.
+// A regra "quem vê quem" é do repositório: gestor enxerga a si e a SUB-ÁRVORE
+// que lidera (diretos e indiretos, pela relação VIGENTE — decisão A2:a);
+// funcionário só a própria ficha; rh/dp/diretoria, todos.
 //
 // A UNIDADE DO ESCOPO É O VÍNCULO, e "eu" é a PESSOA. As duas frases juntas são
 // a correção que a 0046 exigiu e que ficou faltando: antes dela uma pessoa tinha
@@ -36,10 +37,24 @@ import {
 // só os vínculos que eu lidero HOJE. Quem enxerga a pessoa inteira de terceiro
 // continua sendo só quem tem `rh.colaborador.ver.todos` (alcance "todos") — a
 // mesma chave de sempre, decidida por chave e nunca por nome de papel.
+//
+// DESDE A FASE 4 (decisão A2:a), "equipe" é a SUB-ÁRVORE: liderados diretos e
+// INDIRETOS, uma semântica só de "minha equipe" no sistema inteiro. A lista de
+// ids vem pronta no escopo (`equipeIds`), montada em JS pelo serviço — nunca
+// WITH RECURSIVE aqui: ciclo na hierarquia trava o Postgres (a decisão está em
+// organograma/repositorio.ts:5-13; a caminhada com visitados e teto mora em
+// organograma/esquemas.ts). O padrão pessoa×vínculo da 0046 continua: os ids da
+// sub-árvore são VÍNCULOS liderados — o outro contrato do liderado, em outro
+// CNPJ e sob outro gestor, segue fora do alcance.
 
 export type Escopo =
   | { alcance: "todos" }
-  | { alcance: "equipe"; colaboradorId: number | null }
+  | {
+      alcance: "equipe";
+      colaboradorId: number | null;
+      /** Vínculos da sub-árvore (diretos e indiretos), SEM os do próprio. */
+      equipeIds: number[];
+    }
   | { alcance: "proprio"; colaboradorId: number | null };
 
 function condicaoEscopo(
@@ -55,10 +70,9 @@ function condicaoEscopo(
   const euMesmo = `${alias}.pessoa_id =
       (SELECT eu.pessoa_id FROM rh.colaborador eu WHERE eu.id = $${n})`;
   if (escopo.alcance === "proprio") return `(${euMesmo})`;
-  return `(${euMesmo} OR ${alias}.id IN (
-      SELECT rg.liderado_colaborador_id
-        FROM rh.relacao_gestor rg
-       WHERE rg.gestor_colaborador_id = $${n} AND rg.fim_vigencia IS NULL))`;
+  if (escopo.equipeIds.length === 0) return `(${euMesmo})`;
+  parametros.push(escopo.equipeIds);
+  return `(${euMesmo} OR ${alias}.id = ANY($${parametros.length}::bigint[]))`;
 }
 
 /**

@@ -4,7 +4,7 @@ import {
   registrarPosicao,
 } from "@/dominios/colaboradores/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import { exigirAlgumaPermissao, exigirPermissao } from "@/lib/sessao";
 
 function validarId(id: string): number | null {
   const idNumero = Number(id);
@@ -16,14 +16,20 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Salário é dado sensível: chave própria e leitura gravada na trilha.
-    const sessao = await exigirPermissao("rh.posicao.ver");
+    // Salário é dado sensível, e DUAS chaves o autorizam com alcances
+    // diferentes (A1:a): a global (empresa inteira) e a de equipe (sub-árvore
+    // de quem pergunta — o serviço confere o alvo). A leitura grava trilha com
+    // a chave que DE FATO autorizou.
+    const { sessao, concedidas } = await exigirAlgumaPermissao([
+      "rh.posicao.ver",
+      "rh.posicao.ver.equipe",
+    ]);
     const { id } = await params;
     const idNumero = validarId(id);
     if (idNumero === null) {
       return Response.json({ erro: "Identificador inválido" }, { status: 400 });
     }
-    const resultado = await obterPosicoes(sessao, idNumero);
+    const resultado = await obterPosicoes(sessao, idNumero, concedidas);
     return Response.json(resultado);
   } catch (erro) {
     return responderErro(erro);
