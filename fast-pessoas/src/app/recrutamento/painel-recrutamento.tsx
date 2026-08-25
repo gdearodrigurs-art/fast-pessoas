@@ -353,12 +353,14 @@ function QuadroTempos() {
     );
   }
 
-  // Agrupa por CARGO (a identidade estável — nunca o título livre da vaga).
-  const porCargo = new Map<string, TempoEtapa[]>();
+  // Agrupa por CARGO_ID (a identidade estável — nunca o título livre da vaga
+  // nem o nome da versão: cargos homônimos não se fundem, e renomear não
+  // parte o histórico). O nome é só exibição.
+  const porCargo = new Map<number, TempoEtapa[]>();
   for (const linha of linhas) {
-    const grupo = porCargo.get(linha.cargo_nome) ?? [];
+    const grupo = porCargo.get(linha.cargo_id) ?? [];
     grupo.push(linha);
-    porCargo.set(linha.cargo_nome, grupo);
+    porCargo.set(linha.cargo_id, grupo);
   }
 
   return (
@@ -368,10 +370,10 @@ function QuadroTempos() {
         cargo — candidaturas abertas e encerradas contam com seus intervalos já
         fechados; a etapa onde alguém ainda está parado não entra até fechar.
       </p>
-      {[...porCargo.entries()].map(([cargo, etapas]) => (
-        <article className={comum.cartao} key={cargo}>
+      {[...porCargo.entries()].map(([cargoId, etapas]) => (
+        <article className={comum.cartao} key={cargoId}>
           <div className={comum.topo}>
-            <span className={comum.nome}>{cargo}</span>
+            <span className={comum.nome}>{etapas[0].cargo_nome}</span>
           </div>
           {etapas.map((etapa) => (
             <div

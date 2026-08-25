@@ -119,6 +119,9 @@ export interface Kanban {
 }
 
 export interface TempoEtapa {
+  /** Identidade do grupo — o CARGO, nunca o nome (homônimos não se fundem). */
+  cargo_id: number;
+  /** Nome de exibição: a versão mais recente do cargo. */
   cargo_nome: string;
   etapa_nome: string;
   etapa_ordem: number;

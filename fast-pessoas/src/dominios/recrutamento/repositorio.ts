@@ -1272,6 +1272,9 @@ export async function apurarVagasNoPrazo(): Promise<number | null> {
 }
 
 export interface TempoPorEtapa {
+  /** Identidade do grupo — o CARGO (eixo 2), nunca o nome da versão. */
+  cargo_id: number;
+  /** Nome de exibição: a versão MAIS RECENTE do cargo. */
   cargo_nome: string;
   etapa_nome: string;
   /** Ordem do catálogo — só para a tela listar as etapas na ordem natural. */
@@ -1288,6 +1291,11 @@ export interface TempoPorEtapa {
  * identidade estável) — e por ETAPA DO CATÁLOGO (nome: versões da mesma etapa
  * e posições diferentes entre modelos somam no mesmo balde).
  *
+ * A identidade do grupo é cv.cargo_id, não cv.nome (eixo 2): dois cargos
+ * homônimos não se fundem num balde só, e renomear o cargo (versão nova) não
+ * parte o histórico em dois. O nome que sai é o da versão MAIS RECENTE do
+ * cargo — só exibição.
+ *
  * O intervalo é o par de movimentações consecutivas da MESMA candidatura
  * (índice candidatura+em da 0012): entrar na etapa (para_etapa_id) abre;
  * a movimentação seguinte — avanço OU desfecho — fecha. Candidaturas abertas
@@ -1297,6 +1305,7 @@ export interface TempoPorEtapa {
  */
 export async function apurarTempoPorEtapa(): Promise<TempoPorEtapa[]> {
   const linhas = await consultar<{
+    cargo_id: string;
     cargo_nome: string;
     etapa_nome: string;
     etapa_ordem: number;
@@ -1310,7 +1319,13 @@ export async function apurarTempoPorEtapa(): Promise<TempoPorEtapa[]> {
               ) AS proxima_em
          FROM rh.movimentacao_candidatura m
      )
-     SELECT cv.nome AS cargo_nome, e.nome AS etapa_nome,
+     SELECT cv.cargo_id,
+            (SELECT cv2.nome
+               FROM rh.cargo_versao cv2
+              WHERE cv2.cargo_id = cv.cargo_id
+              ORDER BY cv2.inicio_vigencia DESC, cv2.id DESC
+              LIMIT 1) AS cargo_nome,
+            e.nome AS etapa_nome,
             MIN(e.ordem)::int AS etapa_ordem,
             (percentile_cont(0.5) WITHIN GROUP (
                ORDER BY EXTRACT(EPOCH FROM (p.proxima_em - p.em))
@@ -1323,11 +1338,12 @@ export async function apurarTempoPorEtapa(): Promise<TempoPorEtapa[]> {
        JOIN rh.requisicao_vaga r ON r.id = v.requisicao_id
        JOIN rh.cargo_versao cv ON cv.id = r.cargo_versao_id
       WHERE p.para_etapa_id IS NOT NULL AND p.proxima_em IS NOT NULL
-      GROUP BY cv.nome, e.nome
-      ORDER BY cargo_nome, etapa_ordem`
+      GROUP BY cv.cargo_id, e.nome
+      ORDER BY cargo_nome, cv.cargo_id, etapa_ordem`
   );
   return linhas.map((linha) => ({
     ...linha,
+    cargo_id: Number(linha.cargo_id),
     mediana_dias: Number(linha.mediana_dias),
   }));
 }
