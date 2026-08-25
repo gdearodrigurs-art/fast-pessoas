@@ -20,6 +20,7 @@ import {
   TipoCalculo,
   TipoTabelaLegal,
 } from "./esquemas";
+import { chaveTravaImportacaoOlac } from "./olac";
 
 // Dinheiro: NUMERIC no banco ↔ CENTAVOS INTEIROS no motor. A conversão mora
 // SÓ aqui, na borda — nada de float de reais circulando pelo serviço.
@@ -2515,6 +2516,24 @@ export async function mapaEmpresaPorCnpj(
     `SELECT id, cnpj FROM rh.empresa_grupo WHERE cnpj IS NOT NULL`
   );
   return new Map(rows.map((linha) => [linha.cnpj, Number(linha.id)]));
+}
+
+/**
+ * SERIALIZA a importação da competência: advisory lock transacional (solta no
+ * COMMIT/ROLLBACK) sobre a chave canônica de olac.ts. Sem ela, dois POSTs
+ * simultâneos duplicam o espelho — o DELETE de substituição roda em READ
+ * COMMITTED e não enxerga os INSERTs da transação concorrente. Chamar como
+ * PRIMEIRO passo da transação do importarOlac: quem chega segundo espera e,
+ * ao acordar, já enxerga (e substitui) o lote de quem chegou primeiro.
+ */
+export async function travarImportacaoOlac(
+  cliente: PoolClient,
+  competenciaAno: number,
+  competenciaMes: number
+): Promise<void> {
+  await cliente.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+    chaveTravaImportacaoOlac(competenciaAno, competenciaMes),
+  ]);
 }
 
 export async function inserirLoteOlac(

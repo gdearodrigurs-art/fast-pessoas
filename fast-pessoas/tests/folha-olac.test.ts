@@ -15,6 +15,7 @@ import {
   CABECALHO_OLAC,
   casarLinhaOlac,
   centavosParaValorOlac,
+  chaveTravaImportacaoOlac,
   ehCabecalhoOlac,
   gerarArquivoOlac,
   gerarLinhaOlac,
@@ -242,4 +243,31 @@ test("ida-e-volta BYTE-IDÊNTICA: o que exportamos, reanalisado, regenera igual"
   const relidas = fisicas.slice(1).map((fisica) => analisar(fisica.bruta));
   assert.deepEqual(relidas, linhas);
   assert.equal(gerarArquivoOlac(relidas), arquivo);
+});
+
+// ---------------------------------------------------------------- trava da importação
+// O conserto que este teste FIXA: importarOlac sem serialização — duplo POST
+// duplicava o espelho (o DELETE de substituição em READ COMMITTED não enxerga
+// INSERTs concorrentes). A trava é pg_advisory_xact_lock sobre o hashtext
+// DESTA chave, tomada como primeiro passo da transação; o teste congela a
+// forma da chave — mudá-la silenciosamente quebraria a exclusão mútua entre
+// versões do código em deploy.
+
+test("a chave da trava de importação é canônica: uma por competência, estável, mês com zero à esquerda", () => {
+  assert.equal(chaveTravaImportacaoOlac(2026, 8), "fast.olac-import:2026-08");
+  assert.equal(chaveTravaImportacaoOlac(2026, 11), "fast.olac-import:2026-11");
+  // Estável entre chamadas (é ela que serializa) e distinta por competência
+  // (competências diferentes importam em paralelo).
+  assert.equal(
+    chaveTravaImportacaoOlac(2026, 8),
+    chaveTravaImportacaoOlac(2026, 8)
+  );
+  assert.notEqual(
+    chaveTravaImportacaoOlac(2026, 8),
+    chaveTravaImportacaoOlac(2026, 9)
+  );
+  assert.notEqual(
+    chaveTravaImportacaoOlac(2026, 8),
+    chaveTravaImportacaoOlac(2027, 8)
+  );
 });

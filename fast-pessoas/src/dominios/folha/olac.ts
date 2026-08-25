@@ -115,6 +115,22 @@ export function nomeArquivoOlac(ano: number, mes: number): string {
   return `olac-folha-${ano}-${String(mes).padStart(2, "0")}.csv`;
 }
 
+/**
+ * Chave do advisory lock que SERIALIZA a importação de uma competência
+ * (pg_advisory_xact_lock sobre hashtext desta string, na transação do
+ * importarOlac). UMA trava por competência, de propósito: a empresa só se
+ * conhece linha a linha DEPOIS de analisar o arquivo (lote misto toca várias,
+ * e o balde NULL também) — travar por empresa exigiria vários locks em ordem
+ * dependente do arquivo, com risco de deadlock. O volume é baixo (a volta da
+ * contabilidade, uma vez por mês), então serializar a competência inteira não
+ * custa nada; competências diferentes seguem importando em paralelo. Sem a
+ * trava, dois POSTs simultâneos duplicavam o espelho: o DELETE de substituição
+ * não enxerga INSERTs concorrentes em READ COMMITTED.
+ */
+export function chaveTravaImportacaoOlac(ano: number, mes: number): string {
+  return `fast.olac-import:${ano}-${String(mes).padStart(2, "0")}`;
+}
+
 // ------------------------------------------------------------------ análise (a volta)
 
 /** Preenche colunas ausentes no fim (planilha corta ';' vazios finais). */

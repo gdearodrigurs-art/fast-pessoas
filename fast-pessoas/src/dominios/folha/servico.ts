@@ -106,6 +106,7 @@ import {
   mapaEmpresaPorCnpj,
   TotalEspelhoOlac,
   totaisEspelhoOlac,
+  travarImportacaoOlac,
   ultimosLotesOlac,
   buscarColaboradorParaFerias,
   buscarDesligamentoParaRescisao,
@@ -2448,6 +2449,11 @@ export async function importarOlac(
   );
 
   return comTransacao(sessao.usuario_id, async (cliente) => {
+    // PRIMEIRO passo da transação: serializa a importação desta competência
+    // (advisory lock transacional). Duplo POST não duplica mais o espelho —
+    // o DELETE de substituição em READ COMMITTED não enxerga INSERTs
+    // concorrentes; com a trava, o segundo lote espera e SUBSTITUI o primeiro.
+    await travarImportacaoOlac(cliente, competencia.ano, competencia.mes);
     const [colaboradorPorMatricula, empresaPorCnpj, rubricas] =
       await Promise.all([
         mapaColaboradorPorMatricula(cliente),
