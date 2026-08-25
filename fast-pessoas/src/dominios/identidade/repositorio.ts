@@ -1,6 +1,7 @@
 import { PoolClient } from "pg";
-import { consultar } from "../../lib/banco";
+import { comTransacao, consultar } from "../../lib/banco";
 import { Papel } from "./esquemas";
+import type { ResultadoDesativacaoTotp } from "./falhas-totp";
 
 export interface UsuarioIdentidade {
   id: number;
@@ -197,14 +198,24 @@ export async function zerarFalhasTotp(usuarioId: number): Promise<void> {
 }
 
 /**
- * Desativa o usuário por falhas de TOTP — ATÔMICO com a salvaguarda do último
- * gestor de usuários: o UPDATE só acontece se existir OUTRO usuário ativo cujo
- * papel componha a chave de gestão (mesma consulta de sistema.tem_permissao).
- * A auditoria sai na MESMA instrução (CTE): não existe desativação sem rastro.
+ * Desativa o usuário por falhas de TOTP — com a salvaguarda do último gestor
+ * de usuários: o UPDATE só acontece se existir OUTRO usuário ativo cujo papel
+ * componha a chave de gestão (mesma consulta de sistema.tem_permissao). A
+ * auditoria sai na MESMA instrução (CTE): não existe desativação sem rastro.
  * Autor do ato = sistema (usuario_id NULL na audit.alteracao).
  *
- * Devolve true quando desativou; false quando recusou (último gestor ativo) —
- * o chamador aplica então o bloqueio temporário.
+ * Tudo roda numa transação que ANTES toma um advisory lock transacional: o
+ * EXISTS roda em READ COMMITTED, e sem o lock duas desativações simultâneas
+ * (dos dois últimos gestores, cada um estourando as falhas ao mesmo tempo)
+ * leriam o MESMO retrato — cada uma veria a outra ainda ativa como "outro
+ * gestor", as duas passariam, e o sistema ficaria sem gestor nenhum. Com o
+ * lock, a segunda transação só executa depois do COMMIT da primeira (o lock
+ * morre no commit) e o EXISTS dela já enxerga o estado novo.
+ *
+ * Quando NÃO desativa, o motivo importa (e o retorno o distingue):
+ *  - "ultimo_gestor": salvaguarda — o chamador aplica o bloqueio temporário;
+ *  - "ja_inativo": a conta JÁ estava inativa (duplo-clique da 5ª falha) —
+ *    nada a fazer, e bloquear/auditar aqui seria rastro falso.
  *
  * A desativação também ZERA o contador: quando o DP reativar pela tela de
  * usuários, a pessoa recomeça com as 5 tentativas — e não com uma só.
@@ -212,7 +223,7 @@ export async function zerarFalhasTotp(usuarioId: number): Promise<void> {
 export async function desativarPorFalhasTotp(
   usuarioId: number,
   limiar: number
-): Promise<boolean> {
+): Promise<ResultadoDesativacaoTotp> {
   const diff = {
     Ativo: { de: "Sim", para: "Não" },
     Motivo: {
@@ -222,27 +233,37 @@ export async function desativarPorFalhasTotp(
         "(autor: sistema; reativação é ato do DP pela tela de usuários)",
     },
   };
-  const linhas = await consultar<{ id: string }>(
-    `WITH desativado AS (
-       UPDATE sistema.usuario u
-          SET ativo = FALSE, totp_falhas_consecutivas = 0
-        WHERE u.id = $1
-          AND u.ativo
-          AND EXISTS (
-            SELECT 1
-              FROM sistema.usuario outro
-              JOIN sistema.papel_permissao pp ON pp.papel = outro.papel
-             WHERE pp.chave = $2 AND outro.ativo AND outro.id <> u.id
-          )
-        RETURNING u.id
-     )
-     INSERT INTO audit.alteracao (usuario_id, papel, acao, tabela, registro_id, diff)
-     SELECT NULL, NULL, 'desativacao_por_falhas_totp', 'sistema.usuario', d.id::text, $3::jsonb
-       FROM desativado d
-     RETURNING registro_id AS id`,
-    [usuarioId, CHAVE_GESTAO_USUARIOS, JSON.stringify(diff)]
-  );
-  return linhas.length > 0;
+  return comTransacao(usuarioId, async (cliente) => {
+    await cliente.query(
+      "SELECT pg_advisory_xact_lock(hashtext('fast.desativar-por-falhas-totp'))"
+    );
+    const { rows } = await cliente.query<{ id: string }>(
+      `WITH desativado AS (
+         UPDATE sistema.usuario u
+            SET ativo = FALSE, totp_falhas_consecutivas = 0
+          WHERE u.id = $1
+            AND u.ativo
+            AND EXISTS (
+              SELECT 1
+                FROM sistema.usuario outro
+                JOIN sistema.papel_permissao pp ON pp.papel = outro.papel
+               WHERE pp.chave = $2 AND outro.ativo AND outro.id <> u.id
+            )
+          RETURNING u.id
+       )
+       INSERT INTO audit.alteracao (usuario_id, papel, acao, tabela, registro_id, diff)
+       SELECT NULL, NULL, 'desativacao_por_falhas_totp', 'sistema.usuario', d.id::text, $3::jsonb
+         FROM desativado d
+       RETURNING registro_id AS id`,
+      [usuarioId, CHAVE_GESTAO_USUARIOS, JSON.stringify(diff)]
+    );
+    if (rows.length > 0) return "desativado";
+    const { rows: situacao } = await cliente.query<{ ativo: boolean }>(
+      "SELECT ativo FROM sistema.usuario WHERE id = $1",
+      [usuarioId]
+    );
+    return situacao[0]?.ativo ? "ultimo_gestor" : "ja_inativo";
+  });
 }
 
 /**
@@ -250,6 +271,9 @@ export async function desativarPorFalhasTotp(
  * do bloqueio e zera o contador, com auditoria na mesma instrução. Sessões
  * vigentes do bloqueado seguem valendo de propósito — matar a sessão do ÚNICO
  * gestor de usuários seria entregar ao atacante a negação de serviço total.
+ * O `AND ativo` é o cinto de segurança: conta já inativa não recebe bloqueio
+ * temporário (nem o rastro dele) — bloquear quem já caiu só gravaria auditoria
+ * falsa de "último gestor".
  */
 export async function bloquearTotpPorFalhas(
   usuarioId: number,
@@ -268,13 +292,32 @@ export async function bloquearTotpPorFalhas(
        UPDATE sistema.usuario
           SET totp_bloqueado_ate = now() + make_interval(mins => $2::int),
               totp_falhas_consecutivas = 0
-        WHERE id = $1
+        WHERE id = $1 AND ativo
         RETURNING id
      )
      INSERT INTO audit.alteracao (usuario_id, papel, acao, tabela, registro_id, diff)
      SELECT NULL, NULL, 'bloqueio_totp_temporario', 'sistema.usuario', b.id::text, $3::jsonb
        FROM bloqueado b`,
     [usuarioId, minutos, JSON.stringify(diff)]
+  );
+}
+
+/**
+ * REATIVAR usuário (tela de usuários) limpa o rastro da regra de falhas de
+ * TOTP: o bloqueio temporário e o contador. Sem isto, uma conta desativada com
+ * bloqueio ainda vigente voltaria já trancada — reativar tem que devolver as 5
+ * tentativas inteiras, como a própria desativação automática já promete.
+ * Roda dentro da transação do chamador (usuarios/servico.atualizarUsuario).
+ */
+export async function limparBloqueioTotp(
+  cliente: PoolClient,
+  usuarioId: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE sistema.usuario
+        SET totp_bloqueado_ate = NULL, totp_falhas_consecutivas = 0
+      WHERE id = $1`,
+    [usuarioId]
   );
 }
 

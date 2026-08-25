@@ -69,8 +69,10 @@ export type ResultadoAutenticacao =
         | "totp_obrigatorio"
         | "totp_invalido"
         // Conta inativa com a senha CERTA — inclusive a recém-desativada pela
-        // regra de falhas de TOTP (C1 modificada): a resposta é a MESMA nos
-        // dois casos, para não vazar que foi o TOTP que derrubou.
+        // regra de falhas de TOTP (C1 modificada). O motivo é DISTINTO só por
+        // dentro (auditoria e rate-limit); na superfície do login a rota
+        // devolve o MESMO 401 genérico da senha errada, senão a diferença de
+        // resposta viraria oráculo de senha da conta desativada.
         | "conta_desativada"
         // Bloqueio temporário de TOTP vigente (caso último-admin).
         | "totp_bloqueado";
@@ -182,9 +184,10 @@ export async function autenticar(
     return { ok: false, motivo: "credenciais_invalidas" };
   }
   if (!usuario.ativo) {
-    // Senha certa em conta inativa: resposta própria ("conta desativada,
-    // procure o DP") — a MESMA que sai quando a 5ª falha de TOTP acabou de
-    // desativar, para não denunciar qual das duas coisas aconteceu.
+    // Senha certa em conta inativa: o motivo interno é próprio (auditoria e
+    // rate-limit), mas a rota responde o 401 GENÉRICO de credencial errada —
+    // idêntico ao da senha errada e ao da 5ª falha de TOTP que acabou de
+    // desativar. Qualquer resposta distinta aqui confirmaria a senha.
     await registrarAcao(
       "login_falha",
       { id: usuario.id, papel: usuario.papel },

@@ -53,13 +53,14 @@ export async function POST(request: Request) {
       );
     }
     // Conta inativa — tanto a que o DP desativou quanto a que acabou de cair
-    // pela 5ª falha de TOTP (C1 modificada). Resposta ÚNICA e neutra, para não
-    // vazar que foi o segundo fator que derrubou.
+    // pela 5ª falha de TOTP (C1 modificada). A resposta é o MESMO 401 genérico
+    // da senha errada: um "Conta desativada" próprio só aparecia com a senha
+    // CERTA, e a diferença entre as duas respostas confirmava a senha para
+    // quem não pode mais entrar (oráculo). O aviso "procure o DP" saiu desta
+    // superfície de propósito; o motivo interno segue distinto para a
+    // auditoria e para o rate-limit (não conta como falha de senha).
     if (resultado.motivo === "conta_desativada") {
-      return Response.json(
-        { erro: "Conta desativada. Procure o Departamento Pessoal." },
-        { status: 403 }
-      );
+      return Response.json({ erro: MENSAGEM_GENERICA }, { status: 401 });
     }
     // Bloqueio temporário de TOTP (caso último-admin): mesma voz do rate-limit
     // de senha, sem citar o segundo fator.

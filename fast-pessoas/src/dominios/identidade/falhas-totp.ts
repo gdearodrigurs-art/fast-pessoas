@@ -15,6 +15,19 @@
  * barato do que o dono aceitou.
  */
 
+/**
+ * Por que a desativação recusada tem DOIS motivos distintos, e não um boolean:
+ * "não desativou" acontece tanto quando o usuário é o último gestor ativo
+ * (aí cabe bloqueio temporário) quanto quando ele JÁ estava inativo — o
+ * duplo-clique da 5ª falha, em que a tentativa paralela desativou primeiro.
+ * Conflacionar os dois aplicava bloqueio temporário a uma conta já desativada
+ * e gravava auditoria de "último gestor" FALSA.
+ */
+export type ResultadoDesativacaoTotp =
+  | "desativado"
+  | "ja_inativo"
+  | "ultimo_gestor";
+
 export interface PortasFalhasTotp {
   /** Incrementa o contador de falhas consecutivas e devolve o total novo (atômico). */
   registrarFalha(usuarioId: number): Promise<number>;
@@ -23,11 +36,14 @@ export interface PortasFalhasTotp {
   /** Limiar e duração do bloqueio — administráveis (eixo 9), nunca chumbados. */
   lerParametros(): Promise<{ maxFalhasTotp: number; bloqueioTotpMinutos: number }>;
   /**
-   * Desativa o usuário com auditoria (autor = sistema). Devolve false quando a
-   * desativação foi RECUSADA por ele ser o último ativo com a chave de gestão
-   * de usuários.
+   * Desativa o usuário com auditoria (autor = sistema). Quando NÃO desativa,
+   * diz o motivo: "ultimo_gestor" (salvaguarda — cabe bloqueio temporário) ou
+   * "ja_inativo" (a conta já caiu por outra via — nada mais a fazer).
    */
-  desativarComAuditoria(usuarioId: number, limiar: number): Promise<boolean>;
+  desativarComAuditoria(
+    usuarioId: number,
+    limiar: number
+  ): Promise<ResultadoDesativacaoTotp>;
   /** Bloqueio temporário (caso último-admin), com auditoria. */
   bloquearComAuditoria(usuarioId: number, minutos: number): Promise<void>;
 }
@@ -61,9 +77,16 @@ export async function processarCodigoTotp(
     return "falha";
   }
 
-  if (await portas.desativarComAuditoria(usuarioId, maxFalhasTotp)) {
-    return "desativado";
+  const resultado = await portas.desativarComAuditoria(usuarioId, maxFalhasTotp);
+  if (resultado === "ultimo_gestor") {
+    // Só a salvaguarda do último gestor troca a desativação pelo bloqueio
+    // temporário.
+    await portas.bloquearComAuditoria(usuarioId, bloqueioTotpMinutos);
+    return "bloqueado";
   }
-  await portas.bloquearComAuditoria(usuarioId, bloqueioTotpMinutos);
-  return "bloqueado";
+  // "desativado" — a regra acabou de derrubar a conta; ou "ja_inativo" — o
+  // duplo-clique da 5ª falha: a tentativa paralela desativou primeiro. Nos dois
+  // casos a conta está inativa e é isso que o chamador responde; no segundo,
+  // sem novo rastro nem bloqueio (a auditoria de "último gestor" seria falsa).
+  return "desativado";
 }

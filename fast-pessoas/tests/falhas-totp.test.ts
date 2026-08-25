@@ -16,9 +16,14 @@ import {
 //     temporário com a duração administrável;
 //   - o limiar vem dos parâmetros, não de número chumbado (eixo 9).
 //
+//   - conta que JÁ caiu (duplo-clique da 5ª falha) não ganha bloqueio
+//     temporário nem rastro falso de "último gestor".
+//
 // A metade de BANCO — incremento atômico, desativação condicionada por CHAVE
-// de permissão ('usuario.administrar') e auditoria na mesma instrução — vive
-// em identidade/repositorio.ts e se prova ao vivo contra o banco.
+// de permissão ('usuario.administrar'), auditoria na mesma instrução e o
+// advisory lock transacional que serializa duas desativações simultâneas
+// (corrida dos dois-últimos-gestores) — vive em identidade/repositorio.ts e
+// se prova ao vivo contra o banco.
 // ===========================================================================
 
 interface EstadoFalhas {
@@ -59,13 +64,16 @@ function bancada(
       };
     },
     async desativarComAuditoria() {
+      // Espelha a porta real (repositorio.desativarPorFalhasTotp): conta JÁ
+      // inativa vem antes de qualquer salvaguarda — o UPDATE tem `AND ativo`.
+      if (!estado.ativo) return "ja_inativo";
       // Salvaguarda do último gestor: a porta real recusa quando não existe
       // OUTRO usuário ativo com a chave de gestão de usuários.
-      if (opcoes.ultimoGestorDeUsuarios) return false;
+      if (opcoes.ultimoGestorDeUsuarios) return "ultimo_gestor";
       estado.ativo = false;
       estado.falhas = 0;
       estado.desativacoesAuditadas += 1;
-      return true;
+      return "desativado";
     },
     async bloquearComAuditoria(_usuarioId, minutos) {
       estado.bloqueadoMinutos = minutos;
@@ -127,6 +135,30 @@ test("último gestor de usuários: 5ª falha BLOQUEIA temporariamente, nunca des
   assert.equal(estado.desativacoesAuditadas, 0);
   // O bloqueio também consome o contador: vencido o prazo, recomeça do zero.
   assert.equal(estado.falhas, 0);
+});
+
+test("limiar batido numa conta que JÁ caiu (duplo-clique da 5ª falha): sem bloqueio temporário e sem rastro de 'último gestor'", async () => {
+  const { portas, estado } = bancada();
+  // A tentativa PARALELA acabou de desativar (e zerou o contador na mesma
+  // instrução); esta chegou logo atrás com o incremento dela já feito.
+  estado.ativo = false;
+  estado.falhas = 4;
+
+  // A conta está inativa — é isso que o chamador responde ("desativado"),
+  // sem inventar consequência nova.
+  assert.equal(await processarCodigoTotp(portas, USUARIO, false), "desativado");
+
+  assert.equal(
+    estado.desativacoesAuditadas,
+    0,
+    "nenhuma auditoria NOVA de desativação — a tentativa paralela já gravou a dela"
+  );
+  assert.equal(
+    estado.bloqueiosAuditados,
+    0,
+    "nenhum bloqueio temporário: a auditoria de 'último gestor' seria falsa"
+  );
+  assert.equal(estado.bloqueadoMinutos, null, "conta inativa não ganha bloqueio");
 });
 
 test("limiar e duração vêm dos parâmetros administráveis, não de número chumbado", async () => {
