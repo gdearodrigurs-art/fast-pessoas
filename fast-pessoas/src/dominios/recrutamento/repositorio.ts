@@ -5,6 +5,7 @@ import {
   MotivoRequisicao,
   OrigemCandidato,
   RecomendacaoParecer,
+  ResultadoPesquisaSocial,
   StatusCandidatura,
   StatusOferta,
   StatusRequisicao,
@@ -865,6 +866,11 @@ export interface CandidaturaKanban {
   /** Dado sensível (salário) — o serviço remove de quem não pode ver. */
   oferta_valor: number | null;
   oferta_dentro_banda: boolean | null;
+  /** Desfecho da pesquisa social (G3:a) — o serviço remove de quem não tem
+   *  rs.gerir; null também quando não há desfecho (ou já expurgado). */
+  pesquisa_social_resultado: ResultadoPesquisaSocial | null;
+  /** Há anexo no GED? — o serviço remove (null) de quem não tem rs.gerir. */
+  pesquisa_social_tem_anexo: boolean | null;
   criado_em: string;
 }
 
@@ -885,6 +891,8 @@ export async function listarCandidaturasDaVaga(
     oferta_status: StatusOferta | null;
     oferta_valor: string | null;
     oferta_dentro_banda: boolean | null;
+    pesquisa_social_resultado: ResultadoPesquisaSocial | null;
+    pesquisa_social_tem_anexo: boolean;
     criado_em: string;
   }>(
     `SELECT ca.id, ca.candidato_id, ca.status, ca.criado_em,
@@ -895,11 +903,14 @@ export async function listarCandidaturasDaVaga(
             (SELECT COUNT(*) FROM rh.parecer_selecao p
               WHERE p.candidatura_id = ca.id)::int AS total_pareceres,
             o.status AS oferta_status, o.valor::text AS oferta_valor,
-            o.dentro_banda AS oferta_dentro_banda
+            o.dentro_banda AS oferta_dentro_banda,
+            ps.resultado AS pesquisa_social_resultado,
+            (ps.documento_id IS NOT NULL) AS pesquisa_social_tem_anexo
        FROM rh.candidatura ca
        JOIN rh.candidato c ON c.id = ca.candidato_id
        JOIN rh.etapa_selecao_versao e ON e.id = ca.etapa_atual_id
        LEFT JOIN rh.oferta o ON o.candidatura_id = ca.id
+       LEFT JOIN rh.pesquisa_social ps ON ps.candidatura_id = ca.id
        LEFT JOIN LATERAL (
          SELECT m.motivo_catalogo
            FROM rh.movimentacao_candidatura m
@@ -1246,6 +1257,172 @@ export async function responderOferta(
     "UPDATE rh.oferta SET status = $2, respondida_em = now() WHERE id = $1",
     [id, status]
   );
+}
+
+// ------------------------------------------------------------------ pesquisa social (#13c, G3:a)
+
+export interface PesquisaSocialLinha {
+  id: number;
+  candidatura_id: number;
+  resultado: ResultadoPesquisaSocial | null;
+  documento_id: number | null;
+  expurgado_em: string | null;
+}
+
+/** O desfecho da candidatura (0..1), DENTRO da transação de mutação. */
+export async function buscarPesquisaSocial(
+  cliente: PoolClient,
+  candidaturaId: number
+): Promise<PesquisaSocialLinha | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    candidatura_id: string;
+    resultado: ResultadoPesquisaSocial | null;
+    documento_id: string | null;
+    expurgado_em: string | null;
+  }>(
+    `SELECT id, candidatura_id, resultado, documento_id, expurgado_em
+       FROM rh.pesquisa_social
+      WHERE candidatura_id = $1`,
+    [candidaturaId]
+  );
+  if (rows.length === 0) return null;
+  return {
+    id: Number(rows[0].id),
+    candidatura_id: Number(rows[0].candidatura_id),
+    resultado: rows[0].resultado,
+    documento_id:
+      rows[0].documento_id === null ? null : Number(rows[0].documento_id),
+    expurgado_em: rows[0].expurgado_em,
+  };
+}
+
+export async function inserirPesquisaSocial(
+  cliente: PoolClient,
+  dados: {
+    candidatura_id: number;
+    resultado: ResultadoPesquisaSocial;
+    documento_id: number | null;
+    registrado_por: number;
+  }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.pesquisa_social
+       (candidatura_id, resultado, documento_id, registrado_por)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id`,
+    [
+      dados.candidatura_id,
+      dados.resultado,
+      dados.documento_id,
+      dados.registrado_por,
+    ]
+  );
+  return Number(rows[0].id);
+}
+
+export interface AnexoPesquisaSocial {
+  documento_id: number;
+  nome_arquivo: string;
+  mime: string;
+}
+
+/**
+ * Metadados do anexo para o download (fora de transação). Null quando não há
+ * pesquisa, não há anexo ou o desfecho já foi expurgado — para quem baixa, os
+ * três casos são o mesmo 404.
+ */
+export async function buscarAnexoPesquisaSocial(
+  candidaturaId: number
+): Promise<AnexoPesquisaSocial | null> {
+  const linhas = await consultar<{
+    documento_id: string;
+    nome_arquivo: string;
+    mime: string;
+  }>(
+    `SELECT ps.documento_id, d.nome_arquivo, d.mime
+       FROM rh.pesquisa_social ps
+       JOIN rh.documento d ON d.id = ps.documento_id
+      WHERE ps.candidatura_id = $1 AND ps.documento_id IS NOT NULL`,
+    [candidaturaId]
+  );
+  if (linhas.length === 0) return null;
+  return {
+    documento_id: Number(linhas[0].documento_id),
+    nome_arquivo: linhas[0].nome_arquivo,
+    mime: linhas[0].mime,
+  };
+}
+
+export interface PesquisaParaExpurgo {
+  id: number;
+  candidatura_id: number;
+  documento_id: number | null;
+}
+
+/**
+ * As pesquisas sociais que completaram a janela de retenção (G3:a): candidatura
+ * DESCARTADA (reprovada ou desistiu — os dois desfechos negativos) cuja data de
+ * descarte, no dia civil de São Paulo, é ANTERIOR OU IGUAL ao corte. A data de
+ * descarte é a da movimentação que gravou o status final (histórico oficial,
+ * append-only) — não o atualizado_em, que qualquer toque mexeria. FOR UPDATE:
+ * o expurgo apaga documento e anonimiza na mesma transação.
+ */
+export async function listarPesquisasParaExpurgo(
+  cliente: PoolClient,
+  corteIso: string
+): Promise<PesquisaParaExpurgo[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    candidatura_id: string;
+    documento_id: string | null;
+  }>(
+    `SELECT ps.id, ps.candidatura_id, ps.documento_id
+       FROM rh.pesquisa_social ps
+       JOIN rh.candidatura ca ON ca.id = ps.candidatura_id
+      WHERE ps.expurgado_em IS NULL
+        AND ca.status IN ('reprovada', 'desistiu')
+        AND (SELECT max(m.em AT TIME ZONE 'America/Sao_Paulo')::date
+               FROM rh.movimentacao_candidatura m
+              WHERE m.candidatura_id = ca.id
+                AND m.novo_status IN ('reprovada', 'desistiu')) <= $1::date
+      ORDER BY ps.id
+      FOR UPDATE OF ps`,
+    [corteIso]
+  );
+  return rows.map((linha) => ({
+    id: Number(linha.id),
+    candidatura_id: Number(linha.candidatura_id),
+    documento_id:
+      linha.documento_id === null ? null : Number(linha.documento_id),
+  }));
+}
+
+/** Anonimiza o desfecho: resultado e anexo zerados, expurgado_em carimbado. */
+export async function expurgarPesquisa(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.pesquisa_social
+        SET resultado = NULL, documento_id = NULL, expurgado_em = now()
+      WHERE id = $1`,
+    [id]
+  );
+}
+
+/**
+ * Apaga a LINHA do documento no GED — o conteúdo (BYTEA) vai junto. A interface
+ * de armazenamento do GED (guardar/lerConteudo) não tem remoção de propósito:
+ * apagar documento é excepcional, e aqui é obrigação legal do expurgo (G3:a).
+ * Só o expurgo chama; o vínculo em rh.pesquisa_social é zerado ANTES, na mesma
+ * transação (a FK barraria a ordem inversa).
+ */
+export async function apagarDocumentoDoExpurgo(
+  cliente: PoolClient,
+  documentoId: number
+): Promise<void> {
+  await cliente.query("DELETE FROM rh.documento WHERE id = $1", [documentoId]);
 }
 
 // ------------------------------------------------------------------ indicador

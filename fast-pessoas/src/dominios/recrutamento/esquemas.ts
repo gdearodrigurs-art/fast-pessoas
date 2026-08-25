@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { esquemaData } from "../../lib/data-civil";
 import { cpfValido, TIPOS_VINCULO } from "../colaboradores/esquemas";
+import {
+  MIMES_PERMITIDOS,
+  ROTULOS_MIME,
+  TAMANHO_MAXIMO_BYTES,
+} from "../documentos/esquemas";
 
 // ------------------------------------------------------------------ requisição de vaga
 
@@ -123,6 +128,64 @@ export const ROTULOS_RECOMENDACAO: Record<RecomendacaoParecer, string> = {
   reprovar: "Reprovar",
   duvida: "Em dúvida",
 };
+
+// ------------------------------------------------------------------ pesquisa social (#13c, G3:a)
+
+export const RESULTADOS_PESQUISA_SOCIAL = ["aprovado", "reprovado"] as const;
+
+export type ResultadoPesquisaSocial =
+  (typeof RESULTADOS_PESQUISA_SOCIAL)[number];
+
+export const ROTULOS_RESULTADO_PESQUISA_SOCIAL: Record<
+  ResultadoPesquisaSocial,
+  string
+> = {
+  aprovado: "Pesquisa social aprovada",
+  reprovado: "Pesquisa social reprovada",
+};
+
+/**
+ * Retenção do desfecho + anexo (G3:a, N respondido pelo dono = 6): expurga-se
+ * junto do descarte da candidatura recusada após 6 meses. Mesmo molde do
+ * MESES_CONSENTIMENTO_PADRAO acima — prazo de política de dados, não parâmetro
+ * operacional de tela.
+ */
+export const MESES_RETENCAO_PESQUISA_SOCIAL = 6;
+
+/**
+ * Data-limite do expurgo: candidatura descartada ATÉ esta data (inclusive) já
+ * completou a janela de retenção. Aritmética de calendário em UTC, o mesmo
+ * comportamento de somarMeses do consentimento (31/xx transborda para o mês
+ * seguinte — aceito, igual lá).
+ */
+export function dataCorteExpurgo(
+  hojeIso: string,
+  meses: number = MESES_RETENCAO_PESQUISA_SOCIAL
+): string {
+  const [ano, mes, dia] = hojeIso.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1 - meses, dia))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * A regra pura do GATE de avanço na etapa de pesquisa social: dela só se sai
+ * para a frente com desfecho APROVADO. Sem desfecho, a etapa ainda não
+ * aconteceu; REPROVADO não avança (decisão #13c) — o caminho é reprovar a
+ * candidatura com motivo do catálogo (Lei 9.029) ou registrar a desistência.
+ * Devolve a mensagem do bloqueio, ou null quando o avanço está livre.
+ */
+export function bloqueioDeAvancoPesquisaSocial(
+  etapaTipo: string,
+  resultado: ResultadoPesquisaSocial | null
+): string | null {
+  if (etapaTipo !== "pesquisa_social") return null;
+  if (resultado === "aprovado") return null;
+  if (resultado === "reprovado") {
+    return "Pesquisa social reprovada não avança — reprove a candidatura com motivo do catálogo (ou registre a desistência).";
+  }
+  return "Registre o desfecho da pesquisa social antes de avançar o candidato.";
+}
 
 // ------------------------------------------------------------------ oferta
 
@@ -314,6 +377,46 @@ export const esquemaParecer = z.object({
 });
 
 export type CriacaoParecer = z.infer<typeof esquemaParecer>;
+
+/**
+ * Desfecho da pesquisa social + anexo OPCIONAL, no caminho JSON base64 do GED
+ * (molde esquemaEnvioBase64 de api/documentos POST). O anexo vai para
+ * rh.documento (categoria "outro", sensível) pelo armazenamento do GED; o
+ * vínculo fica em rh.pesquisa_social.
+ */
+export const esquemaPesquisaSocial = z.object({
+  resultado: z.enum(RESULTADOS_PESQUISA_SOCIAL),
+  anexo: z
+    .object({
+      nome_arquivo: z
+        .string()
+        .trim()
+        .min(1, "Informe o nome do arquivo")
+        .max(255),
+      mime: z
+        .string()
+        .trim()
+        .max(100)
+        .refine(
+          (valor) => (MIMES_PERMITIDOS as readonly string[]).includes(valor),
+          `Tipo de arquivo não aceito. Aceitos: ${MIMES_PERMITIDOS.map(
+            (mime) => ROTULOS_MIME[mime]
+          ).join(", ")}.`
+        ),
+      conteudo_base64: z
+        .string()
+        .min(1, "Conteúdo do arquivo ausente")
+        // 10 MB em base64 ocupam ~13,4 MB de texto — rejeita antes de decodificar
+        .max(
+          Math.ceil((TAMANHO_MAXIMO_BYTES * 4) / 3) + 4,
+          "Arquivo excede o limite de 10 MB"
+        )
+        .regex(/^[A-Za-z0-9+/]+={0,2}$/, "Conteúdo base64 inválido"),
+    })
+    .optional(),
+});
+
+export type RegistroPesquisaSocial = z.infer<typeof esquemaPesquisaSocial>;
 
 export const esquemaCriacaoOferta = z.object({
   valor: z

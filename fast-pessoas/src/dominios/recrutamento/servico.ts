@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
 import { hash } from "bcryptjs";
 import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { armazenamentoBytea } from "../documentos/armazenamento";
+import { formatarTamanho, TAMANHO_MAXIMO_BYTES } from "../documentos/esquemas";
 import {
   calcularPrazosExperiencia,
   ROTULOS_ESTADO_PROCESSO,
@@ -25,6 +28,7 @@ import { PayloadSessao } from "../identidade/esquemas";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
+  bloqueioDeAvancoPesquisaSocial,
   CriacaoCandidato,
   CriacaoCandidatura,
   CriacaoModelo,
@@ -32,27 +36,32 @@ import {
   CriacaoParecer,
   CriacaoRequisicao,
   CriacaoVaga,
+  dataCorteExpurgo,
   DecisaoRequisicao,
   IniciarAdmissao,
   MESES_CONSENTIMENTO_PADRAO,
   Movimentacao,
+  RegistroPesquisaSocial,
   RespostaOferta,
   TrocaModeloVaga,
   validarSequenciaDeEtapas,
   ROTULOS_MOTIVO_MOVIMENTACAO,
   ROTULOS_MOTIVO_REQUISICAO,
   ROTULOS_RECOMENDACAO,
+  ROTULOS_RESULTADO_PESQUISA_SOCIAL,
   ROTULOS_STATUS_CANDIDATURA,
   ROTULOS_STATUS_OFERTA,
   ROTULOS_STATUS_REQUISICAO,
   ROTULOS_STATUS_VAGA,
 } from "./esquemas";
 import {
+  apagarDocumentoDoExpurgo,
   apurarTempoPorEtapa,
   apurarVagasNoPrazo,
   atualizarCandidatura,
   atualizarModeloDaVaga,
   atualizarStatusVaga,
+  buscarAnexoPesquisaSocial,
   buscarCandidaturaBasica,
   buscarCandidaturaParaMutacao,
   buscarCandidatoBasico,
@@ -65,6 +74,7 @@ import {
   buscarNomeModelo,
   buscarFaixaVigente,
   buscarOfertaParaMutacao,
+  buscarPesquisaSocial,
   buscarRequisicaoParaMutacao,
   buscarVaga,
   buscarVagaParaMutacao,
@@ -83,6 +93,7 @@ import {
   inserirMovimentacao,
   inserirOferta,
   inserirParecer,
+  inserirPesquisaSocial,
   inserirRequisicao,
   inserirVaga,
   listarCandidatos,
@@ -94,8 +105,10 @@ import {
   listarModelos,
   listarModelosEncerrados,
   listarPareceres,
+  listarPesquisasParaExpurgo,
   listarRequisicoes,
   listarVagas,
+  expurgarPesquisa,
   ModeloResumo,
   ParecerSelecao,
   responderOferta as gravarRespostaOferta,
@@ -742,12 +755,30 @@ export async function obterKanban(
     // Valor da oferta é salário: gestor vê a faixa, nunca o valor final.
     oferta_valor: veSensivel ? candidatura.oferta_valor : null,
     oferta_dentro_banda: veSensivel ? candidatura.oferta_dentro_banda : null,
+    // Pesquisa social (G3:a): desfecho e existência do anexo SÓ para rs.gerir
+    // — mais restrito que o valor da oferta (rs.ver não alcança).
+    pesquisa_social_resultado: pode.gerir
+      ? candidatura.pesquisa_social_resultado
+      : null,
+    pesquisa_social_tem_anexo: pode.gerir
+      ? candidatura.pesquisa_social_tem_anexo
+      : null,
   }));
   if (veSensivel && saida.some((c) => c.oferta_valor !== null)) {
     await registrarLeituraSensivel({
       usuarioId: sessao.usuario_id,
       chavePermissao: pode.gerir ? "rs.gerir" : "rs.ver",
       recurso: "recrutamento.oferta_valor",
+      registroId: String(vagaId),
+    });
+  }
+  // Desfecho de pesquisa social exibido = leitura sensível de terceiro (eixo
+  // 8), trilhada com a chave que de fato autorizou (G3:a — rs.gerir).
+  if (pode.gerir && saida.some((c) => c.pesquisa_social_resultado !== null)) {
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "rs.gerir",
+      recurso: "recrutamento.pesquisa_social",
       registroId: String(vagaId),
     });
   }
@@ -918,6 +949,19 @@ export async function movimentarCandidatura(
     }
 
     if (dados.acao === "avancar") {
+      // GATE da pesquisa social (#13c): da etapa só se avança com desfecho
+      // APROVADO — sem desfecho a etapa não aconteceu; reprovado não avança
+      // (o caminho é reprovar com motivo do catálogo ou registrar desistência).
+      if (candidatura.etapa_tipo === "pesquisa_social") {
+        const pesquisa = await buscarPesquisaSocial(cliente, candidaturaId);
+        const bloqueio = bloqueioDeAvancoPesquisaSocial(
+          candidatura.etapa_tipo,
+          pesquisa?.resultado ?? null
+        );
+        if (bloqueio) {
+          throw new ErroHttp(409, bloqueio);
+        }
+      }
       // Anda pelas etapas DO MODELO congelado na vaga (0077), não pela lista
       // global viva: a próxima é a seguinte à etapa atual na ordem do modelo.
       const etapas = await buscarEtapasDoModelo(
@@ -1092,6 +1136,306 @@ export async function registrarParecer(
         "Observações": { de: null, para: truncar(dados.observacoes, 500) },
       },
     });
+  });
+}
+
+// ------------------------------------------------------------------ pesquisa social (#13c, G3:a)
+
+const TABELA_PESQUISA_SOCIAL = "rh.pesquisa_social";
+const TABELA_DOCUMENTO = "rh.documento";
+
+/**
+ * Costuras da pesquisa social com o banco/GED — o que os testes trocam por
+ * dublês (molde DepsPosse, pendência 16.2). Produção nunca passa o parâmetro:
+ * as rotas chamam como sempre e caem em DEPS_PESQUISA_REAIS.
+ */
+export interface DepsPesquisaSocial {
+  buscarCandidaturaParaMutacao: typeof buscarCandidaturaParaMutacao;
+  buscarPesquisaSocial: typeof buscarPesquisaSocial;
+  inserirPesquisaSocial: typeof inserirPesquisaSocial;
+  /** Escrita do anexo no GED — a MESMA interface do domínio documentos. */
+  guardarAnexo: typeof armazenamentoBytea.guardar;
+  buscarAnexoPesquisaSocial: typeof buscarAnexoPesquisaSocial;
+  lerConteudoAnexo: typeof armazenamentoBytea.lerConteudo;
+  listarPesquisasParaExpurgo: typeof listarPesquisasParaExpurgo;
+  expurgarPesquisa: typeof expurgarPesquisa;
+  apagarDocumentoDoExpurgo: typeof apagarDocumentoDoExpurgo;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+  registrarAlteracao: typeof registrarAlteracao;
+  comTransacao: typeof comTransacao;
+}
+
+const DEPS_PESQUISA_REAIS: DepsPesquisaSocial = {
+  buscarCandidaturaParaMutacao,
+  buscarPesquisaSocial,
+  inserirPesquisaSocial,
+  guardarAnexo: armazenamentoBytea.guardar,
+  buscarAnexoPesquisaSocial,
+  lerConteudoAnexo: armazenamentoBytea.lerConteudo,
+  listarPesquisasParaExpurgo,
+  expurgarPesquisa,
+  apagarDocumentoDoExpurgo,
+  registrarLeituraSensivel,
+  registrarAlteracao,
+  comTransacao,
+};
+
+/**
+ * Registra o DESFECHO da pesquisa social (aprovado/reprovado) da candidatura
+ * QUE ESTÁ na etapa de pesquisa social, com anexo opcional no GED. O anexo vai
+ * para rh.documento como categoria "outro" e SENSÍVEL (o acervo geral do GED
+ * não o mostra a todo logado) — quem o alcança por aqui é rs.gerir, com trilha
+ * (G3:a). Desfecho é único por candidatura: correção não sobrescreve história.
+ */
+export async function registrarPesquisaSocial(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: RegistroPesquisaSocial,
+  deps: DepsPesquisaSocial = DEPS_PESQUISA_REAIS
+): Promise<void> {
+  // O anexo decodifica ANTES da transação: payload ruim nem abre transação.
+  let anexo: { nome: string; mime: string; conteudo: Buffer } | null = null;
+  if (dados.anexo) {
+    const conteudo = Buffer.from(dados.anexo.conteudo_base64, "base64");
+    if (conteudo.length === 0) {
+      throw new ErroHttpCampo(400, "O arquivo está vazio.", "anexo");
+    }
+    if (conteudo.length > TAMANHO_MAXIMO_BYTES) {
+      throw new ErroHttpCampo(
+        413,
+        "Arquivo excede o limite de 10 MB.",
+        "anexo"
+      );
+    }
+    anexo = {
+      nome: dados.anexo.nome_arquivo,
+      mime: dados.anexo.mime,
+      conteudo,
+    };
+  }
+  try {
+    await deps.comTransacao(sessao.usuario_id, async (cliente) => {
+      const candidatura = await deps.buscarCandidaturaParaMutacao(
+        cliente,
+        candidaturaId
+      );
+      if (!candidatura) {
+        throw new ErroHttp(404, "Candidatura não encontrada.");
+      }
+      if (candidatura.status !== "ativa") {
+        throw new ErroHttp(
+          409,
+          "Candidatura encerrada não recebe pesquisa social."
+        );
+      }
+      if (candidatura.vaga_status !== "aberta") {
+        throw new ErroHttp(
+          409,
+          `Vaga ${ROTULOS_STATUS_VAGA[candidatura.vaga_status].toLowerCase()} não registra pesquisa social.`
+        );
+      }
+      if (candidatura.etapa_tipo !== "pesquisa_social") {
+        throw new ErroHttp(
+          409,
+          "O desfecho da pesquisa social só se registra com o candidato NA etapa de pesquisa social."
+        );
+      }
+      if (await deps.buscarPesquisaSocial(cliente, candidaturaId)) {
+        throw new ErroHttp(
+          409,
+          "Esta candidatura já tem desfecho de pesquisa social — o registro é único."
+        );
+      }
+
+      let documentoId: number | null = null;
+      if (anexo) {
+        // Hash no servidor, como no GED — o cliente nunca informa o hash.
+        const hashSha256 = createHash("sha256")
+          .update(anexo.conteudo)
+          .digest("hex");
+        const guardado = await deps.guardarAnexo(cliente, {
+          colaborador_id: null,
+          categoria: "outro", // decisão do dono: sem categoria nova no GED
+          titulo: `Pesquisa social — ${candidatura.candidato_nome}`,
+          nome_arquivo: anexo.nome,
+          mime: anexo.mime,
+          tamanho_bytes: anexo.conteudo.length,
+          conteudo: anexo.conteudo,
+          sensivel: true,
+          hash_sha256: hashSha256,
+          enviado_por_usuario: sessao.usuario_id,
+          exige_ciencia: false,
+          bloqueante: false,
+          prazo_ciencia_dias: null,
+          substitui_documento_id: null,
+        });
+        documentoId = guardado.id;
+        await deps.registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "criacao",
+          tabela: TABELA_DOCUMENTO,
+          registroId: String(documentoId),
+          diff: {
+            "Título": {
+              de: null,
+              para: `Pesquisa social — ${candidatura.candidato_nome}`,
+            },
+            Categoria: { de: null, para: "Outro" },
+            Arquivo: { de: null, para: anexo.nome },
+            Tamanho: { de: null, para: formatarTamanho(anexo.conteudo.length) },
+            "Sensível": { de: null, para: "Sim" },
+            "SHA-256": { de: null, para: hashSha256 },
+            Origem: {
+              de: null,
+              para: `Pesquisa social — candidatura #${candidaturaId}`,
+            },
+          },
+        });
+      }
+
+      const id = await deps.inserirPesquisaSocial(cliente, {
+        candidatura_id: candidaturaId,
+        resultado: dados.resultado,
+        documento_id: documentoId,
+        registrado_por: sessao.usuario_id,
+      });
+      await deps.registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_PESQUISA_SOCIAL,
+        registroId: String(id),
+        diff: {
+          Candidato: { de: null, para: candidatura.candidato_nome },
+          Vaga: { de: null, para: candidatura.vaga_titulo },
+          Resultado: {
+            de: null,
+            para: ROTULOS_RESULTADO_PESQUISA_SOCIAL[dados.resultado],
+          },
+          Anexo: { de: null, para: anexo ? anexo.nome : "sem anexo" },
+        },
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "pesquisa_social_candidatura_id_key") {
+      throw new ErroHttp(
+        409,
+        "Esta candidatura já tem desfecho de pesquisa social — o registro é único."
+      );
+    }
+    throw erro;
+  }
+}
+
+export interface AnexoPesquisaSocialBaixado {
+  nome_arquivo: string;
+  mime: string;
+  conteudo: Buffer;
+}
+
+/**
+ * Download do anexo — SÓ rs.gerir (G3:a), sempre com trilha de leitura
+ * sensível ANTES do conteúdo sair. Sem anexo (ou já expurgado) = 404, ausência
+ * e não máscara.
+ */
+export async function baixarAnexoPesquisaSocial(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  candidaturaId: number,
+  deps: DepsPesquisaSocial = DEPS_PESQUISA_REAIS
+): Promise<AnexoPesquisaSocialBaixado> {
+  if (!pode.gerir) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  const anexo = await deps.buscarAnexoPesquisaSocial(candidaturaId);
+  if (!anexo) {
+    throw new ErroHttp(404, "Anexo não encontrado.");
+  }
+  await deps.registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "rs.gerir",
+    recurso: "recrutamento.pesquisa_social_anexo",
+    registroId: String(candidaturaId),
+  });
+  const conteudo = await deps.lerConteudoAnexo(anexo.documento_id);
+  if (!conteudo) {
+    throw new ErroHttp(404, "Anexo não encontrado.");
+  }
+  return {
+    nome_arquivo: anexo.nome_arquivo,
+    mime: anexo.mime,
+    conteudo,
+  };
+}
+
+export interface ContagemExpurgo {
+  expurgadas: number;
+  anexos_apagados: number;
+}
+
+/**
+ * EXPURGO da retenção (G3:a, 6 meses): para cada candidatura DESCARTADA
+ * (reprovada/desistiu) há mais de 6 meses, apaga o anexo do GED (a linha de
+ * rh.documento leva o BYTEA junto) e ANONIMIZA o desfecho (resultado -> NULL,
+ * expurgado_em carimbado) — tudo numa transação, auditado SEM repetir o
+ * desfecho (repeti-lo no audit recriaria o dado que se está apagando; o audit
+ * nunca é tocado, molde 0012). Rota administrativa manual — o projeto não tem
+ * agendador; o cron é follow-up registrado.
+ */
+export async function expurgarPesquisasSociais(
+  sessao: PayloadSessao,
+  hoje: string,
+  deps: DepsPesquisaSocial = DEPS_PESQUISA_REAIS
+): Promise<ContagemExpurgo> {
+  const corte = dataCorteExpurgo(hoje);
+  return deps.comTransacao(sessao.usuario_id, async (cliente) => {
+    const linhas = await deps.listarPesquisasParaExpurgo(cliente, corte);
+    let anexosApagados = 0;
+    for (const linha of linhas) {
+      // Ordem obrigatória: primeiro o vínculo zera (expurgo), depois a linha
+      // do documento sai — a FK barraria a ordem inversa.
+      await deps.expurgarPesquisa(cliente, linha.id);
+      if (linha.documento_id !== null) {
+        await deps.apagarDocumentoDoExpurgo(cliente, linha.documento_id);
+        anexosApagados += 1;
+      }
+      await deps.registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "expurgo",
+        tabela: TABELA_PESQUISA_SOCIAL,
+        registroId: String(linha.id),
+        diff: {
+          "Pesquisa social": {
+            de: "registrada",
+            para: "expurgada (retenção de 6 meses após o descarte)",
+          },
+          Anexo: {
+            de: null,
+            para:
+              linha.documento_id !== null
+                ? "apagado do GED (conteúdo incluído)"
+                : "sem anexo",
+          },
+        },
+      });
+    }
+    // O ATO da rodada fica sempre na trilha, mesmo com zero expurgos — quem
+    // rodou a retenção, quando, e com que resultado.
+    await deps.registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "expurgo",
+      tabela: TABELA_PESQUISA_SOCIAL,
+      registroId: `rodada:${hoje}`,
+      diff: {
+        Corte: { de: null, para: `descartes até ${formatarData(corte)}` },
+        "Pesquisas expurgadas": { de: null, para: String(linhas.length) },
+        "Anexos apagados": { de: null, para: String(anexosApagados) },
+      },
+    });
+    return { expurgadas: linhas.length, anexos_apagados: anexosApagados };
   });
 }
 

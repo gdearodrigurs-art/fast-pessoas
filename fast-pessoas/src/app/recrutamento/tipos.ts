@@ -5,6 +5,7 @@ import {
   MotivoRequisicao,
   OrigemCandidato,
   RecomendacaoParecer,
+  ResultadoPesquisaSocial,
   StatusCandidatura,
   StatusOferta,
   StatusRequisicao,
@@ -109,6 +110,9 @@ export interface CandidaturaCartao {
   oferta_status: StatusOferta | null;
   oferta_valor: number | null;
   oferta_dentro_banda: boolean | null;
+  /** Pesquisa social (G3:a) — presentes SÓ para rs.gerir; o serviço recorta. */
+  pesquisa_social_resultado: ResultadoPesquisaSocial | null;
+  pesquisa_social_tem_anexo: boolean | null;
   criado_em: string;
 }
 
