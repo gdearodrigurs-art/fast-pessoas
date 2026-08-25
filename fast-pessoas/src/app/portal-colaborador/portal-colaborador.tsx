@@ -31,6 +31,24 @@ interface BlocoPonto {
   espelho_href?: string;
 }
 
+/**
+ * Contrato de GET /api/posse/minhas (domínio de posse; a porta é
+ * documento.ver, a ciência é do titular). Espelho de PosseLinha sem os campos
+ * de identificação do colaborador — aqui tudo é do próprio.
+ */
+interface ItemMinhaPosse {
+  id: number;
+  categoria_nome: string;
+  descricao: string;
+  quantidade: number;
+  numero_serie: string | null;
+  data_entrega: string;
+  termo_documento_id: number | null;
+  termo_titulo: string | null;
+  ciencia_registrada: boolean;
+  devolvido_em: string | null;
+}
+
 interface Visao {
   pode: {
     ferias: boolean;
@@ -735,6 +753,216 @@ function CartaoDocumentos({ bloco }: { bloco: BlocoDocumentos }) {
   );
 }
 
+function LinhaMinhaPosse({
+  item,
+  emCurso,
+  aoDarCiencia,
+}: {
+  item: ItemMinhaPosse;
+  emCurso: boolean;
+  aoDarCiencia: (itemId: number) => void;
+}) {
+  const cienciaPendente =
+    item.termo_documento_id !== null && !item.ciencia_registrada;
+  return (
+    <li
+      className={
+        cienciaPendente
+          ? `${estilos.itemLista} ${estilos.itemListaAcao}`
+          : estilos.itemLista
+      }
+    >
+      <p>{item.descricao}</p>
+      <span className={estilos.metaItem}>
+        {item.categoria_nome} · qtd {item.quantidade}
+        {item.numero_serie ? ` · nº ${item.numero_serie}` : ""} · entregue em{" "}
+        {formatarData(item.data_entrega)} ·{" "}
+        {item.devolvido_em
+          ? `devolvido em ${formatarInstante(item.devolvido_em)}`
+          : "em uso"}
+      </span>
+      <span className={estilos.metaItem}>
+        Termo:{" "}
+        {item.termo_documento_id !== null ? (
+          <a
+            className={estilos.ligacao}
+            href={`/api/documentos/${item.termo_documento_id}/download`}
+          >
+            {item.termo_titulo ?? `#${item.termo_documento_id}`}
+          </a>
+        ) : (
+          "sem termo no GED"
+        )}
+        {" · "}
+        {item.ciencia_registrada
+          ? "ciência registrada"
+          : item.termo_documento_id !== null
+            ? "ciência pendente"
+            : "sem termo, sem ciência"}
+      </span>
+      {cienciaPendente && (
+        <span>
+          <button
+            className={estilos.ligacao}
+            type="button"
+            disabled={emCurso}
+            onClick={() => aoDarCiencia(item.id)}
+            title="Aceite eletrônico: a ciência é dada sobre o termo no GED (hash da versão no momento)"
+          >
+            {emCurso ? "Registrando…" : "Dar ciência"}
+          </button>
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Minha posse de patrimônio — a superfície do TITULAR (pendência 16.1): o
+ * botão "Dar ciência" da ficha só alcança quem tem rh.posse.ver, que o
+ * funcionário típico não tem. Busca o próprio dado (/api/posse/minhas, porta
+ * documento.ver) com fetch tolerante, molde BlocoPosseFicha: 403 => o cartão
+ * some (ausência legítima da chave); lista vazia => some (nada em posse);
+ * 5xx/timeout/rede => erro visível + "tentar novamente" — esconder ali seria
+ * falso-negativo. Falha aqui NÃO derruba o portal.
+ */
+function CartaoMinhaPosse() {
+  const [itens, setItens] = useState<ItemMinhaPosse[] | null>(null);
+  const [visivel, setVisivel] = useState(true);
+  const [erroCarregar, setErroCarregar] = useState<string | null>(null);
+  const [cienciaEmCurso, setCienciaEmCurso] = useState<number | null>(null);
+  const [erroAcao, setErroAcao] = useState<string | null>(null);
+
+  const recarregar = useCallback(async () => {
+    try {
+      const resposta = await fetch("/api/posse/minhas", { cache: "no-store" });
+      if (resposta.status === 403) {
+        // Só o 403 esconde: ausência legítima da chave documento.ver.
+        setVisivel(false);
+        return;
+      }
+      if (!resposta.ok) {
+        setErroCarregar("Não foi possível carregar. Tente novamente.");
+        return;
+      }
+      const dados = (await resposta.json().catch(() => ({}))) as {
+        itens?: ItemMinhaPosse[];
+      };
+      setErroCarregar(null);
+      setItens(dados.itens ?? []);
+    } catch {
+      setErroCarregar("Falha de conexão. Tente novamente.");
+    }
+  }, []);
+
+  useEffect(() => {
+    let ativo = true;
+    void (async () => {
+      if (!ativo) return;
+      await recarregar();
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [recarregar]);
+
+  async function darCiencia(itemId: number) {
+    setErroAcao(null);
+    setCienciaEmCurso(itemId);
+    try {
+      const resposta = await fetch(`/api/posse/${itemId}/ciencia`, {
+        method: "POST",
+      });
+      if (!resposta.ok) {
+        const dados = (await resposta.json().catch(() => ({}))) as {
+          erro?: string;
+        };
+        setErroAcao(dados.erro ?? "Não foi possível registrar a ciência.");
+        if (resposta.status === 409) {
+          // Duplo clique ou corrida: já registrada — recarrega para refletir.
+          await recarregar();
+        }
+        return;
+      }
+      await recarregar();
+    } catch {
+      setErroAcao("Falha de conexão. Tente novamente.");
+    } finally {
+      setCienciaEmCurso(null);
+    }
+  }
+
+  if (!visivel) return null;
+
+  // Carregando sem erro: o cartão ainda não tem o que dizer — não ocupa lugar.
+  if (itens === null && erroCarregar === null) return null;
+
+  if (itens === null) {
+    return (
+      <section className={estilos.cartao}>
+        <h2>Minha posse de patrimônio</h2>
+        <p className={estilos.erro}>{erroCarregar}</p>
+        <button
+          className={estilos.ligacao}
+          type="button"
+          onClick={() => {
+            setErroCarregar(null);
+            void recarregar();
+          }}
+        >
+          Tentar novamente
+        </button>
+      </section>
+    );
+  }
+
+  // Sem item nenhum (nem devolvido): cartão fora — molde "Minhas entregas de
+  // EPI" do painel de SST; ausência de dado não é erro.
+  if (itens.length === 0) return null;
+
+  const aguardandoCiencia = itens.filter(
+    (item) => item.termo_documento_id !== null && !item.ciencia_registrada
+  );
+  const emUso = itens.filter((item) => item.devolvido_em === null);
+
+  return (
+    <section className={estilos.cartao}>
+      <h2>Minha posse de patrimônio</h2>
+      <div className={estilos.cartoesResumo}>
+        <div
+          className={
+            aguardandoCiencia.length > 0
+              ? `${estilos.cartaoResumo} ${estilos.cartaoResumoAcao}`
+              : estilos.cartaoResumo
+          }
+        >
+          <strong>{aguardandoCiencia.length}</strong>
+          <span>Aguardam sua ciência</span>
+        </div>
+        <div className={estilos.cartaoResumo}>
+          <strong>{emUso.length}</strong>
+          <span>Em posse com você</span>
+        </div>
+      </div>
+      <ul className={estilos.lista}>
+        {itens.map((item) => (
+          <LinhaMinhaPosse
+            key={item.id}
+            item={item}
+            emCurso={cienciaEmCurso === item.id}
+            aoDarCiencia={(id) => void darCiencia(id)}
+          />
+        ))}
+      </ul>
+      {erroAcao && <p className={estilos.erro}>{erroAcao}</p>}
+      <p className={estilos.notaRodape}>
+        A ciência é o aceite eletrônico do termo de entrega no GED (hash da
+        versão no momento). A devolução é registrada pelo DP/RH.
+      </p>
+    </section>
+  );
+}
+
 function CartaoAvaliacoes({ bloco }: { bloco: BlocoAvaliacoes }) {
   return (
     <section className={estilos.cartao}>
@@ -1017,6 +1245,9 @@ export function PortalColaborador() {
               {visao.documentos !== null && (
                 <CartaoDocumentos bloco={visao.documentos} />
               )}
+              {/* Cartão autônomo: busca o próprio dado e se esconde sozinho
+                  (403/sem itens). Falha nele não derruba o portal. */}
+              <CartaoMinhaPosse />
               <CartaoAvaliacoes bloco={visao.avaliacoes} />
               {visao.checkin !== null && (
                 <CartaoCheckin bloco={visao.checkin} />
