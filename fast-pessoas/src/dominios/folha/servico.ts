@@ -22,7 +22,17 @@ import {
 } from "../estrutura/esquemas";
 import { PayloadSessao } from "../identidade/esquemas";
 import { validarTotpDoUsuario } from "../identidade/servico";
-import { calcularFolha, EntradaMotor, ErroMotor, VariavelMotor } from "./calculo";
+import {
+  calcularFolha,
+  EntradaMotor,
+  ErroMotor,
+  SuspensaoMotor,
+  VariavelMotor,
+} from "./calculo";
+import {
+  apurarSuspensaoNaCompetencia,
+  inicioBuscaSuspensao,
+} from "./suspensao";
 import { calcularFerias, ResultadoMotorFerias } from "./calculo-ferias";
 import {
   calcularDecimo,
@@ -90,6 +100,7 @@ import {
   listarCatalogoContaContabil,
   listarEspelhoNaoCasado,
   listarLinhasParaExportarOlac,
+  listarSuspensoesParaCalculo,
   LoteOlacResumo,
   mapaColaboradorPorMatricula,
   mapaEmpresaPorCnpj,
@@ -1068,12 +1079,46 @@ export async function calcularCompetencia(
           .join(", ")} — cadastre em Parâmetros antes de calcular.`
       );
     }
-    const [rubricas, colaboradores, variaveis, impedidos] = await Promise.all([
-      listarRubricasVigentes(dataRef, cliente),
-      listarColaboradoresParaCalculo(cliente, dataRef),
-      listarVariaveis(competenciaId, cliente),
-      listarImpedidos(dataRef, cliente),
-    ]);
+    const [rubricas, colaboradores, variaveis, impedidos, suspensoes] =
+      await Promise.all([
+        listarRubricasVigentes(dataRef, cliente),
+        listarColaboradoresParaCalculo(cliente, dataRef),
+        listarVariaveis(competenciaId, cliente),
+        listarImpedidos(dataRef, cliente),
+        // Suspensão → folha (D2:a, 0100): a janela intersectando a competência
+        // ESTENDIDA 6 dias para trás — o DSR do primeiro domingo pode cair por
+        // suspensão que acabou no mês anterior (ver suspensao.ts).
+        listarSuspensoesParaCalculo(
+          cliente,
+          inicioBuscaSuspensao(competencia.ano, competencia.mes),
+          dataRef
+        ),
+      ]);
+
+    // Recorte de cada janela pelo mês (puro): dias corridos DESTA competência
+    // + domingos de DSR perdidos. Medida sem efeito aqui (dias 0 e nenhum
+    // domingo) fica de fora — não polui a memória do item.
+    const suspensoesPorColaborador = new Map<number, SuspensaoMotor[]>();
+    let suspensoesAplicadas = 0;
+    for (const medida of suspensoes) {
+      const recorte = apurarSuspensaoNaCompetencia(
+        competencia.ano,
+        competencia.mes,
+        medida.inicio,
+        medida.fim
+      );
+      if (recorte.dias === 0 && recorte.domingos_dsr.length === 0) continue;
+      const lista = suspensoesPorColaborador.get(medida.colaborador_id) ?? [];
+      lista.push({
+        medida_id: medida.medida_id,
+        inicio: medida.inicio,
+        fim: medida.fim,
+        dias_na_competencia: recorte.dias,
+        domingos_dsr: recorte.domingos_dsr,
+      });
+      suspensoesPorColaborador.set(medida.colaborador_id, lista);
+      suspensoesAplicadas += 1;
+    }
 
     const variaveisPorColaborador = new Map<number, VariavelMotor[]>();
     let variaveisIgnoradas = 0;
@@ -1104,6 +1149,8 @@ export async function calcularCompetencia(
         dependentes_irrf: colaborador.dependentes_irrf,
         carga_semanal_minutos: colaborador.carga_semanal_minutos,
         variaveis: variaveisPorColaborador.get(colaborador.colaborador_id) ?? [],
+        suspensoes:
+          suspensoesPorColaborador.get(colaborador.colaborador_id) ?? [],
         rubricas,
         tabela_inss: tabelas.inss,
         tabela_irrf: tabelas.irrf,
@@ -1159,6 +1206,12 @@ export async function calcularCompetencia(
         "Folhas calculadas": { de: null, para: String(colaboradores.length) },
         Impedidos: { de: null, para: String(impedidos.length) },
         "Variáveis ignoradas": { de: null, para: String(variaveisIgnoradas) },
+        // Eixo 8: só a CONTAGEM — a medida em si (id) fica na memória do item
+        // 1203, atrás do mesmo gate (folha.ver, com trilha) dos outros itens.
+        "Suspensões disciplinares descontadas": {
+          de: null,
+          para: String(suspensoesAplicadas),
+        },
       },
     });
     return {

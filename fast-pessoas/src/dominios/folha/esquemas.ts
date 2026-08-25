@@ -149,6 +149,9 @@ export const CODIGO_HE_100 = "1102";
 export const CODIGO_ADICIONAL_NOTURNO = "1103";
 export const CODIGO_FALTAS = "1201";
 export const CODIGO_DSR_FALTAS = "1202";
+// Desconto de suspensão disciplinar (D2:a, migração 0100) — automática: o
+// motor a emite sozinho lendo rh.medida_disciplinar; lançar variável é erro.
+export const CODIGO_DESCONTO_SUSPENSAO = "1203";
 export const CODIGO_INSS = "2001";
 export const CODIGO_IRRF = "2002";
 export const CODIGO_DESCONTO_BENEFICIO = "2101";
@@ -188,6 +191,7 @@ export const CODIGO_MULTA_FGTS = "1703";
 export const CODIGOS_AUTOMATICOS: readonly string[] = [
   CODIGO_SALARIO_BASE,
   CODIGO_DSR_FALTAS,
+  CODIGO_DESCONTO_SUSPENSAO,
   CODIGO_INSS,
   CODIGO_IRRF,
   CODIGO_FGTS,

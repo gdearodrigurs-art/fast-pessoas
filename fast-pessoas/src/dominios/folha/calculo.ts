@@ -31,6 +31,7 @@
 // • FGTS = alíquota × base, sem teto — informativo, fora do líquido.
 
 import {
+  CODIGO_DESCONTO_SUSPENSAO,
   CODIGO_DSR_FALTAS,
   CODIGO_FALTAS,
   CODIGO_FGTS,
@@ -100,6 +101,24 @@ export interface VariavelMotor {
   origem: OrigemVariavel;
 }
 
+/**
+ * Uma suspensão disciplinar JÁ RECORTADA pela competência (D2:a, 0100). O
+ * recorte de datas é do serviço (suspensao.ts, puro): o motor não conhece
+ * calendário — recebe os dias que caem NESTE mês e os domingos de DSR
+ * perdidos, e transforma em dinheiro com o divisor dos parâmetros.
+ */
+export interface SuspensaoMotor {
+  /** rh.medida_disciplinar.id — vai à memória para a conta ser auditável. */
+  medida_id: number;
+  /** Janela completa da medida (informativo na memória). */
+  inicio: string;
+  fim: string | null;
+  /** Dias corridos DENTRO da competência (inteiro ≥ 0). */
+  dias_na_competencia: number;
+  /** Domingos (ISO) desta competência cujo DSR a suspensão derruba. */
+  domingos_dsr: string[];
+}
+
 export interface EntradaMotor {
   salario_base_centavos: number;
   dependentes_irrf: number;
@@ -110,6 +129,11 @@ export interface EntradaMotor {
    */
   carga_semanal_minutos: number | null;
   variaveis: VariavelMotor[];
+  /**
+   * Suspensões disciplinares com efeito NESTA competência (D2:a) — ausente ou
+   * vazio = sem desconto. Quem recorta a janela pelo mês é o serviço.
+   */
+  suspensoes?: SuspensaoMotor[];
   rubricas: RubricaMotor[];
   tabela_inss: TabelaInssMotor;
   tabela_irrf: TabelaIrrfMotor;
@@ -413,6 +437,50 @@ export function calcularFolha(entrada: EntradaMotor): ResultadoMotor {
       regra_f1:
         "simplificação fixada na 0013; apuração exata semana a semana (Lei 605/49) é evolução F2",
       dias: diasFalta,
+      ...origemDivisorDias,
+    });
+  }
+
+  // 3b) Suspensão disciplinar (D2:a, 0100) ---------------------------------
+  // Dias corridos da janela no mês + 1 valor-dia de DSR por semana civil com
+  // suspensão — NA MESMA rubrica (1203), com a memória abrindo as duas
+  // parcelas. NÃO reusa a mecânica do DSR de faltas (1202): aquela é a
+  // simplificação F1 "1 DSR por dia", presa ao lançamento de faltas, e
+  // superdescontaria uma suspensão de 5 dias na mesma semana em 5 DSRs.
+  const suspensoes = entrada.suspensoes ?? [];
+  let diasSuspensao = 0;
+  let semanasDsrSuspensao = 0;
+  for (const suspensao of suspensoes) {
+    if (
+      !Number.isInteger(suspensao.dias_na_competencia) ||
+      suspensao.dias_na_competencia < 0
+    ) {
+      throw new ErroMotor(
+        `Suspensão ${suspensao.medida_id} com dias inválidos na competência (inteiro ≥ 0)`
+      );
+    }
+    diasSuspensao += suspensao.dias_na_competencia;
+    semanasDsrSuspensao += suspensao.domingos_dsr.length;
+  }
+  if (diasSuspensao + semanasDsrSuspensao > 0) {
+    const rubricaSuspensao = rubricaObrigatoria(CODIGO_DESCONTO_SUSPENSAO);
+    const diasDescontados = diasSuspensao + semanasDsrSuspensao;
+    // Dias aqui são INTEIROS (corridos + domingos): a razão inteira da falta
+    // (× 100 ÷ 100) seria identidade — a divisão única já é exata até o limite.
+    const valor = (salario * diasDescontados) / divisorDias;
+    incluir(rubricaSuspensao, valor, diasDescontados, salario, {
+      formula: `(dias corridos + 1 dia de DSR por semana civil com suspensão) × (salário ÷ ${divisorDias})`,
+      dias_corridos: diasSuspensao,
+      semanas_com_dsr_perdido: semanasDsrSuspensao,
+      valor_dia: reaisIntermediario(salario / divisorDias),
+      medidas: suspensoes.map((suspensao) => ({
+        medida_disciplinar_id: suspensao.medida_id,
+        janela: `${suspensao.inicio} → ${suspensao.fim ?? "aberta"}`,
+        dias_na_competencia: suspensao.dias_na_competencia,
+        domingos_dsr: suspensao.domingos_dsr,
+      })),
+      regra_dsr:
+        "DSR da semana civil da suspensão (Lei 605/49, molde da falta injustificada), atribuído à competência do domingo — REGRA A CONFIRMAR com o contador (decisão D2:a, aviso registrado)",
       ...origemDivisorDias,
     });
   }

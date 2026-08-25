@@ -2371,6 +2371,60 @@ export async function indicadorFolhaNoPrazo(): Promise<{
   return { no_prazo: Number(linhas[0].no_prazo), total };
 }
 
+// ------------------------------------------------------------------ suspensão disciplinar (0100, D2:a)
+
+export interface SuspensaoParaCalculo {
+  medida_id: number;
+  colaborador_id: number;
+  inicio: string;
+  fim: string | null;
+}
+
+/**
+ * As suspensões disciplinares com efeito na competência: medidas de tipo COM
+ * PERÍODO (rh.tipo_medida_disciplinar.com_periodo — atributo do catálogo,
+ * nunca lista de chaves chumbada) cuja janela intersecta a competência
+ * ESTENDIDA 6 dias para trás — uma suspensão que terminou no fim do mês
+ * anterior ainda derruba o DSR do primeiro domingo deste mês (suspensao.ts).
+ *
+ * EIXO 8 (rastro): esta é a primeira leitura de rh.medida_disciplinar fora do
+ * módulo disciplinar — a 0080 a deixou explicitamente para esta integração.
+ * É leitura AGREGADA PELO MOTOR, dentro do cálculo (não há tela listando
+ * medidas aqui): o rastro do dado na folha é a memória do item 1203 (que
+ * carrega o id da medida, não a descrição) e o diff do cálculo com a CONTAGEM;
+ * quem abre o painel da competência já deixa audit.leitura_sensivel da folha.
+ * O conteúdo disciplinar (descrição, impacto) continua atrás de
+ * rh.disciplinar.ver — a folha não o carrega.
+ */
+export async function listarSuspensoesParaCalculo(
+  cliente: PoolClient,
+  inicioBusca: string,
+  dataRef: string
+): Promise<SuspensaoParaCalculo[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    colaborador_id: string;
+    inicio: string;
+    fim: string | null;
+  }>(
+    `SELECT m.id, m.colaborador_id, m.inicio::text AS inicio, m.fim::text AS fim
+       FROM rh.medida_disciplinar m
+       JOIN rh.tipo_medida_disciplinar t ON t.chave = m.tipo_chave
+      WHERE t.com_periodo
+        AND m.inicio IS NOT NULL
+        AND m.inicio <= $2
+        AND (m.fim IS NULL OR m.fim >= $1)
+      ORDER BY m.colaborador_id, m.inicio, m.id`,
+    [inicioBusca, dataRef]
+  );
+  return rows.map((linha) => ({
+    medida_id: Number(linha.id),
+    colaborador_id: Number(linha.colaborador_id),
+    inicio: linha.inicio,
+    fim: linha.fim,
+  }));
+}
+
 // ------------------------------------------------------------------ OLAC (migração 0099)
 
 /**
