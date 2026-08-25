@@ -33,6 +33,42 @@ import {
 const TABELA_POSSE = "rh.posse_item";
 const TABELA_CIENCIA = "rh.ciencia";
 
+/**
+ * Costuras do serviço com o banco — o que os testes trocam por dublês
+ * (pendência 16.2: teste "com repositório mockado", sem flag experimental de
+ * module mock no portão). Produção nunca passa o parâmetro: as rotas chamam
+ * como sempre e caem em DEPS_REAIS.
+ */
+export interface DepsPosse {
+  buscarColaboradorBasico: typeof buscarColaboradorBasico;
+  buscarPosseParaMutacao: typeof buscarPosseParaMutacao;
+  vinculosDoUsuario: typeof vinculosDoUsuario;
+  cienciaExistente: typeof cienciaExistente;
+  listarCategoriasDevolucao: typeof listarCategoriasDevolucao;
+  buscarMetadados: typeof buscarMetadados;
+  inserirPosse: typeof inserirPosse;
+  inserirCiencia: typeof inserirCiencia;
+  marcarCiencia: typeof marcarCiencia;
+  inserirEvento: typeof inserirEvento;
+  registrarAlteracao: typeof registrarAlteracao;
+  comTransacao: typeof comTransacao;
+}
+
+const DEPS_REAIS: DepsPosse = {
+  buscarColaboradorBasico,
+  buscarPosseParaMutacao,
+  vinculosDoUsuario,
+  cienciaExistente,
+  listarCategoriasDevolucao,
+  buscarMetadados,
+  inserirPosse,
+  inserirCiencia,
+  marcarCiencia,
+  inserirEvento,
+  registrarAlteracao,
+  comTransacao,
+};
+
 function formatarData(dataIso: string): string {
   const [ano, mes, dia] = dataIso.split("-");
   return `${dia}/${mes}/${ano}`;
@@ -97,15 +133,16 @@ export async function minhaPosse(sessao: PayloadSessao): Promise<PosseLinha[]> {
 export async function registrarPosse(
   sessao: PayloadSessao,
   colaboradorId: number,
-  dados: RegistroPosse
+  dados: RegistroPosse,
+  deps: DepsPosse = DEPS_REAIS
 ): Promise<{ id: number }> {
-  const colaborador = await buscarColaboradorBasico(colaboradorId);
+  const colaborador = await deps.buscarColaboradorBasico(colaboradorId);
   if (!colaborador) {
     throw new ErroHttpCampo(400, "Colaborador não encontrado.", "colaborador_id");
   }
   // A categoria vem do catálogo, e o servidor reconfere: chave que não existe
   // ou que foi inativada é recusada aqui, antes da FK e do trigger da 0081.
-  const categorias = await listarCategoriasDevolucao(true);
+  const categorias = await deps.listarCategoriasDevolucao(true);
   const categoria = categorias.find(
     (item) => item.chave === dados.categoria_chave
   );
@@ -118,7 +155,7 @@ export async function registrarPosse(
   }
   let termoTitulo: string | null = null;
   if (dados.termo_documento_id) {
-    const termo = await buscarMetadados(dados.termo_documento_id);
+    const termo = await deps.buscarMetadados(dados.termo_documento_id);
     if (!termo) {
       throw new ErroHttpCampo(
         400,
@@ -140,8 +177,8 @@ export async function registrarPosse(
   const termoId = dados.termo_documento_id ?? null;
   const numeroSerie = dados.numero_serie?.trim() ? dados.numero_serie : null;
 
-  const id = await comTransacao(sessao.usuario_id, async (cliente) => {
-    const posseId = await inserirPosse(cliente, {
+  const id = await deps.comTransacao(sessao.usuario_id, async (cliente) => {
+    const posseId = await deps.inserirPosse(cliente, {
       colaborador_id: colaboradorId,
       categoria_chave: dados.categoria_chave,
       descricao: dados.descricao,
@@ -150,7 +187,7 @@ export async function registrarPosse(
       data_entrega: dados.data_entrega,
       termo_documento_id: termoId,
     });
-    await registrarAlteracao(cliente, {
+    await deps.registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
       acao: "criacao",
@@ -169,7 +206,7 @@ export async function registrarPosse(
         Termo: { de: null, para: termoTitulo ?? "sem termo no GED" },
       },
     });
-    await inserirEvento(cliente, {
+    await deps.inserirEvento(cliente, {
       colaborador_id: colaboradorId,
       tipo: "posse_entregue",
       ocorrido_em: `${dados.data_entrega}T00:00:00Z`,
@@ -244,15 +281,16 @@ export async function registrarDevolucaoPosse(
  */
 export async function darCienciaPosse(
   sessao: PayloadSessao,
-  posseId: number
+  posseId: number,
+  deps: DepsPosse = DEPS_REAIS
 ): Promise<{ dada_em: string }> {
-  const item = await buscarPosseParaMutacao(posseId);
+  const item = await deps.buscarPosseParaMutacao(posseId);
   if (!item) {
     throw new ErroHttp(404, "Item de posse não encontrado.");
   }
   // Pela PESSOA, não pelo contrato corrente: item entregue no vínculo anterior
   // do mesmo grupo continua sendo do titular (molde GED, pendência 16.5).
-  const meusVinculos = await vinculosDoUsuario(sessao.usuario_id);
+  const meusVinculos = await deps.vinculosDoUsuario(sessao.usuario_id);
   if (!meusVinculos.includes(item.colaborador_id)) {
     // Ausência, não máscara: quem não é o titular nem sabe que existe.
     throw new ErroHttp(404, "Item de posse não encontrado.");
@@ -266,24 +304,24 @@ export async function darCienciaPosse(
   if (item.ciencia_registrada) {
     throw new ErroHttp(409, "Ciência já registrada para este item.");
   }
-  const termo = await buscarMetadados(item.termo_documento_id);
+  const termo = await deps.buscarMetadados(item.termo_documento_id);
   if (!termo) {
     throw new ErroHttp(404, "Termo não encontrado no GED.");
   }
   // Ciência já dada no GED (ex.: pela tela de documentos)? Então só projeta.
-  const jaDeuCiencia = await cienciaExistente(termo.id, sessao.usuario_id);
+  const jaDeuCiencia = await deps.cienciaExistente(termo.id, sessao.usuario_id);
 
   try {
-    const dadaEm = await comTransacao(sessao.usuario_id, async (cliente) => {
+    const dadaEm = await deps.comTransacao(sessao.usuario_id, async (cliente) => {
       let momento = new Date().toISOString();
       if (!jaDeuCiencia) {
-        const ciencia = await inserirCiencia(cliente, {
+        const ciencia = await deps.inserirCiencia(cliente, {
           documentoId: termo.id,
           usuarioId: sessao.usuario_id,
           hashNoMomento: termo.hash_sha256,
         });
         momento = ciencia.dada_em;
-        await registrarAlteracao(cliente, {
+        await deps.registrarAlteracao(cliente, {
           usuarioId: sessao.usuario_id,
           papel: sessao.papel,
           acao: "criacao",
@@ -295,13 +333,13 @@ export async function darCienciaPosse(
           },
         });
       }
-      const marcou = await marcarCiencia(cliente, posseId);
+      const marcou = await deps.marcarCiencia(cliente, posseId);
       if (!marcou) {
         // Corrida na projeção: outra requisição marcou entre o pré-check
         // (fora da transação) e aqui. 409, molde registrarDevolucaoPosse.
         throw new ErroHttp(409, "Ciência já registrada para este item.");
       }
-      await registrarAlteracao(cliente, {
+      await deps.registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
         acao: "ciencia_posse",
