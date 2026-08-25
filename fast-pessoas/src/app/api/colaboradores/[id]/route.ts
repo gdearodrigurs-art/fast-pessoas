@@ -1,7 +1,7 @@
 import { esquemaAtualizacaoColaborador } from "@/dominios/colaboradores/esquemas";
 import {
   atualizarColaborador,
-  obterColaborador,
+  obterFichaOuCracha,
 } from "@/dominios/colaboradores/servico";
 import { responderErro } from "@/lib/http";
 import { exigirPermissao, exigirSessao } from "@/lib/sessao";
@@ -16,14 +16,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Escopo por sessão/papel no repositório: fora do alcance responde 404.
+    // Escopo por sessão/papel no repositório. Fora do alcance NÃO é mais 404
+    // (decisão A4:a): a resposta vira o crachá — o mínimo público que todo
+    // logado vê de qualquer colega do quadro. 404 fica para quem não existe
+    // ou está desligado.
     const sessao = await exigirSessao();
     const { id } = await params;
     const idNumero = validarId(id);
     if (idNumero === null) {
       return Response.json({ erro: "Identificador inválido" }, { status: 400 });
     }
-    const resultado = await obterColaborador(sessao, idNumero);
+    const resultado = await obterFichaOuCracha(sessao, idNumero);
     return Response.json(resultado);
   } catch (erro) {
     return responderErro(erro);

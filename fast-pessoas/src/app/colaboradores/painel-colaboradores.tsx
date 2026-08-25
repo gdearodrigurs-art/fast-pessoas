@@ -41,6 +41,18 @@ interface ColaboradorListado {
 }
 
 /**
+ * O catálogo mínimo (decisão A4:a): o resto do quadro para quem não alcança a
+ * empresa inteira. Só nome, cargo e unidade — o clique abre a ficha em modo
+ * crachá, que soma o contato corporativo e o líder, e nada além.
+ */
+interface ColegaMinimo {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  unidade: string | null;
+}
+
+/**
  * O que o servidor devolve no 409 quando o CPF digitado já é de gente do grupo.
  * A tela existe para MOSTRAR isto antes de perguntar — confirmar "é a mesma
  * pessoa?" sem ver de quem se fala é o mesmo que juntar duas pessoas no escuro.
@@ -83,6 +95,7 @@ function iniciais(nome: string): string {
 
 export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
   const [colaboradores, setColaboradores] = useState<ColaboradorListado[]>([]);
+  const [colegasMinimos, setColegasMinimos] = useState<ColegaMinimo[]>([]);
   const [alcance, setAlcance] = useState<string>("todos");
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -148,6 +161,7 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
         const dados = await resposta.json().catch(() => ({}));
         if (resposta.ok) {
           setColaboradores(dados.colaboradores ?? []);
+          setColegasMinimos(dados.colegas_minimos ?? []);
           setAlcance(dados.alcance ?? "todos");
           setOpcoesEstrutura(dados.estrutura_opcoes ?? null);
         } else {
@@ -296,7 +310,7 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
     alcance === "todos"
       ? "Todos os colaboradores"
       : alcance === "equipe"
-        ? "Sua ficha e sua equipe (relação gestor→liderado vigente)"
+        ? "Sua ficha e sua equipe (sub-árvore vigente: liderados diretos e indiretos)"
         : "Sua ficha";
 
   return (
@@ -765,10 +779,52 @@ export function PainelColaboradores({ podeCriar }: { podeCriar: boolean }) {
           </div>
         )}
 
+        {/* A4:a — o catálogo mínimo: o resto do quadro, visível a todo logado
+            só com nome, cargo e unidade. O clique abre a ficha em modo crachá.
+            A busca por nome se aplica; status e recorte de estrutura são
+            filtros de FICHA e não alcançam este catálogo. */}
+        {!carregando && colegasMinimos.length > 0 && (
+          <section className={estilos.cartao} style={{ marginTop: 16 }}>
+            <h2>Demais colegas — catálogo mínimo</h2>
+            <p className={estilos.subtitulo}>
+              Todo colaborador logado vê o crachá de qualquer colega: nome,
+              cargo, unidade, contato corporativo e líder atual — e nada além.
+            </p>
+            <div className={estilos.grade}>
+              {colegasMinimos.map((colega) => (
+                <Link
+                  key={colega.id}
+                  className={estilos.cardColaborador}
+                  href={`/colaboradores/${colega.id}`}
+                >
+                  <div className={estilos.avatar}>
+                    {iniciais(colega.nome_completo)}
+                  </div>
+                  <div>
+                    <h3>{colega.nome_completo}</h3>
+                    <div className={estilos.cardSub}>
+                      {colega.cargo_nome ?? "Sem cargo definido"}
+                    </div>
+                    <div className={estilos.chips}>
+                      {colega.unidade && (
+                        <span className={estilos.chip}>
+                          lotação: {colega.unidade}
+                        </span>
+                      )}
+                      <span className={estilos.chip}>crachá</span>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
         {alcance === "proprio" && (
           <div className={estilos.aviso}>
-            Como funcionário, você acessa apenas a própria ficha. Correções
-            cadastrais são solicitadas ao DP.
+            Como funcionário, você acessa a própria ficha completa; dos colegas,
+            o catálogo mínimo acima (crachá). Correções cadastrais são
+            solicitadas ao DP.
           </div>
         )}
       </main>

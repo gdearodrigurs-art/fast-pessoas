@@ -101,9 +101,13 @@ import {
   lerMinimoPorRecorte,
   lerParametroPrivacidade,
   type ParametroPrivacidadeVigente,
+  buscarCracha,
   buscarEstabelecimentoVersaoAtiva,
   buscarFaixaAtivaParaAtualizar,
   buscarFicha,
+  ColegaMinimo,
+  CrachaColaborador,
+  listarCatalogoMinimo,
   buscarLotacaoVigenteParaAtualizar,
   buscarParaAtualizar,
   buscarPosicaoVigenteParaAtualizar,
@@ -282,6 +286,8 @@ export async function listarColaboradores(
   colaboradores: ColaboradorListado[];
   alcance: Escopo["alcance"];
   estrutura_opcoes: OpcoesFiltroEstrutura;
+  /** A4:a — o resto do quadro em modo mínimo (nome, cargo, unidade). */
+  colegas_minimos: ColegaMinimo[];
 }> {
   const escopo = await resolverEscopo(sessao);
   // As opções dos três seletores vêm junto com a lista: sem endpoint novo e
@@ -291,6 +297,16 @@ export async function listarColaboradores(
     listar(filtro, escopo),
     listarOpcoesDeFiltroEstrutura(),
   ]);
+  // A4:a — quem não alcança a empresa inteira ainda assim VÊ todo mundo, no
+  // modo mínimo (o catálogo do crachá): a lista completa continua recortada
+  // pelo escopo, e o resto do quadro aparece só com nome, cargo e unidade.
+  let colegas_minimos: ColegaMinimo[] = [];
+  if (escopo.alcance !== "todos") {
+    const jaVisiveis = new Set(colaboradores.map((colaborador) => colaborador.id));
+    colegas_minimos = (
+      await listarCatalogoMinimo(filtro.busca ?? null)
+    ).filter((colega) => !jaVisiveis.has(colega.id));
+  }
   return {
     colaboradores: colaboradores.map((colaborador) => ({
       ...colaborador,
@@ -301,6 +317,7 @@ export async function listarColaboradores(
     })),
     alcance: escopo.alcance,
     estrutura_opcoes,
+    colegas_minimos,
   };
 }
 
@@ -331,13 +348,52 @@ export function chaveQueAmpliouAFicha(
     : "rh.colaborador.ver";
 }
 
+/** A ficha completa, para quem o escopo alcança. */
+export interface VisaoFichaCompleta {
+  colaborador: FichaColaborador & { feedback_vencido: boolean };
+  linha_do_tempo: EventoLinhaTempo[];
+  cracha?: undefined;
+}
+
+/** A4:a — fora do alcance, o que se vê é o CRACHÁ, não um 404. */
+export interface VisaoCracha {
+  cracha: CrachaColaborador;
+  colaborador?: undefined;
+}
+
+export type VisaoColaborador = VisaoFichaCompleta | VisaoCracha;
+
+/**
+ * A rota da ficha (A4:a): a regra antiga "fora do alcance = 404" foi
+ * SUBSTITUÍDA pelo crachá — todo logado vê o mínimo de qualquer colega do
+ * quadro (nome, cargo, contato corporativo, líder, unidade) e NADA além. Sem
+ * trilha de leitura no mínimo: é dado operacional (a trilha continua valendo
+ * para o que excede o crachá). Quem não está no quadro (desligado/inexistente)
+ * segue 404.
+ *
+ * `obterColaborador` continua existindo com o contrato de sempre (ficha ou
+ * 404) de propósito: o portal do colaborador o reusa para a PRÓPRIA ficha, e
+ * lá crachá não é resposta válida.
+ */
+export async function obterFichaOuCracha(
+  sessao: PayloadSessao,
+  id: number
+): Promise<VisaoColaborador> {
+  try {
+    return await obterColaborador(sessao, id);
+  } catch (erro) {
+    if (erro instanceof ErroHttp && erro.status === 404) {
+      const cracha = await buscarCracha(id);
+      if (cracha) return { cracha };
+    }
+    throw erro;
+  }
+}
+
 export async function obterColaborador(
   sessao: PayloadSessao,
   id: number
-): Promise<{
-  colaborador: FichaColaborador & { feedback_vencido: boolean };
-  linha_do_tempo: EventoLinhaTempo[];
-}> {
+): Promise<VisaoFichaCompleta> {
   const escopo = await resolverEscopo(sessao);
   const ficha = await buscarFicha(id, escopo);
   if (!ficha) {

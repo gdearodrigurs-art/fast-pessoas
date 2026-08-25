@@ -621,6 +621,127 @@ export async function listarEventos(
   }));
 }
 
+// ------------------------------------------------------------------ ficha pública mínima (crachá — decisão A4:a)
+// TODO logado vê o "crachá" de qualquer colega DO QUADRO: nome, cargo, contato
+// corporativo, líder atual e unidade — e NADA além. Sem trilha de leitura (dado
+// operacional, decisão A4:a); a trilha continua valendo para o que EXCEDE o
+// mínimo. Desligado não é colega: fora do quadro continua sendo 404.
+
+export interface CrachaColaborador {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
+  /** O líder ATUAL (relação de gestor vigente). */
+  gestor_nome: string | null;
+  /** A LOTAÇÃO (local de trabalho) vigente. */
+  unidade: string | null;
+}
+
+export async function buscarCracha(
+  id: number
+): Promise<CrachaColaborador | null> {
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    cargo_nome: string | null;
+    telefone_corporativo: string | null;
+    email_corporativo: string | null;
+    gestor_nome: string | null;
+    unidade: string | null;
+  }>(
+    // Telefone/e-mail corporativo são da PESSOA (decisão A7:b, migration 0085)
+    // — leitura direta de rh.pessoa, sem projeção nova no vínculo.
+    `SELECT c.id, c.nome_completo,
+            pos.cargo_nome,
+            p.telefone_corporativo, p.email_corporativo,
+            ges.gestor_nome,
+            lot.unidade
+       FROM rh.colaborador c
+       JOIN rh.pessoa p ON p.id = c.pessoa_id
+       LEFT JOIN LATERAL (
+         SELECT cv.nome AS cargo_nome
+           FROM rh.posicao_colaborador pc
+           JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+          WHERE pc.colaborador_id = c.id
+          ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+          LIMIT 1
+       ) pos ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT ld.lotacao_nome AS unidade
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
+       ) lot ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT g.nome_completo AS gestor_nome
+           FROM rh.relacao_gestor rg
+           JOIN rh.colaborador g ON g.id = rg.gestor_colaborador_id
+          WHERE rg.liderado_colaborador_id = c.id AND rg.fim_vigencia IS NULL
+       ) ges ON TRUE
+      WHERE c.id = $1 AND c.status <> 'desligado'`,
+    [id]
+  );
+  if (linhas.length === 0) return null;
+  return { ...linhas[0], id: Number(linhas[0].id) };
+}
+
+/** Uma linha do catálogo mínimo da lista — menos ainda que o crachá. */
+export interface ColegaMinimo {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  unidade: string | null;
+}
+
+/**
+ * O catálogo mínimo da LISTA (A4:a): todo mundo do quadro, para quem não tem
+ * alcance de empresa inteira. Só nome, cargo e unidade — matrícula, status,
+ * admissão e o resto continuam sendo dado da ficha, servidos pelo escopo.
+ * A busca por nome se aplica; os demais filtros da lista (status, estrutura)
+ * são recorte de FICHA e não alcançam este catálogo.
+ */
+export async function listarCatalogoMinimo(
+  busca: string | null
+): Promise<ColegaMinimo[]> {
+  const parametros: unknown[] = [];
+  let filtroBusca = "";
+  if (busca !== null && busca !== "") {
+    parametros.push(`%${busca}%`);
+    filtroBusca = ` AND c.nome_completo ILIKE $${parametros.length}`;
+  }
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    cargo_nome: string | null;
+    unidade: string | null;
+  }>(
+    `SELECT c.id, c.nome_completo, pos.cargo_nome, lot.unidade
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+         SELECT cv.nome AS cargo_nome
+           FROM rh.posicao_colaborador pc
+           JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+          WHERE pc.colaborador_id = c.id
+          ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+          LIMIT 1
+       ) pos ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT ld.lotacao_nome AS unidade
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
+       ) lot ON TRUE
+      WHERE c.status <> 'desligado'${filtroBusca}
+      ORDER BY c.nome_completo, c.id`,
+    parametros
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
 /** Pessoa existente com este CPF (null quando é gente nova para o grupo). */
 export async function buscarPessoaPorCpf(
   cliente: PoolClient,

@@ -1096,6 +1096,21 @@ interface VinculoDaPessoa {
   sucedido_por_vinculo_id: number | null;
 }
 
+/**
+ * Ficha pública MÍNIMA (decisão A4:a): o que o servidor devolve quando a ficha
+ * está fora do alcance de quem olha. Todo logado vê este mínimo de qualquer
+ * colega do quadro — e nada além: sem matrícula, sem status, sem histórico.
+ */
+interface Cracha {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
+  gestor_nome: string | null;
+  unidade: string | null;
+}
+
 interface Evento {
   id: number;
   tipo: string;
@@ -1350,6 +1365,8 @@ export function FichaColaborador({
   permissoes: PermissoesFicha;
 }) {
   const [ficha, setFicha] = useState<Ficha | null>(null);
+  // A4:a — fora do alcance a mesma rota devolve o CRACHÁ, e a tela vira só ele.
+  const [cracha, setCracha] = useState<Cracha | null>(null);
   const [linhaDoTempo, setLinhaDoTempo] = useState<Evento[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -1420,6 +1437,15 @@ export function FichaColaborador({
         return;
       }
       const dados = await resposta.json();
+      if (dados.cracha) {
+        // Modo crachá: a ficha completa está fora do alcance — a tela mostra o
+        // mínimo público e nada mais (os cartões e abas nem montam).
+        setCracha(dados.cracha as Cracha);
+        setFicha(null);
+        setErro(null);
+        return;
+      }
+      setCracha(null);
       setFicha(dados.colaborador);
       setLinhaDoTempo(dados.linha_do_tempo ?? []);
       setErro(null);
@@ -1816,6 +1842,75 @@ export function FichaColaborador({
         </Cabecalho>
         <main className={estilos.conteudo}>
           <p className={estilos.vazio}>Carregando…</p>
+        </main>
+      </div>
+    );
+  }
+
+  // A4:a — MODO CRACHÁ: a pessoa existe e está no quadro, mas a ficha completa
+  // está fora do alcance de quem olha. O que aparece é o mínimo público (nome,
+  // cargo, contato corporativo, líder, unidade) — e nada além: sem abas, sem
+  // matrícula, sem histórico. As APIs de detalhe nem são chamadas.
+  if (cracha) {
+    return (
+      <div className={estilos.pagina}>
+        <Cabecalho>
+          <Link className={acaoCabecalho} href="/colaboradores">
+            Colaboradores
+          </Link>
+        </Cabecalho>
+        <main className={estilos.conteudo}>
+          <Link className={estilos.voltar} href="/colaboradores">
+            ← Voltar à lista
+          </Link>
+          <div className={estilos.cabecalhoFicha}>
+            <div className={estilos.avatar}>{iniciais(cracha.nome_completo)}</div>
+            <div className={estilos.info}>
+              <h1>{cracha.nome_completo}</h1>
+              <div className={estilos.chips}>
+                {cracha.cargo_nome && (
+                  <span className={estilos.chip}>{cracha.cargo_nome}</span>
+                )}
+                {cracha.unidade && (
+                  <span className={estilos.chip}>{cracha.unidade}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className={estilos.cartao}>
+            <h2>Crachá</h2>
+            <div className={estilos.gradeDados}>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Cargo</div>
+                <div className={estilos.val}>{cracha.cargo_nome ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Unidade (lotação)</div>
+                <div className={estilos.val}>{cracha.unidade ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Líder atual</div>
+                <div className={estilos.val}>{cracha.gestor_nome ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Telefone corporativo</div>
+                <div className={estilos.val}>
+                  {cracha.telefone_corporativo ?? "—"}
+                </div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>E-mail corporativo</div>
+                <div className={estilos.val}>
+                  {cracha.email_corporativo ?? "—"}
+                </div>
+              </div>
+            </div>
+            <p className={estilos.notaRestrito}>
+              Visão pública mínima: a ficha completa desta pessoa está fora do
+              seu alcance — o que aparece aqui é o que todo colaborador logado
+              pode ver de qualquer colega.
+            </p>
+          </div>
         </main>
       </div>
     );
