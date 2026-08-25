@@ -694,6 +694,18 @@ confirmadas pelo dono e **construídas**:
 4. **Relatório dT por etapa** — sem decisão de esquema pendente (mediana, fechadas+abertas, agrupar
    por cargo). É só construir.
 
+**#13 (follow-ups) — CONSTRUÍDO na onda 1.2:** (a) PATCH `/api/recrutamento/vagas/[id]` troca o
+modelo congelado de vaga ABERTA com ZERO candidaturas (G1:a — reformulação não migra vaga; troca
+manual), auditado; (b) reformular/aposentar modelo pela tela (molde clima 0075): versão nova com
+`continua_de` na mesma transação que encerra a anterior; o GERAL reformula e a versão nova herda
+`padrao=true` no mesmo ato (G2:a); o GERAL não se aposenta; histórico da série na tela de modelos;
+(c) migration 0088: constraint trigger deferido torna o desenho (`rh.modelo_selecao_etapa`) de
+modelo já congelado por vaga imutável no banco, ERRCODE 45004 — fecha o gap da revisão do
+Estágio 2; (d) relatório dT por etapa: mediana (`percentile_cont`) dos intervalos consecutivos de
+`movimentacao_candidatura.em`, por CARGO × ETAPA DO CATÁLOGO (nome), fechadas + abertas —
+GET `/api/recrutamento/relatorio-etapas` + aba no painel. PENDENTE da frente: 13c Pesquisa social
+(G3 decidida: GED + rs.gerir + trilha + expurgo 6 meses) — outra onda.
+
 ---
 
 ## 14 · Padrão Modelo — fatia CLIMA: qual universo de pergunta, antes de tudo
@@ -758,9 +770,14 @@ follow-ups (nenhum é regressão nem furo novo — são dívida conhecida / pré
    o guard do `beneficios`). As dezenas de `page.tsx` server-side escopadas só por sessão ainda não
    reconferem — o vazamento residual é do PRÓPRIO usuário desativado (dado de terceiro já fica fechado
    por `tem_permissao`). Vale um ponto único de guarda de página.
-3. **Teste de integração para férias (B6/B8).** A troca laço→lote em `garantirPeriodos`/
-   `inserirPeriodosEmLote`/`listarIniciosExistentes` foi validada por leitura + prova ao vivo, mas não
-   há `tests/ferias.test.ts` cobrindo o caminho. É a mudança que mais mereceria um teste.
+3. **Teste de integração para férias (B6/B8) — ✅ FECHADO (frente 1.7, 25/08/2026).** A régua pura
+   saiu de `servico.ts` para `ferias/calculo.ts` (`periodosEsperados` + `periodosFaltantes`, molde
+   pdi/calculo.ts, comportamento intacto) e ganhou `tests/ferias.test.ts` — 12 casos determinísticos,
+   sem banco: admissão recente/futura, períodos contíguos, 29/02 dos dois lados, limite concessivo
+   = fim + 12 meses (decisão da #3), vencido só depois do limite e idempotência por
+   colaborador × início. A troca laço→lote ganhou `db/provas-ferias.js` (BEGIN/ROLLBACK,
+   re-executável): lote num INSERT só, duplicata segurada por ON CONFLICT sem erro, RETURNING
+   devolve SÓ o que criou (o contrato da auditoria) e a leitura é escopada aos ids pedidos.
 4. **B2 — piso k por subjanela já FECHADO** nesta leva (`media_recente`/`media_anterior` viram null
    abaixo de k na subjanela). Registrado só para rastro.
 5. **M1 — falha silenciosa no reload PÓS-AÇÃO** (baixa): um `recarregar()` que falhe com 5xx depois de
@@ -775,23 +792,133 @@ follow-ups (nenhum é regressão nem furo novo — são dívida conhecida / pré
 ## 16 · Fatia Posse — follow-ups da revisão adversarial (não bloqueantes)
 
 A revisão da fatia Posse (2026-08-20) confirmou permissões, append-only e a regressão zero no
-desligamento; o achado ALTO (predicado morto do hook de suspensão) e dois MÉDIA (botão de ciência
-para não-titular; ERRCODE do trinco → 0083) foram corrigidos ANTES do commit. Ficam:
+desligamento. Itens 1–3 e a miudeza do `vinculo_atual` RESOLVIDOS em 2026-08-25 (frente 1.4):
 
-1. **Superfície do titular para a ciência.** O botão "Dar ciência" agora só aparece na PRÓPRIA
-   ficha — mas o titular típico não tem `rh.posse.ver`, então o cartão nem carrega para ele. A
-   ciência hoje só é praticável por dp/rh na própria ficha. Follow-up: um "minha posse" no portal
-   do colaborador (paralelo ao "Minhas entregas de EPI"), listando os itens e oferecendo a ciência.
-   E: ciência dada direto no GED não projeta `ciencia_registrada` (a projeção mora em
-   `darCienciaPosse`) — a superfície do titular resolve os dois.
-2. **Teste da regra crítica.** `tests/posse.test.ts` cobre borda zod; falta teste (com repositório
-   mockado, molde dos testes de ponto) de que `darCienciaPosse` devolve 404 a não-titular e de que
-   categoria inativa é recusada no serviço.
-3. **Duplo clique na ciência** (herdado do EPI): duas requisições concorrentes passam pelo check e a
-   segunda estoura 23505 sem tradução → 500. Corrigir nos DOIS (posse e sst) com `violacaoUnica`.
+1. **RESOLVIDO — Superfície do titular.** GET /api/posse/minhas (porta documento.ver, molde EPI)
+   + cartão "Minha posse de patrimônio" no portal do colaborador, com o botão "Dar ciência";
+   fetch tolerante, falha não derruba o portal.
+2. **RESOLVIDO — Teste da regra crítica.** tests/posse.test.ts ganhou 6 testes de serviço com
+   repositório dublê (costura DepsPosse): 404 a não-titular, categoria inativa recusada,
+   duplo-clique 409 (pré-check, 23505 traduzido e projeção condicional).
+3. **RESOLVIDO — Duplo clique na ciência.** Nos DOIS (posse e sst): violacaoUnica traduz o 23505
+   de ciencia_documento_id_usuario_id_key em 409; marcarCiencia/marcarCienciaEntregaEpi viraram
+   UPDATE condicional com RETURNING (0 linhas = 409).
 4. **`fecharSuspensao` sem guarda própria** (sem `AND` de janela nem rowCount): inócuo enquanto só o
    hook chama na mesma transação; obrigatório quando existir UI de fechamento manual de suspensão.
-5. **Miudezas:** data de entrega futura aceita por POST direto (teto só no HTML — consistente com o
-   disciplinar); `colaboradorDoUsuario` da posse usa `vinculo_atual` (o GED já migrou para
-   `vinculosDoUsuario`; paridade de molde com o EPI); `dada_em` de ciência já existente devolve o
-   relógio do app, não o real.
+5. **Miudezas restantes:** data de entrega futura aceita por POST direto (teto só no HTML —
+   consistente com o disciplinar); `dada_em` de ciência já existente no GED devolve o relógio do
+   app, não o real. (`colaboradorDoUsuario`→`vinculosDoUsuario` RESOLVIDO — paridade com o GED;
+   a ciência e o "minhas" agora alcançam itens de vínculo anterior do mesmo grupo.)
+
+---
+
+## 17 · Motor de férias (1.6) — defaults conservadores que pedem confirmação (não bloqueantes)
+
+A prévia de férias (calculo-ferias.ts + GET api/folha/ferias-previa) entrou com estes defaults,
+todos explicados na memória de cálculo:
+
+1. **Terço sobre o abono na MESMA rubrica 1401** (interpretação registrada na 0028). Se o DP quiser
+   separar, é rubrica 1402 + ajuste de um bloco do motor.
+2. **IRRF pela mecânica do mensal (completo × simplificado, vale o menor).** Férias têm tributação
+   em separado na prática da RFB — confirmar com o contador se o desconto simplificado se aplica ao
+   cálculo em separado; se não, o IRRF da prévia pode sair MENOR que o real.
+3. **INSS/IRRF sobre a base de férias ISOLADA** (aviso explícito na saída). Na competência real, a
+   base soma com o salário do mês — o 2º estágio (férias → competência) precisa recalcular, não
+   somar prévias.
+4. **Data de referência = INÍCIO DO GOZO** (art. 142 CLT: remuneração da data da concessão) para
+   salário, dependentes, rubricas e tabelas.
+5. **0136/0137 no catálogo com a flag do caso GOZADO** — docs/18 §5 dizia "não virar linha com flag
+   fixa"; a resolução foi: a flag descreve o caso que incide e a exceção indenizatória é regra do
+   MOTOR (modalidade). Confirmar com o dono.
+6. **FGTS sobre férias gozadas ficou fora da prévia** (escopo 1.6 = INSS/IRRF); é devido e entra na
+   integração com a competência.
+
+---
+
+## Fase 4 · Visibilidade em camadas (agente 1.1) — follow-ups não bloqueantes
+
+- A2:a foi implementada no ponto único que a decisão nomeia (condicaoEscopo/resolverEscopo): ficha,
+  lista, vínculos, linha do tempo, organograma e as leituras novas de salário/disciplinar viraram
+  sub-árvore. Domínios com recorte PRÓPRIO de "liderados diretos" que NÃO passam por condicaoEscopo
+  (ponto.ver.equipe, aprovações de demandas/admissão, portal do gestor) continuam em equipe direta —
+  se a semântica única deve alcançá-los, é mudança nos domínios donos.
+- Raça-cor individual mora em rh.pessoa.raca_cor; quando o painel executivo quiser o agregado,
+  aplicar o mesmo piso k do gênero (nada foi mexido no painel nesta onda).
+- resolverEscopo agora lê o quadro 1× por requisição de sessão-gestor para montar a sub-árvore em JS
+  (custo desprezível no quadro atual; cachear por request se o quadro crescer muito).
+- Crachá exibe telefone/e-mail corporativo (0085): fatias 3 e 4 se provam juntas, com as duas
+  migrations aplicadas.
+
+---
+
+## Falhas de TOTP (0087) — sobras conscientes da frente 1.3
+
+(a) A tela de administração de `sistema.parametro_seguranca` segue inexistente (precedente da 0082:
+edita-se por SQL); com 4 parâmetros agora (rate-limit de senha + falhas de TOTP), a tela ganhou
+justificativa.
+(b) O enrolamento (`confirmarAtivacao2fa`) NÃO alimenta o contador: o secret ainda é pendente e quem
+erra ali é o próprio usuário autenticado configurando o seu 2FA — não é sinal de ataque à conta.
+Registrado para não parecer esquecimento.
+(c) Replay de código TOTP (código certo já consumido) não conta como falha: o anti-replay da 0060
+barra sozinho, e contá-lo baratearia a negação de serviço além do risco aceito na C1.
+(d) Corrida teórica: dois gestores de usuários estourando a 5ª falha no MESMO instante podem, em
+READ COMMITTED, desativar-se mutuamente (janela de milissegundos). Se algum dia preocupar, a saída é
+`SELECT ... FOR UPDATE` dos detentores da chave na mesma transação.
+(e) O bloqueio temporário do último gestor NÃO derruba as sessões vigentes dele — de propósito:
+matar a sessão do único gestor entregaria ao atacante (que só tem a senha) a negação de serviço
+total.
+
+---
+
+## Ciclo de ciência (0086 / frente 1.5) — follow-ups
+
+- [ ] GATE da Onda 2: consumir pendenciaBloqueante(usuarioId) (src/dominios/documentos/servico.ts)
+      ou GET /api/documentos/pendencias/minhas (payload {bloqueada, bloqueio}). O gate DEVE manter
+      alcançáveis as rotas de regularização: /documentos, /api/documentos/** (download, ciencia,
+      recusa, pendencias/minhas e o PATCH confirmar de ato-testemunhas), /api/notificacoes** e o
+      logout — senão o bloqueado não consegue se regularizar (B4).
+- [ ] Lembrete de prazo é MANUAL (botão no quadro do ciclo, rh.conduta.gerir) — o projeto não tem
+      agendador. Se o dono quiser lembrete automático na véspera do prazo, precisa nascer um cron.
+- [ ] Rastreio de rolagem em PDF usa altura estimada (contagem de páginas por heurística, folga 1,5).
+      PDF muito fora do padrão pode ter o fim alcançável com folga sobrando (nunca travando o botão
+      indevidamente para MENOS leitura visível — a folga só alonga a rolagem). Recomendação de uso:
+      publicar o Código de Conduta em PDF simples ou texto (B5 já exige formato exibível; Word é
+      recusado na publicação com exige_ciencia).
+- [ ] Decisão tomada na frente (validar com o dono): chave rh.conduta.gerir (dp/diretoria) criada
+      além da rh.conduta.liberar pedida — sem ela, "abrir ato" cairia em documento.enviar, que
+      recrutador/lider_td também têm. Ajustável em /perfis.
+- [ ] Decisão tomada na frente: prazo de admitido DEPOIS da publicação conta da criação do usuário
+      (GREATEST(enviado_em, usuario.criado_em)) — recém-chegado não nasce com prazo vencido.
+
+---
+
+## 18 · Registros da revisão adversarial da Onda 1 (25/08/2026) — não corrigidos de propósito
+
+Os ALTA/MEDIA objetivos foram corrigidos na própria onda (commits 3ecb83b..843fbb5). Ficam
+registrados, com dono e desenho, os de política/raridade:
+
+1. Bloqueio-por-ato × versão nova: publicar versão nova de política NÃO-bloqueante com ato
+   lavrado dissolve o bloqueio sem o ato de liberação (o ato pertence à versão velha). Fechar
+   exige decidir onde o estado de bloqueio mora (cadeia × versão). [MEDIA de desenho]
+2. TOCTOU raro em darCiencia: pré-check de versão vigente fora da transação do INSERT — janela
+   de milissegundos contra publicação simultânea de versão nova. Conserto: reconferir sucessor
+   dentro da transação.
+3. Catálogo de nível hierárquico não renomeia nem reordena (só cria/inativa) — eixo 9 pela
+   metade; rotas PATCH de nome/ordem quando a tela precisar.
+4. Paridade 16.5 no EPI: minhasEntregasEpi/darCienciaEntregaEpi seguem em vinculo_atual —
+   entrega de vínculo anterior do grupo é invisível ao titular (a posse já migrou p/ pessoa).
+5. Migration 0088: o comentário justifica o DEFERRABLE ao contrário (o adiamento BARRA o caso
+   "modelo+etapas+vaga no mesmo commit", não o libera). A migration é imutável por hash — fica
+   o registro; se um semear futuro criar modelo+vaga na mesma transação, usar SET CONSTRAINTS.
+6. Ciclo A→B→A no organograma concede ao liderado a leitura do gestor via sub-árvore (erro de
+   cadastro; mitigado por trilha). Guarda de ciclo no cadastro de relacao_gestor se preocupar.
+7. Turnover do portal do gestor segue na relação DIRETA (conta histórica; sub-árvore de hoje
+   zeraria o numerador) — "turnover por sub-árvore histórica" é decisão de produto.
+8. Oráculo residual: 429 de TOTP bloqueado só é alcançável com senha certa (mitigado pelo
+   rate-limit de senha também emitir 429).
+9. Termo compartilhado por 2 itens de posse: cliques quase simultâneos podem dar 409 com texto
+   impreciso no segundo item (autocura no clique seguinte).
+10. paginas-pdf: PDF sem /Count legível assume 10 páginas — Código de Conduta deve ser PDF
+    simples/texto (já registrado no follow-up da 1.5).
+11. A2:a alcançou ficha/lista/ponto/portal-gestor; aprovações de demandas/admissão ainda têm
+    recorte próprio de liderado direto — alinhar quando aquelas telas forem tocadas.

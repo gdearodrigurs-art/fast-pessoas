@@ -143,6 +143,9 @@ O Diego devolveu a folha de confirmação (`confirmacao-rubricas-diego2.xlsx`). 
   gozadas)."* Ou seja, a rubrica genérica não tem uma incidência fixa — quem decide é o **motor de
   férias/rescisão**, pela rubrica ESPECÍFICA de cada caso (gozada incide: 0041/0052; indenizada não:
   0009/0081/0012). É a razão de 0136/0137 não virarem linha de catálogo com flag fixa.
+  **Atualização (frente 1.6, 25/08/2026):** 0136/0137 entraram no catálogo pela 0092 com a
+  incidência do caso gozado; a distinção gozadas × indenizadas é regra do motor de férias
+  (calculo-ferias.ts) — ver pendência #17.
 - **1302 Reflexo de Comissão** — o reflexo incide sobre: **férias, saldo de salário, 13º, aviso
   prévio, horas extras e DSR** (insumo para o cálculo do reflexo; a incidência da 1302 já é salarial).
 
