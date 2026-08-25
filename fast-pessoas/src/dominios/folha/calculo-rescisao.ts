@@ -1242,8 +1242,11 @@ export function avisoSuspensaoNoMesDoTermino(
 ): string | null {
   const ano = Number(dataTermino.slice(0, 4));
   const mes = Number(dataTermino.slice(5, 7));
-  let dias = 0;
-  let domingos = 0;
+  // União entre medidas (mesma régua do C1 no mensal): o MESMO dia — ou o
+  // mesmo domingo de DSR — nunca conta duas vezes quando duas janelas se
+  // tocam na mesma semana.
+  const diasNoSaldo = new Set<string>();
+  const domingosNoSaldo = new Set<string>();
   const ids: number[] = [];
   for (const suspensao of suspensoes) {
     // Começa depois do término: fora do período do saldo (defesa — a busca do
@@ -1259,19 +1262,22 @@ export function avisoSuspensaoNoMesDoTermino(
       suspensao.inicio,
       fimCapado
     );
-    const domingosNoSaldo = recorte.domingos_dsr.filter(
+    const diasDaMedida = recorte.dias.filter((dia) => dia <= dataTermino);
+    const domingosDaMedida = recorte.domingos_dsr.filter(
       (domingo) => domingo <= dataTermino
     );
-    if (recorte.dias === 0 && domingosNoSaldo.length === 0) continue;
-    dias += recorte.dias;
-    domingos += domingosNoSaldo.length;
+    if (diasDaMedida.length === 0 && domingosDaMedida.length === 0) continue;
+    for (const dia of diasDaMedida) diasNoSaldo.add(dia);
+    for (const domingo of domingosDaMedida) domingosNoSaldo.add(domingo);
     ids.push(suspensao.medida_id);
   }
   if (ids.length === 0) return null;
   const parteDsr =
-    domingos > 0 ? ` e ${domingos} DSR da semana da suspensão (Lei 605/49)` : "";
+    domingosNoSaldo.size > 0
+      ? ` e ${domingosNoSaldo.size} DSR da semana da suspensão (Lei 605/49)`
+      : "";
   return (
-    `suspensão disciplinar de ${dias} dia(s)${parteDsr} no mês do término NÃO descontada nesta prévia ` +
+    `suspensão disciplinar de ${diasNoSaldo.size} dia(s)${parteDsr} no mês do término NÃO descontada nesta prévia ` +
     `(medida${ids.length > 1 ? "s" : ""} #${ids.join(", #")}) — o cálculo mensal exclui o desligado: ` +
     "desconte no acerto da rescisão"
   );
