@@ -800,7 +800,7 @@ export function PainelDocumentos({
                           >
                             Baixar
                           </a>
-                          {podeGerirCiclo &&
+                          {(podeGerirCiclo || podeLiberar) &&
                             documento.exige_ciencia &&
                             documento.colaborador_id === null && (
                               <button
@@ -846,6 +846,7 @@ export function PainelDocumentos({
           key={cicloAberto}
           documentoId={cicloAberto}
           usuarioId={usuarioId}
+          podeGerir={podeGerirCiclo}
           podeLiberar={podeLiberar}
           aoFechar={() => {
             setCicloAberto(null);

@@ -104,12 +104,16 @@ function classeDoEstado(estado: EstadoPendencia): string {
 export function QuadroCiclo({
   documentoId,
   usuarioId,
+  podeGerir,
   podeLiberar,
   aoFechar,
 }: {
   documentoId: number;
   /** Usuário da sessão — sai das opções de testemunha (quem abre não testemunha). */
   usuarioId: number;
+  /** rh.conduta.gerir: lembrete, abrir ato, desfecho. */
+  podeGerir: boolean;
+  /** rh.conduta.liberar: liberar acesso bloqueado. */
   podeLiberar: boolean;
   aoFechar: () => void;
 }) {
@@ -298,14 +302,16 @@ export function QuadroCiclo({
             </p>
           </div>
           <div className={estilos.acoesLinha}>
-            <button
-              className={estilos.botaoLinha}
-              type="button"
-              disabled={ocupado || !ciclo}
-              onClick={enviarLembrete}
-            >
-              Enviar lembrete aos pendentes
-            </button>
+            {podeGerir && (
+              <button
+                className={estilos.botaoLinha}
+                type="button"
+                disabled={ocupado || !ciclo}
+                onClick={enviarLembrete}
+              >
+                Enviar lembrete aos pendentes
+              </button>
+            )}
             <button
               className={estilos.botaoLinha}
               type="button"
@@ -384,16 +390,18 @@ export function QuadroCiclo({
                       </td>
                       <td>
                         <div className={estilos.acoesLinha}>
-                          {!pessoa.ciencia_em && pessoa.ato_id === null && (
-                            <button
-                              className={estilos.botaoLinha}
-                              type="button"
-                              disabled={ocupado}
-                              onClick={() => abrirFormularioAto(pessoa)}
-                            >
-                              Abrir ato
-                            </button>
-                          )}
+                          {podeGerir &&
+                            !pessoa.ciencia_em &&
+                            pessoa.ato_id === null && (
+                              <button
+                                className={estilos.botaoLinha}
+                                type="button"
+                                disabled={ocupado}
+                                onClick={() => abrirFormularioAto(pessoa)}
+                              >
+                                Abrir ato
+                              </button>
+                            )}
                           {podeLiberar && pessoa.bloqueia && (
                             <button
                               className={estilos.botaoLinha}
@@ -548,7 +556,7 @@ export function QuadroCiclo({
                           ato.desfecho_em
                         )}`}
                     </p>
-                  ) : (
+                  ) : podeGerir ? (
                     <div className={estilos.linhaTestemunho}>
                       <input
                         className={estilos.campo}
@@ -572,6 +580,8 @@ export function QuadroCiclo({
                         Registrar desfecho
                       </button>
                     </div>
+                  ) : (
+                    <p className={estilos.detalheAto}>Sem desfecho registrado.</p>
                   )}
                 </div>
               ))}
