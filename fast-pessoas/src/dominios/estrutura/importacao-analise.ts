@@ -187,6 +187,61 @@ function completarColunas(colunas: string[], total: number): string[] {
   return completas;
 }
 
+// ------------------------------------------------------------------ identidade da empresa
+
+/** O que o importador precisa saber de uma empresa que JÁ existe (só ativas). */
+export interface EmpresaExistente {
+  id: number;
+  cnpj: string | null;
+}
+
+export type DecisaoEmpresa =
+  | { acao: "usar"; empresa: EmpresaExistente }
+  | { acao: "criar" }
+  | { acao: "rejeitar"; motivo: string };
+
+/**
+ * Decide o que a linha faz com a coluna empresa. Regra (B1): com CNPJ
+ * INFORMADO na linha, o casamento é SÓ por CNPJ — o CNPJ é a identidade
+ * fiscal, e casar por nome aqui já pendurou filial nova (CNPJ próprio) na
+ * matriz homônima, corrompendo o catálogo em silêncio. Miss por CNPJ com
+ * homônima no banco é REJEIÇÃO com motivo (nunca "já existia" nem criação às
+ * cegas); sem homônima, cria. O fallback por nome vale apenas quando a linha
+ * veio SEM CNPJ.
+ */
+export function decidirEmpresaDaLinha(
+  dados: { empresa_nome: string; cnpj: string | null },
+  porCnpj: ReadonlyMap<string, EmpresaExistente>,
+  porNome: ReadonlyMap<string, EmpresaExistente>
+): DecisaoEmpresa {
+  const homonima = porNome.get(chaveDeNome(dados.empresa_nome));
+  if (dados.cnpj !== null) {
+    const mesmaIdentidadeFiscal = porCnpj.get(dados.cnpj);
+    if (mesmaIdentidadeFiscal) {
+      return { acao: "usar", empresa: mesmaIdentidadeFiscal };
+    }
+    if (homonima) {
+      if (homonima.cnpj !== null) {
+        return {
+          acao: "rejeitar",
+          motivo:
+            `Empresa homônima "${dados.empresa_nome}" já existe com CNPJ diferente — ` +
+            "confira o CNPJ da linha ou diferencie o nome (a carga não casa por nome quando o CNPJ veio informado)",
+        };
+      }
+      return {
+        acao: "rejeitar",
+        motivo:
+          `Empresa homônima "${dados.empresa_nome}" já existe SEM CNPJ no cadastro — ` +
+          "confira: se é a mesma empresa, complete o CNPJ pela tela de estrutura; se é outra, diferencie o nome",
+      };
+    }
+    return { acao: "criar" };
+  }
+  if (homonima) return { acao: "usar", empresa: homonima };
+  return { acao: "criar" };
+}
+
 // ------------------------------------------------------------------ estrutura
 
 const LIMITES = {

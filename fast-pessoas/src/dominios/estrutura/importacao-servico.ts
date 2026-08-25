@@ -40,8 +40,10 @@ import {
   chaveDeNome,
   COLUNAS_CARGOS,
   COLUNAS_ESTRUTURA,
+  decidirEmpresaDaLinha,
   dividirLinhas,
   ehCabecalho,
+  EmpresaExistente,
   LinhaRejeitadaCarga,
   ResultadoCarga,
 } from "./importacao-analise";
@@ -144,22 +146,18 @@ async function gravarLote(
 
 // ------------------------------------------------------------------ estrutura
 
-interface EmpresaConhecida {
-  id: number;
-  inativa: boolean;
-}
-
 async function carregarEmpresas(): Promise<{
-  porCnpj: Map<string, EmpresaConhecida>;
-  porNome: Map<string, EmpresaConhecida>;
+  porCnpj: Map<string, EmpresaExistente>;
+  porNome: Map<string, EmpresaExistente>;
 }> {
-  const porCnpj = new Map<string, EmpresaConhecida>();
-  const porNome = new Map<string, EmpresaConhecida>();
+  const porCnpj = new Map<string, EmpresaExistente>();
+  const porNome = new Map<string, EmpresaExistente>();
   for (const empresa of await listarEmpresasAdministraveis()) {
-    const conhecida = {
-      id: empresa.id,
-      inativa: empresa.inativada_em !== null,
-    };
+    // Inativa fica FORA dos mapas de identidade: além de a carga não dever
+    // pendurar nada nela, a listagem ordena inativas por último — uma homônima
+    // inativa SOBRESCREVIA a ativa em porNome e o CC ia parar na empresa errada.
+    if (empresa.inativada_em !== null) continue;
+    const conhecida = { id: empresa.id, cnpj: empresa.cnpj };
     if (empresa.cnpj) porCnpj.set(empresa.cnpj, conhecida);
     if (empresa.nome_fantasia) {
       porNome.set(chaveDeNome(empresa.nome_fantasia), conhecida);
@@ -209,13 +207,21 @@ export async function importarEstrutura(
     try {
       let criouAlgo = false;
 
-      // -- EMPRESA. Identidade: CNPJ primeiro (é a identidade fiscal); sem
-      // CNPJ — ou com CNPJ ainda não cadastrado — vale o nome normalizado.
-      // A carga NÃO atualiza CNPJ de empresa existente: correção de cadastro
-      // é ato da tela de estrutura (criarVersaoEmpresa), auditado um a um.
-      let empresa =
-        (dados.cnpj ? empresas.porCnpj.get(dados.cnpj) : undefined) ??
-        empresas.porNome.get(chaveDeNome(dados.empresa_nome));
+      // -- EMPRESA. Identidade: com CNPJ na linha, SÓ o CNPJ casa (B1) —
+      // homônima com CNPJ divergente ou sem CNPJ no banco vira rejeição com
+      // motivo, nunca "já existia". O fallback por nome vale só para linha
+      // sem CNPJ. A carga NÃO atualiza CNPJ de empresa existente: correção de
+      // cadastro é ato da tela de estrutura (criarVersaoEmpresa), auditado.
+      const decisao = decidirEmpresaDaLinha(
+        dados,
+        empresas.porCnpj,
+        empresas.porNome
+      );
+      if (decisao.acao === "rejeitar") {
+        throw new RecusaDeLinha(decisao.motivo);
+      }
+      let empresa: EmpresaExistente | undefined =
+        decisao.acao === "usar" ? decisao.empresa : undefined;
       if (!empresa) {
         if (!dados.tipo) {
           throw new RecusaDeLinha(
@@ -230,9 +236,11 @@ export async function importarEstrutura(
           inicio_vigencia: hoje,
         });
         empresas = await carregarEmpresas();
-        empresa =
-          (dados.cnpj ? empresas.porCnpj.get(dados.cnpj) : undefined) ??
-          empresas.porNome.get(chaveDeNome(dados.empresa_nome));
+        // Reencontro pela MESMA régua do casamento: CNPJ quando a linha o
+        // informou; nome só quando a linha veio sem CNPJ.
+        empresa = dados.cnpj
+          ? empresas.porCnpj.get(dados.cnpj)
+          : empresas.porNome.get(chaveDeNome(dados.empresa_nome));
         if (!empresa) {
           throw new RecusaDeLinha(
             "Empresa criada mas não reencontrada na releitura — reimporte a linha"

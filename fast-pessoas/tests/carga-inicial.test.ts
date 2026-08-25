@@ -5,8 +5,10 @@ import {
   analisarLinhaCargo,
   analisarLinhaEstrutura,
   chaveDeNome,
+  decidirEmpresaDaLinha,
   dividirLinhas,
   ehCabecalho,
+  EmpresaExistente,
   normalizarCnpj,
   reaisParaCentavos,
 } from "../src/dominios/estrutura/importacao-analise";
@@ -61,6 +63,89 @@ test("CNPJ aceita máscara, exige 14 dígitos e trata vazio como ainda-sem-CNPJ"
   assert.deepEqual(normalizarCnpj("  "), { ok: true, cnpj: null });
   const curto = normalizarCnpj("123");
   assert.equal(curto.ok, false);
+});
+
+// ---------------------------------------------------------------- empresa: casamento por CNPJ (B1)
+
+function mapas(...empresas: { nome: string; empresa: EmpresaExistente }[]) {
+  const porCnpj = new Map<string, EmpresaExistente>();
+  const porNome = new Map<string, EmpresaExistente>();
+  for (const { nome, empresa } of empresas) {
+    if (empresa.cnpj) porCnpj.set(empresa.cnpj, empresa);
+    porNome.set(chaveDeNome(nome), empresa);
+  }
+  return { porCnpj, porNome };
+}
+
+test("B1: com CNPJ informado, homônima com CNPJ DIFERENTE rejeita — a filial nova nunca casa por nome com a matriz", () => {
+  // O caso exato do defeito: "Fast Filial" nova (CNPJ próprio) caía na
+  // homônima existente por nome e o CC pendurava na empresa errada.
+  const { porCnpj, porNome } = mapas({
+    nome: "Fast Filial",
+    empresa: { id: 1, cnpj: "11111111000191" },
+  });
+  const decisao = decidirEmpresaDaLinha(
+    { empresa_nome: "Fast Filial", cnpj: "22222222000191" },
+    porCnpj,
+    porNome
+  );
+  assert.equal(decisao.acao, "rejeitar");
+  if (decisao.acao === "rejeitar") {
+    assert.match(decisao.motivo, /homônima/);
+    assert.match(decisao.motivo, /CNPJ diferente/);
+  }
+});
+
+test("B1: com CNPJ informado e homônima SEM CNPJ no banco, rejeita pedindo conferência", () => {
+  const { porCnpj, porNome } = mapas({
+    nome: "Fast Filial",
+    empresa: { id: 1, cnpj: null },
+  });
+  const decisao = decidirEmpresaDaLinha(
+    { empresa_nome: "fast  FILIAL", cnpj: "22222222000191" },
+    porCnpj,
+    porNome
+  );
+  assert.equal(decisao.acao, "rejeitar");
+  if (decisao.acao === "rejeitar") assert.match(decisao.motivo, /SEM CNPJ/);
+});
+
+test("B1: com CNPJ informado, CNPJ que bate USA a empresa (mesmo com nome diferente) e sem homônima CRIA", () => {
+  const existente: EmpresaExistente = { id: 7, cnpj: "11111111000191" };
+  const { porCnpj, porNome } = mapas({ nome: "Fast Matriz", empresa: existente });
+
+  const bateu = decidirEmpresaDaLinha(
+    { empresa_nome: "Fast Matriz (novo nome)", cnpj: "11111111000191" },
+    porCnpj,
+    porNome
+  );
+  assert.deepEqual(bateu, { acao: "usar", empresa: existente });
+
+  const nova = decidirEmpresaDaLinha(
+    { empresa_nome: "Fast Nordeste", cnpj: "33333333000191" },
+    porCnpj,
+    porNome
+  );
+  assert.deepEqual(nova, { acao: "criar" });
+});
+
+test("B1: fallback por nome vale SÓ quando a linha veio sem CNPJ", () => {
+  const existente: EmpresaExistente = { id: 7, cnpj: "11111111000191" };
+  const { porCnpj, porNome } = mapas({ nome: "Fast Matriz", empresa: existente });
+
+  const porNomeOk = decidirEmpresaDaLinha(
+    { empresa_nome: "FAST  matriz", cnpj: null },
+    porCnpj,
+    porNome
+  );
+  assert.deepEqual(porNomeOk, { acao: "usar", empresa: existente });
+
+  const semNada = decidirEmpresaDaLinha(
+    { empresa_nome: "Fast Sul", cnpj: null },
+    porCnpj,
+    porNome
+  );
+  assert.deepEqual(semNada, { acao: "criar" });
 });
 
 // ---------------------------------------------------------------- linhas do arquivo
