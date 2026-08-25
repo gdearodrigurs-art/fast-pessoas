@@ -87,6 +87,7 @@ import {
   CODIGO_MULTA_FGTS,
   CODIGO_SALDO_SALARIO,
 } from "./esquemas";
+import { apurarSuspensaoNaCompetencia } from "./suspensao";
 import { DIAS_GOZO_MAXIMO, DIAS_GOZO_MINIMO } from "../ferias/esquemas";
 
 // ------------------------------------------------------------------ contratos
@@ -1209,4 +1210,69 @@ export function calcularRescisao(
     base_inss_decimo_centavos: baseInssDecimo,
     base_irrf_decimo_centavos: baseIrrfDecimo,
   };
+}
+
+// ------------------------------------------------------------------ costura disciplinar (D3)
+
+/** Janela de suspensão disciplinar candidata ao aviso da prévia (D3). */
+export interface SuspensaoNoTermino {
+  medida_id: number;
+  inicio: string;
+  /** null = janela ABERTA (a 0080 permite): conta até o término. */
+  fim: string | null;
+}
+
+/**
+ * O AVISO da costura rescisão × disciplinar (D3). A prévia NÃO desconta a
+ * suspensão do mês do término — o desconto D2:a pertence ao cálculo MENSAL, e
+ * o mensal exclui o desligado, então sem este aviso o desconto simplesmente
+ * nunca aconteceria. O desenho do acerto (onde o desconto de fato entra) é da
+ * integração futura; até lá o DP é avisado com dias, DSR e os ids das medidas.
+ *
+ * A régua é a MESMA do mensal (reuso de apurarSuspensaoNaCompetencia), com um
+ * recorte a mais: o saldo paga até o TÉRMINO, então a janela é capada nele e
+ * só contam os domingos de DSR até ele — dia de suspensão depois do término
+ * não é dia pago, e DSR de domingo posterior ao término não existe no saldo.
+ *
+ * Devolve null quando nenhuma medida tem efeito no período do saldo.
+ */
+export function avisoSuspensaoNoMesDoTermino(
+  dataTermino: string,
+  suspensoes: SuspensaoNoTermino[]
+): string | null {
+  const ano = Number(dataTermino.slice(0, 4));
+  const mes = Number(dataTermino.slice(5, 7));
+  let dias = 0;
+  let domingos = 0;
+  const ids: number[] = [];
+  for (const suspensao of suspensoes) {
+    // Começa depois do término: fora do período do saldo (defesa — a busca do
+    // serviço já não a traria).
+    if (suspensao.inicio > dataTermino) continue;
+    const fimCapado =
+      suspensao.fim === null || suspensao.fim > dataTermino
+        ? dataTermino
+        : suspensao.fim;
+    const recorte = apurarSuspensaoNaCompetencia(
+      ano,
+      mes,
+      suspensao.inicio,
+      fimCapado
+    );
+    const domingosNoSaldo = recorte.domingos_dsr.filter(
+      (domingo) => domingo <= dataTermino
+    );
+    if (recorte.dias === 0 && domingosNoSaldo.length === 0) continue;
+    dias += recorte.dias;
+    domingos += domingosNoSaldo.length;
+    ids.push(suspensao.medida_id);
+  }
+  if (ids.length === 0) return null;
+  const parteDsr =
+    domingos > 0 ? ` e ${domingos} DSR da semana da suspensão (Lei 605/49)` : "";
+  return (
+    `suspensão disciplinar de ${dias} dia(s)${parteDsr} no mês do término NÃO descontada nesta prévia ` +
+    `(medida${ids.length > 1 ? "s" : ""} #${ids.join(", #")}) — o cálculo mensal exclui o desligado: ` +
+    "desconte no acerto da rescisão"
+  );
 }

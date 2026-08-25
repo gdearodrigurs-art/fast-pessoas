@@ -28,6 +28,7 @@ import {
   AVISO_FGTS_SALDO_EXTERNO,
   AVISO_PERIODO_EM_CURSO_AUSENTE,
   AVISO_PROJECAO_AVISO_NAO_APLICADA,
+  avisoSuspensaoNoMesDoTermino,
   calcularRescisao,
   diasDeAvisoProporcional,
   type EntradaMotorRescisao,
@@ -621,6 +622,70 @@ test("rubrica de rescisão fora do catálogo derruba com mensagem acionável", (
       }),
     /Rubrica 1702 sem versão vigente/
   );
+});
+
+// ------------------------------------------------------------------ suspensão no mês do término (D3)
+// Calendário dos casos (o mesmo de folha-suspensao.test.ts): agosto/2026
+// começa num SÁBADO (domingos 2, 9, 16, 23 e 30) e setembro/2026 numa TERÇA
+// (domingos 6, 13, 20 e 27).
+
+test("D3: suspensão no mês do término vira AVISO com dias e id — capada no término, DSR posterior fora", () => {
+  // Término sábado 15/08. Suspensão seg 10/08 a qui 20/08 (medida 7): no
+  // período do saldo contam 10–15 = 6 dias; o domingo 16/08 cai DEPOIS do
+  // término — não há DSR a descontar no saldo.
+  const aviso = avisoSuspensaoNoMesDoTermino("2026-08-15", [
+    { medida_id: 7, inicio: "2026-08-10", fim: "2026-08-20" },
+  ]);
+  assert.ok(aviso);
+  assert.match(aviso, /6 dia/);
+  assert.match(aviso, /#7/);
+  assert.match(aviso, /NÃO descontada/);
+  assert.match(aviso, /acerto/);
+  assert.doesNotMatch(aviso, /DSR/);
+});
+
+test("D3: DSR perdido dentro do saldo entra no aviso; medida sem efeito no mês do término não gera aviso", () => {
+  // Término 31/08. Suspensão 10–14/08: 5 dias + o DSR do domingo 16/08.
+  const aviso = avisoSuspensaoNoMesDoTermino("2026-08-31", [
+    { medida_id: 3, inicio: "2026-08-10", fim: "2026-08-14" },
+  ]);
+  assert.ok(aviso);
+  assert.match(aviso, /5 dia/);
+  assert.match(aviso, /1 DSR/);
+  assert.match(aviso, /#3/);
+  // Medida de junho: nem dia nem DSR em agosto — nada de aviso.
+  assert.equal(
+    avisoSuspensaoNoMesDoTermino("2026-08-31", [
+      { medida_id: 4, inicio: "2026-06-01", fim: "2026-06-05" },
+    ]),
+    null
+  );
+});
+
+test("D3: janela ABERTA conta até o término; várias medidas somam e o aviso lista todos os ids", () => {
+  // Término qua 05/08. Aberta desde seg 03/08: 3 dias (03–05) — o domingo
+  // 09/08 fica depois do término e não conta. Mais a medida do sábado 1º/08:
+  // 1 dia + o DSR do domingo 02/08 (dentro do saldo). Total: 4 dias e 1 DSR.
+  const aviso = avisoSuspensaoNoMesDoTermino("2026-08-05", [
+    { medida_id: 9, inicio: "2026-08-03", fim: null },
+    { medida_id: 11, inicio: "2026-08-01", fim: "2026-08-01" },
+  ]);
+  assert.ok(aviso);
+  assert.match(aviso, /4 dia/);
+  assert.match(aviso, /1 DSR/);
+  assert.match(aviso, /medidas #9, #11/);
+});
+
+test("D3: suspensão que acabou no mês ANTERIOR ainda derruba o DSR do 1º domingo do mês do término", () => {
+  // Setembro/2026 começa numa terça; 1º domingo 06/09, semana 31/08–05/09.
+  // Suspensão 24–31/08 terminou antes do mês do término, mas alcança a semana
+  // do domingo 06/09: 0 dia corrido no mês + 1 DSR.
+  const aviso = avisoSuspensaoNoMesDoTermino("2026-09-30", [
+    { medida_id: 12, inicio: "2026-08-24", fim: "2026-08-31" },
+  ]);
+  assert.ok(aviso);
+  assert.match(aviso, /0 dia/);
+  assert.match(aviso, /1 DSR/);
 });
 
 // ------------------------------------------------------------------ proteção do catálogo

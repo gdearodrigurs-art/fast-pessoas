@@ -41,6 +41,7 @@ import {
   ResultadoMotorDecimo,
 } from "./calculo-13";
 import {
+  avisoSuspensaoNoMesDoTermino,
   calcularRescisao,
   ResultadoMotorRescisao,
 } from "./calculo-rescisao";
@@ -2166,7 +2167,8 @@ export interface PreviaRescisao {
  * acontecer não tem valor a prever. Em andamento ou encerrado, tem.
  *
  * O SALDO DO FGTS é dado EXTERNO (extrato da Caixa) — vem do chamador quando
- * houver; sem ele a multa sai zerada com AVISO (decisão registrada no motor).
+ * houver; sem ele a multa sai SÓ sobre os depósitos da própria rescisão, com
+ * AVISO (decisão registrada no motor — Lei 8.036/90, art. 18, §1º).
  */
 export async function calcularPreviaRescisao(
   sessao: PayloadSessao,
@@ -2258,6 +2260,34 @@ export async function calcularPreviaRescisao(
       );
     }
     throw erro;
+  }
+
+  // D3 (costura rescisão × disciplinar): esta prévia NÃO desconta a suspensão
+  // disciplinar do mês do término, e o cálculo MENSAL exclui o desligado —
+  // sem aviso, o desconto D2:a simplesmente nunca aconteceria. A busca é a
+  // MESMA do cálculo mensal (janela intersectando a competência do término,
+  // estendida 6 dias para trás pelo DSR — suspensao.ts); o recorte pelo mês e
+  // o cap no término são do helper puro. O desconto em si é desenho do ACERTO
+  // (integração futura) — aqui só o aviso explícito, com os ids das medidas.
+  const anoTermino = Number(dataRef.slice(0, 4));
+  const mesTermino = Number(dataRef.slice(5, 7));
+  const suspensoesDoMesDoTermino = await comTransacao(
+    sessao.usuario_id,
+    (cliente) =>
+      listarSuspensoesParaCalculo(
+        cliente,
+        inicioBuscaSuspensao(anoTermino, mesTermino),
+        dataRef
+      )
+  );
+  const avisoSuspensao = avisoSuspensaoNoMesDoTermino(
+    dataRef,
+    suspensoesDoMesDoTermino.filter(
+      (medida) => medida.colaborador_id === processo.colaborador_id
+    )
+  );
+  if (avisoSuspensao !== null) {
+    resultado.avisos.push(avisoSuspensao);
   }
 
   // Valor de rescisão deriva do salário — dado mais sensível do sistema: toda
