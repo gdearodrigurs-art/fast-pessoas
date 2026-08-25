@@ -56,8 +56,9 @@ function adicionarMeses(dataIso: string, meses: number): string {
   const data = paraUtc(dataIso);
   const dia = data.getUTCDate();
   data.setUTCMonth(data.getUTCMonth() + meses);
-  // Estouro de mês (ex.: 28/02 + 12 meses caindo em ano sem 29): trava no
-  // último dia do mês.
+  // Estouro de mês (ex.: aquisitivo terminando em 29/02, ano bissexto, + 12
+  // meses: o ano seguinte não tem 29/02 e o JS rolaria para 01/03): trava no
+  // último dia do mês — 28/02.
   if (data.getUTCDate() !== dia) {
     data.setUTCDate(0);
   }

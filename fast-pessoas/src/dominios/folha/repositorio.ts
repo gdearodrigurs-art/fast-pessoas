@@ -2114,9 +2114,10 @@ export interface ColaboradorParaFerias {
 /**
  * Salário e dependentes COMO ESTAVAM na data de referência da prévia — a mesma
  * mecânica de `listarColaboradoresParaCalculo` (LATERAL com LIMIT 1 pela
- * vigência mais recente; dependente conta por NASCIMENTO), para UMA pessoa.
- * Null quando não há posição com salário vigente na data — a prévia não tem o
- * que pagar e o serviço explica isso em vez de chutar o salário de hoje.
+ * vigência mais recente; dependente conta por NASCIMENTO e só o ELEGÍVEL,
+ * deduz_irrf = true), para UMA pessoa. Null quando não há posição com salário
+ * vigente na data — a prévia não tem o que pagar e o serviço explica isso em
+ * vez de chutar o salário de hoje.
  */
 export async function buscarColaboradorParaFerias(
   colaboradorId: number,
@@ -2124,8 +2125,14 @@ export async function buscarColaboradorParaFerias(
 ): Promise<ColaboradorParaFerias | null> {
   const linhas = await consultar<{ salario: string; dependentes: string }>(
     `SELECT p.salario::text AS salario,
+            -- Só dependente ELEGÍVEL abate no IRRF (pendência #9, migration
+            -- 0061) — a MESMA regra do motor mensal em
+            -- listarColaboradoresParaCalculo: a prévia não pode deduzir o que
+            -- a folha vai recusar. Elegibilidade (deduz_irrf) e vigência
+            -- (nascimento) são ORTOGONAIS; aqui somam.
             (SELECT COUNT(*) FROM rh.dependente d
               WHERE d.colaborador_id = c.id
+                AND d.deduz_irrf = true
                 AND (d.nascimento IS NULL OR d.nascimento <= $2)) AS dependentes
        FROM rh.colaborador c
        JOIN LATERAL (

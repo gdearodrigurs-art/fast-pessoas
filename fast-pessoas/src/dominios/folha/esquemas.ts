@@ -174,9 +174,10 @@ export const CODIGOS_AUTOMATICOS: readonly string[] = [
 /**
  * Rubricas que o sistema procura PELO CÓDIGO: as automáticas do motor mais as
  * que a importação do ponto (HE 50/100, adicional noturno, faltas) e o desconto
- * de benefício lançam sozinhas. Encerrar qualquer uma derruba o cálculo da
- * competência inteira ou a importação — o encerramento recusa, e a tela nem
- * oferece o botão.
+ * de benefício lançam sozinhas — e as do MOTOR DE FÉRIAS (calculo-ferias.ts),
+ * que também resolve 0136/0137/1401 pelo código. Encerrar qualquer uma derruba
+ * o cálculo da competência inteira, a importação ou a prévia/folha de férias —
+ * o encerramento recusa, e a tela nem oferece o botão.
  */
 export const CODIGOS_DO_MOTOR: readonly string[] = [
   ...CODIGOS_AUTOMATICOS,
@@ -185,6 +186,9 @@ export const CODIGOS_DO_MOTOR: readonly string[] = [
   CODIGO_ADICIONAL_NOTURNO,
   CODIGO_FALTAS,
   CODIGO_DESCONTO_BENEFICIO,
+  CODIGO_FERIAS,
+  CODIGO_ADICIONAL_FERIAS,
+  CODIGO_ABONO_PECUNIARIO,
 ];
 
 const esquemaDinheiro = z
