@@ -5,7 +5,11 @@ import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
 import { armazenamentoBytea } from "../documentos/armazenamento";
-import { formatarTamanho, TAMANHO_MAXIMO_BYTES } from "../documentos/esquemas";
+import {
+  CATEGORIA_PESQUISA_SOCIAL,
+  formatarTamanho,
+  TAMANHO_MAXIMO_BYTES,
+} from "../documentos/esquemas";
 import {
   calcularPrazosExperiencia,
   ROTULOS_ESTADO_PROCESSO,
@@ -1183,9 +1187,10 @@ const DEPS_PESQUISA_REAIS: DepsPesquisaSocial = {
 /**
  * Registra o DESFECHO da pesquisa social (aprovado/reprovado) da candidatura
  * QUE ESTÁ na etapa de pesquisa social, com anexo opcional no GED. O anexo vai
- * para rh.documento como categoria "outro" e SENSÍVEL (o acervo geral do GED
- * não o mostra a todo logado) — quem o alcança por aqui é rs.gerir, com trilha
- * (G3:a). Desfecho é único por candidatura: correção não sobrescreve história.
+ * para rh.documento na categoria PRÓPRIA e OCULTA 'pesquisa_social' (A2/G3:a):
+ * o acervo do GED nunca a lista, e a visibilidade — inclusive no download
+ * genérico — exige rs.gerir com trilha (documento.sensivel.ver NÃO basta).
+ * Desfecho é único por candidatura: correção não sobrescreve história.
  */
 export async function registrarPesquisaSocial(
   sessao: PayloadSessao,
@@ -1255,7 +1260,10 @@ export async function registrarPesquisaSocial(
           .digest("hex");
         const guardado = await deps.guardarAnexo(cliente, {
           colaborador_id: null,
-          categoria: "outro", // decisão do dono: sem categoria nova no GED
+          // A2 (decisão G3:a): categoria própria e oculta — o GED não a lista
+          // e só rs.gerir a alcança; é também o que o trigger da 0101 usa para
+          // permitir o DELETE do expurgo (e nada além dele).
+          categoria: CATEGORIA_PESQUISA_SOCIAL,
           titulo: `Pesquisa social — ${candidatura.candidato_nome}`,
           nome_arquivo: anexo.nome,
           mime: anexo.mime,
@@ -1281,7 +1289,7 @@ export async function registrarPesquisaSocial(
               de: null,
               para: `Pesquisa social — ${candidatura.candidato_nome}`,
             },
-            Categoria: { de: null, para: "Outro" },
+            Categoria: { de: null, para: "Pesquisa social" },
             Arquivo: { de: null, para: anexo.nome },
             Tamanho: { de: null, para: formatarTamanho(anexo.conteudo.length) },
             "Sensível": { de: null, para: "Sim" },

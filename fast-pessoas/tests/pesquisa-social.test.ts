@@ -249,7 +249,7 @@ test("o desfecho é ÚNICO por candidatura — o segundo leva 409", async () => 
   );
 });
 
-test("desfecho com anexo: o arquivo entra no GED como 'outro' e SENSÍVEL, com hash do servidor", async () => {
+test("desfecho com anexo: o arquivo entra no GED na categoria própria 'pesquisa_social' e SENSÍVEL, com hash do servidor (A2)", async () => {
   const guardados: Parameters<DepsPesquisaSocial["guardarAnexo"]>[1][] = [];
   const inseridos: Parameters<DepsPesquisaSocial["inserirPesquisaSocial"]>[1][] =
     [];
@@ -276,9 +276,9 @@ test("desfecho com anexo: o arquivo entra no GED como 'outro' e SENSÍVEL, com h
     { resultado: "aprovado", anexo: ANEXO_OK },
     deps
   );
-  // O anexo foi para o GED do jeito decidido (G3:a + categoria do dono):
+  // O anexo foi para o GED do jeito decidido (G3:a + categoria própria, A2):
   assert.equal(guardados.length, 1);
-  assert.equal(guardados[0].categoria, "outro");
+  assert.equal(guardados[0].categoria, "pesquisa_social");
   assert.equal(guardados[0].sensivel, true);
   assert.equal(guardados[0].colaborador_id, null);
   assert.equal(guardados[0].exige_ciencia, false);

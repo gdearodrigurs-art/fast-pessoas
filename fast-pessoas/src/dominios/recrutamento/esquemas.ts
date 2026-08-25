@@ -381,8 +381,8 @@ export type CriacaoParecer = z.infer<typeof esquemaParecer>;
 /**
  * Desfecho da pesquisa social + anexo OPCIONAL, no caminho JSON base64 do GED
  * (molde esquemaEnvioBase64 de api/documentos POST). O anexo vai para
- * rh.documento (categoria "outro", sensível) pelo armazenamento do GED; o
- * vínculo fica em rh.pesquisa_social.
+ * rh.documento (categoria própria e oculta 'pesquisa_social', sensível — A2)
+ * pelo armazenamento do GED; o vínculo fica em rh.pesquisa_social.
  */
 export const esquemaPesquisaSocial = z.object({
   resultado: z.enum(RESULTADOS_PESQUISA_SOCIAL),

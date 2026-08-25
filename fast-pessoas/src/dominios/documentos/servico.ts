@@ -7,7 +7,11 @@ import { PayloadSessao } from "../identidade/esquemas";
 import { notificar, notificarLote } from "../notificacoes/servico";
 import { ArmazenamentoDocumentos, armazenamentoBytea } from "./armazenamento";
 import {
+  CATEGORIA_PESQUISA_SOCIAL,
   CategoriaDocumento,
+  CHAVE_DOCUMENTO_SENSIVEL_VER,
+  CHAVE_RS_GERIR,
+  decidirVisibilidade,
   envioEntraNoCiclo,
   EstadoPendencia,
   estadoDaPendencia,
@@ -63,7 +67,8 @@ const TABELA_CIENCIA = "rh.ciencia";
 // herda, por isso, o direito de ler o documento de todo o quadro — era o furo
 // que deixava recrutador e T&D vendo contrato de qualquer pessoa.
 const CHAVE_VER_TODOS = "documento.ver.todos";
-const CHAVE_SENSIVEL_VER = "documento.sensivel.ver";
+const CHAVE_SENSIVEL_VER = CHAVE_DOCUMENTO_SENSIVEL_VER;
+const CHAVE_VER = "documento.ver";
 
 // Ponto único de troca por object storage — o serviço só conhece a interface.
 const armazenamento: ArmazenamentoDocumentos = armazenamentoBytea;
@@ -86,42 +91,80 @@ async function temPermissao(
 }
 
 /**
- * Visibilidade de um documento específico. Escopo "todos" segue a chave
- * documento.ver.todos (RH/DP/diretoria) — checagem por chave, nunca por papel.
- * Fora do escopo ou sensível sem documento.sensivel.ver: 404 — ausência,
- * não máscara; quem não pode ver nem sabe que o documento existe.
+ * Costuras do ACERVO com o banco/armazenamento — o que os testes trocam por
+ * dublês (molde DepsLiberar/DepsPesquisaSocial, pendência 16.2). Produção
+ * nunca passa o parâmetro: as rotas chamam como sempre e caem em
+ * DEPS_ACERVO_REAIS.
+ */
+export interface DepsAcervo {
+  buscarMetadados: typeof buscarMetadados;
+  temPermissao: typeof temPermissao;
+  vinculosDoUsuario: typeof vinculosDoUsuario;
+  lerConteudo: ArmazenamentoDocumentos["lerConteudo"];
+  inserirCiencia: typeof inserirCiencia;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+  registrarAlteracao: typeof registrarAlteracao;
+  comTransacao: typeof comTransacao;
+}
+
+const DEPS_ACERVO_REAIS: DepsAcervo = {
+  buscarMetadados,
+  temPermissao,
+  vinculosDoUsuario,
+  lerConteudo: (id) => armazenamento.lerConteudo(id),
+  inserirCiencia,
+  registrarLeituraSensivel,
+  registrarAlteracao,
+  comTransacao,
+};
+
+/**
+ * Visibilidade de um documento específico. A REGRA é pura e mora em
+ * esquemas.ts (decidirVisibilidade): escopo "todos" pela chave
+ * documento.ver.todos, sensível por documento.sensivel.ver e — A2 — anexo de
+ * pesquisa social SÓ por rs.gerir (a chave de sensível não basta). Fora do
+ * alcance: 404 — ausência, não máscara; quem não pode ver nem sabe que o
+ * documento existe. Devolve a chave que precisa ir à trilha de leitura
+ * sensível (a que DE FATO autorizou — eixo 8), ou null para leitura comum.
  */
 async function exigirVisibilidade(
   sessao: PayloadSessao,
-  metadados: MetadadosDocumento
-): Promise<void> {
-  const verTodos = await temPermissao(sessao.usuario_id, CHAVE_VER_TODOS);
-  if (!verTodos && metadados.colaborador_id !== null) {
-    // Pela PESSOA, não pelo contrato corrente: o documento do vínculo anterior
-    // no mesmo grupo continua sendo de quem está pedindo.
-    const meusVinculos = await vinculosDoUsuario(sessao.usuario_id);
-    if (!meusVinculos.includes(metadados.colaborador_id)) {
-      throw new ErroHttp(404, "Documento não encontrado.");
-    }
-  }
-  if (
-    metadados.sensivel &&
-    !(await temPermissao(sessao.usuario_id, CHAVE_SENSIVEL_VER))
-  ) {
+  metadados: MetadadosDocumento,
+  deps: DepsAcervo = DEPS_ACERVO_REAIS
+): Promise<string | null> {
+  const chaves = {
+    verTodos: await deps.temPermissao(sessao.usuario_id, CHAVE_VER_TODOS),
+    sensivelVer: await deps.temPermissao(
+      sessao.usuario_id,
+      CHAVE_SENSIVEL_VER
+    ),
+    rsGerir: await deps.temPermissao(sessao.usuario_id, CHAVE_RS_GERIR),
+  };
+  // Pela PESSOA, não pelo contrato corrente: o documento do vínculo anterior
+  // no mesmo grupo continua sendo de quem está pedindo.
+  const meusVinculos =
+    metadados.colaborador_id !== null && !chaves.verTodos
+      ? await deps.vinculosDoUsuario(sessao.usuario_id)
+      : [];
+  const decisao = decidirVisibilidade(metadados, chaves, meusVinculos);
+  if (!decisao.visivel) {
     throw new ErroHttp(404, "Documento não encontrado.");
   }
+  return decisao.chaveTrilha;
 }
 
 async function gravarLeituraSensivel(
   usuarioId: number,
-  registroIds: string[]
+  registroIds: string[],
+  chavePermissao: string = CHAVE_SENSIVEL_VER,
+  deps: DepsAcervo = DEPS_ACERVO_REAIS
 ): Promise<void> {
   if (registroIds.length === 0) return;
-  await comTransacao(usuarioId, async (cliente) => {
+  await deps.comTransacao(usuarioId, async (cliente) => {
     for (const registroId of registroIds) {
-      await registrarLeituraSensivel(cliente, {
+      await deps.registrarLeituraSensivel(cliente, {
         usuarioId,
-        chavePermissao: CHAVE_SENSIVEL_VER,
+        chavePermissao,
         recurso: TABELA_DOCUMENTO,
         registroId,
       });
@@ -356,17 +399,25 @@ export async function enviarDocumento(
 
 export async function baixarDocumento(
   sessao: PayloadSessao,
-  id: number
+  id: number,
+  deps: DepsAcervo = DEPS_ACERVO_REAIS
 ): Promise<{ metadados: MetadadosDocumento; conteudo: Buffer }> {
-  const metadados = await buscarMetadados(id);
+  const metadados = await deps.buscarMetadados(id);
   if (!metadados) {
     throw new ErroHttp(404, "Documento não encontrado.");
   }
-  await exigirVisibilidade(sessao, metadados);
-  if (metadados.sensivel) {
-    await gravarLeituraSensivel(sessao.usuario_id, [String(id)]);
+  const chaveTrilha = await exigirVisibilidade(sessao, metadados, deps);
+  // A trilha grava a chave que DE FATO autorizou (eixo 8): sensível comum sai
+  // por documento.sensivel.ver; anexo de pesquisa social sai por rs.gerir.
+  if (chaveTrilha !== null) {
+    await gravarLeituraSensivel(
+      sessao.usuario_id,
+      [String(id)],
+      chaveTrilha,
+      deps
+    );
   }
-  const conteudo = await armazenamento.lerConteudo(id);
+  const conteudo = await deps.lerConteudo(id);
   if (!conteudo) {
     throw new ErroHttp(404, "Documento não encontrado.");
   }
@@ -375,13 +426,30 @@ export async function baixarDocumento(
 
 export async function darCiencia(
   sessao: PayloadSessao,
-  documentoId: number
+  documentoId: number,
+  deps: DepsAcervo = DEPS_ACERVO_REAIS
 ): Promise<{ dada_em: string; hash_no_momento: string }> {
-  const metadados = await buscarMetadados(documentoId);
+  const metadados = await deps.buscarMetadados(documentoId);
   if (!metadados) {
     throw new ErroHttp(404, "Documento não encontrado.");
   }
-  await exigirVisibilidade(sessao, metadados);
+  await exigirVisibilidade(sessao, metadados, deps);
+  // A4: o anexo da pesquisa social não é documento de ciência — uma ciência
+  // criaria FK de rh.ciencia sobre ele e travaria o expurgo legal (G3:a).
+  // Quem chega aqui já passou por rs.gerir (visibilidade); a recusa é 409.
+  if (metadados.categoria === CATEGORIA_PESQUISA_SOCIAL) {
+    throw new ErroHttp(409, "Este documento não colhe ciência.");
+  }
+  // A5: no CICLO (exige_ciencia) a autorização é a SESSÃO — a pendência é do
+  // próprio usuário, e amarrá-la a uma chave revogável (documento.ver) criava
+  // lockout sem cura para perfil sem a chave. Fora do ciclo, a porta continua
+  // sendo documento.ver, como sempre foi.
+  if (
+    !metadados.exige_ciencia &&
+    !(await deps.temPermissao(sessao.usuario_id, CHAVE_VER))
+  ) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
   // Versão vigente só (0086): documento substituído não colhe ciência nova —
   // a pendência aponta a ponta da cadeia. As ciências antigas ficam intactas.
   if (metadados.substituido_por_id !== null) {
@@ -392,13 +460,13 @@ export async function darCiencia(
   }
   let resultado: { dada_em: string; hash_no_momento: string };
   try {
-    resultado = await comTransacao(sessao.usuario_id, async (cliente) => {
-      const ciencia = await inserirCiencia(cliente, {
+    resultado = await deps.comTransacao(sessao.usuario_id, async (cliente) => {
+      const ciencia = await deps.inserirCiencia(cliente, {
         documentoId,
         usuarioId: sessao.usuario_id,
         hashNoMomento: metadados.hash_sha256,
       });
-      await registrarAlteracao(cliente, {
+      await deps.registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
         acao: "criacao",

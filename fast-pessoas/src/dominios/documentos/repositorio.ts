@@ -1,5 +1,6 @@
 import { PoolClient } from "pg";
 import { consultar } from "../../lib/banco";
+import { CATEGORIA_PESQUISA_SOCIAL } from "./esquemas";
 
 // Metadados e ciência. O conteúdo binário fica no repositório isolado de
 // armazenamento (./armazenamento.ts) — nunca sai daqui nas listagens.
@@ -96,9 +97,23 @@ interface LinhaMetadados extends Record<string, unknown> {
   substituido_por_id: string | null;
 }
 
-export async function listar(escopo: EscopoLista): Promise<DocumentoLista[]> {
+/**
+ * O WHERE da listagem do acervo, extraído puro para ser PROVÁVEL sem banco.
+ *
+ * A primeira condição não depende de escopo nenhum: o anexo da pesquisa
+ * social (categoria própria e oculta — A2/G3:a) NUNCA entra na listagem,
+ * nem para quem tem documento.ver.todos + documento.sensivel.ver. Quem gere
+ * a seleção (rs.gerir) o alcança pela rota da candidatura ou pelo download
+ * genérico — nunca pela lista.
+ */
+export function montarFiltroLista(escopo: EscopoLista): {
+  clausulaWhere: string;
+  parametros: unknown[];
+} {
   const parametros: unknown[] = [escopo.usuarioId];
   const condicoes: string[] = [];
+  parametros.push(CATEGORIA_PESQUISA_SOCIAL);
+  condicoes.push(`d.categoria <> $${parametros.length}`);
   if (!escopo.verTodos) {
     if (escopo.vinculosDoUsuario.length === 0) {
       condicoes.push("d.colaborador_id IS NULL");
@@ -113,8 +128,11 @@ export async function listar(escopo: EscopoLista): Promise<DocumentoLista[]> {
   if (!escopo.incluirSensiveis) {
     condicoes.push("d.sensivel = FALSE");
   }
-  const clausulaWhere =
-    condicoes.length > 0 ? `WHERE ${condicoes.join(" AND ")}` : "";
+  return { clausulaWhere: `WHERE ${condicoes.join(" AND ")}`, parametros };
+}
+
+export async function listar(escopo: EscopoLista): Promise<DocumentoLista[]> {
+  const { clausulaWhere, parametros } = montarFiltroLista(escopo);
   const linhas = await consultar<LinhaLista>(
     `SELECT d.id, d.colaborador_id, col.nome_completo AS colaborador_nome,
             d.categoria, d.titulo, d.nome_arquivo, d.mime, d.tamanho_bytes,

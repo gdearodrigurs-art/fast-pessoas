@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import type { PoolClient } from "pg";
 
 import {
+  CATEGORIA_PESQUISA_SOCIAL,
+  ChavesDeAcervo,
+  decidirVisibilidade,
   envioEntraNoCiclo,
   esquemaAbrirAto,
   esquemaEnvioBase64,
@@ -19,12 +22,16 @@ import {
   chegouAoFim,
   conteudoRenderizado,
 } from "../src/app/documentos/rolagem-ciencia";
-import type {
-  MetadadosDocumento,
-  PendenciaLinha,
+import {
+  montarFiltroLista,
+  type MetadadosDocumento,
+  type PendenciaLinha,
 } from "../src/dominios/documentos/repositorio";
 import {
+  baixarDocumento,
+  darCiencia,
   liberarAcesso,
+  type DepsAcervo,
   type DepsLiberar,
 } from "../src/dominios/documentos/servico";
 import type { PayloadSessao } from "../src/dominios/identidade/esquemas";
@@ -491,4 +498,249 @@ test("liberação legítima (outra pessoa, ativa, bloqueada) continua passando",
   );
   assert.equal(resultado.liberado_em, "2026-08-25T15:00:00.000Z");
   assert.deepEqual(notificados, [33]);
+});
+
+// ---------------------------------------------------------------- A2: anexo da pesquisa social — categoria própria e OCULTA
+// A regra de visibilidade é pura (decidirVisibilidade); o filtro da listagem
+// é provável sem banco (montarFiltroLista); e o serviço de download passa
+// pelas costuras DepsAcervo — a porta lateral do GED fecha nas três camadas.
+
+function chaves(parcial: Partial<ChavesDeAcervo>): ChavesDeAcervo {
+  return { verTodos: false, sensivelVer: false, rsGerir: false, ...parcial };
+}
+
+const DOC_PESQUISA_SOCIAL = {
+  colaborador_id: null,
+  sensivel: true,
+  categoria: CATEGORIA_PESQUISA_SOCIAL,
+};
+
+test("diretoria (ver.todos + sensivel.ver, SEM rs.gerir) não vê o anexo da pesquisa social (A2)", () => {
+  const decisao = decidirVisibilidade(
+    DOC_PESQUISA_SOCIAL,
+    chaves({ verTodos: true, sensivelVer: true }),
+    []
+  );
+  assert.equal(decisao.visivel, false);
+});
+
+test("rs.gerir vê o anexo — e a trilha leva a chave que DE FATO autorizou (A2)", () => {
+  const decisao = decidirVisibilidade(
+    DOC_PESQUISA_SOCIAL,
+    chaves({ rsGerir: true }),
+    []
+  );
+  assert.deepEqual(decisao, { visivel: true, chaveTrilha: "rs.gerir" });
+});
+
+test("sensível COMUM continua saindo por documento.sensivel.ver, com trilha (A2 não mexe no resto)", () => {
+  const docSensivel = {
+    colaborador_id: null,
+    sensivel: true,
+    categoria: "contrato",
+  };
+  assert.equal(
+    decidirVisibilidade(docSensivel, chaves({}), []).visivel,
+    false
+  );
+  assert.deepEqual(decidirVisibilidade(docSensivel, chaves({ sensivelVer: true }), []), {
+    visivel: true,
+    chaveTrilha: "documento.sensivel.ver",
+  });
+});
+
+test("documento de colaborador segue o escopo por vínculo (A2 não mexe no resto)", () => {
+  const docPessoal = { colaborador_id: 7, sensivel: false, categoria: "outro" };
+  assert.equal(decidirVisibilidade(docPessoal, chaves({}), [3, 4]).visivel, false);
+  assert.deepEqual(decidirVisibilidade(docPessoal, chaves({}), [7]), {
+    visivel: true,
+    chaveTrilha: null,
+  });
+  assert.equal(
+    decidirVisibilidade(docPessoal, chaves({ verTodos: true }), []).visivel,
+    true
+  );
+});
+
+test("a listagem do acervo EXCLUI a categoria pesquisa_social até no escopo mais largo (A2)", () => {
+  const maisLargo = montarFiltroLista({
+    usuarioId: 1,
+    verTodos: true,
+    vinculosDoUsuario: [],
+    incluirSensiveis: true,
+  });
+  assert.match(maisLargo.clausulaWhere, /d\.categoria <> \$2/);
+  assert.equal(maisLargo.parametros[1], CATEGORIA_PESQUISA_SOCIAL);
+
+  const restrito = montarFiltroLista({
+    usuarioId: 1,
+    verTodos: false,
+    vinculosDoUsuario: [7],
+    incluirSensiveis: false,
+  });
+  assert.match(restrito.clausulaWhere, /d\.categoria <> \$2/);
+  // o vínculo veio DEPOIS da categoria — o índice dos parâmetros não colide
+  assert.match(restrito.clausulaWhere, /ANY\(\$3::bigint\[\]\)/);
+});
+
+// ---------------------------------------------------------------- A2/A4/A5: darCiencia e baixarDocumento pelas costuras DepsAcervo
+
+const SESSAO_COMUM: PayloadSessao = {
+  usuario_id: 41,
+  papel: "funcionario",
+  nome: "Pessoa do Quadro",
+};
+
+const METADADOS_PESQUISA: MetadadosDocumento = {
+  id: 91,
+  colaborador_id: null,
+  categoria: CATEGORIA_PESQUISA_SOCIAL,
+  titulo: "Pesquisa social — Fulana de Tal",
+  nome_arquivo: "laudo.pdf",
+  mime: "application/pdf",
+  tamanho_bytes: 1234,
+  sensivel: true,
+  hash_sha256: "b".repeat(64),
+  exige_ciencia: false,
+  bloqueante: false,
+  prazo_ciencia_dias: null,
+  substituido_por_id: null,
+};
+
+function depsAcervoDuble(sobrescreve: Partial<DepsAcervo>): DepsAcervo {
+  const naoDeveriaChegar = (nome: string) => async () => {
+    throw new Error(`o teste não deveria ter chamado ${nome}`);
+  };
+  const base = {
+    buscarMetadados: naoDeveriaChegar("buscarMetadados"),
+    temPermissao: naoDeveriaChegar("temPermissao"),
+    vinculosDoUsuario: naoDeveriaChegar("vinculosDoUsuario"),
+    lerConteudo: naoDeveriaChegar("lerConteudo"),
+    inserirCiencia: naoDeveriaChegar("inserirCiencia"),
+    registrarLeituraSensivel: naoDeveriaChegar("registrarLeituraSensivel"),
+    registrarAlteracao: naoDeveriaChegar("registrarAlteracao"),
+    comTransacao: naoDeveriaChegar("comTransacao"),
+  } as unknown as DepsAcervo;
+  return { ...base, ...sobrescreve };
+}
+
+const transacaoAcervoDeMentira = (async (
+  usuarioId: number,
+  fn: (cliente: PoolClient) => Promise<unknown>
+) => fn({} as unknown as PoolClient)) as DepsAcervo["comTransacao"];
+
+/** temPermissao de mentira: responde pelo mapa; chave fora do mapa = false. */
+function permissoesDeMentira(
+  concedidas: Record<string, boolean>
+): DepsAcervo["temPermissao"] {
+  return async (_usuarioId, chave) => concedidas[chave] === true;
+}
+
+test("download genérico: diretoria (sensivel.ver, sem rs.gerir) leva 404 e o conteúdo nem é lido (A2)", async () => {
+  const deps = depsAcervoDuble({
+    buscarMetadados: async () => ({ ...METADADOS_PESQUISA }),
+    temPermissao: permissoesDeMentira({
+      "documento.ver.todos": true,
+      "documento.sensivel.ver": true,
+    }),
+  });
+  await assert.rejects(
+    baixarDocumento(SESSAO_COMUM, 91, deps),
+    (erro: unknown) => {
+      assert.ok(erro instanceof ErroHttp);
+      assert.equal(erro.status, 404);
+      return true;
+    }
+  );
+});
+
+test("download genérico: rs.gerir baixa o anexo COM trilha da própria chave, antes do conteúdo (A2)", async () => {
+  const ordem: string[] = [];
+  const deps = depsAcervoDuble({
+    buscarMetadados: async () => ({ ...METADADOS_PESQUISA }),
+    temPermissao: permissoesDeMentira({ "rs.gerir": true }),
+    comTransacao: transacaoAcervoDeMentira,
+    registrarLeituraSensivel: async (_cliente, entrada) => {
+      ordem.push(`trilha:${entrada.chavePermissao}:${entrada.registroId}`);
+    },
+    lerConteudo: async () => {
+      ordem.push("conteudo");
+      return Buffer.from("laudo");
+    },
+  });
+  const { conteudo } = await baixarDocumento(SESSAO_COMUM, 91, deps);
+  assert.equal(conteudo.toString("utf8"), "laudo");
+  assert.deepEqual(ordem, ["trilha:rs.gerir:91", "conteudo"]);
+});
+
+test("anexo da pesquisa social NÃO colhe ciência — 409 mesmo para rs.gerir (A4)", async () => {
+  const deps = depsAcervoDuble({
+    buscarMetadados: async () => ({ ...METADADOS_PESQUISA }),
+    temPermissao: permissoesDeMentira({ "rs.gerir": true }),
+  });
+  await assert.rejects(
+    darCiencia(SESSAO_COMUM, 91, deps),
+    (erro: unknown) => {
+      assert.ok(erro instanceof ErroHttp);
+      assert.equal(erro.status, 409);
+      assert.match(erro.message, /não colhe ciência/);
+      return true;
+    }
+  );
+});
+
+test("ciência em documento do CICLO dispensa documento.ver — a pendência é do próprio usuário (A5)", async () => {
+  const inseridas: number[] = [];
+  const deps = depsAcervoDuble({
+    buscarMetadados: async () => ({
+      ...DOC_BLOQUEANTE,
+      hash_sha256: "c".repeat(64),
+    }),
+    // NENHUMA chave concedida: perfil sem documento.ver regulariza mesmo assim.
+    temPermissao: permissoesDeMentira({}),
+    comTransacao: transacaoAcervoDeMentira,
+    inserirCiencia: async (_cliente, entrada) => {
+      inseridas.push(entrada.documentoId);
+      return { id: 800, dada_em: "2026-08-25T16:00:00.000Z" };
+    },
+    registrarAlteracao: async () => {},
+  });
+  const ciencia = await darCiencia(SESSAO_COMUM, 5, deps);
+  assert.equal(ciencia.dada_em, "2026-08-25T16:00:00.000Z");
+  assert.equal(ciencia.hash_no_momento, "c".repeat(64));
+  assert.deepEqual(inseridas, [5]);
+});
+
+test("ciência em documento FORA do ciclo continua exigindo documento.ver (A5 não abre o resto)", async () => {
+  const foraDoCiclo: MetadadosDocumento = {
+    ...DOC_BLOQUEANTE,
+    exige_ciencia: false,
+    bloqueante: false,
+    categoria: "comunicado",
+  };
+  const semChave = depsAcervoDuble({
+    buscarMetadados: async () => ({ ...foraDoCiclo }),
+    temPermissao: permissoesDeMentira({}),
+  });
+  await assert.rejects(
+    darCiencia(SESSAO_COMUM, 5, semChave),
+    (erro: unknown) => {
+      assert.ok(erro instanceof ErroHttp);
+      assert.equal(erro.status, 403);
+      return true;
+    }
+  );
+
+  const comChave = depsAcervoDuble({
+    buscarMetadados: async () => ({ ...foraDoCiclo }),
+    temPermissao: permissoesDeMentira({ "documento.ver": true }),
+    comTransacao: transacaoAcervoDeMentira,
+    inserirCiencia: async () => ({
+      id: 801,
+      dada_em: "2026-08-25T16:30:00.000Z",
+    }),
+    registrarAlteracao: async () => {},
+  });
+  const ciencia = await darCiencia(SESSAO_COMUM, 5, comChave);
+  assert.equal(ciencia.dada_em, "2026-08-25T16:30:00.000Z");
 });

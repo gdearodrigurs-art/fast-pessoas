@@ -7,7 +7,8 @@ import { idRecrutamento } from "../../../identificador";
 /**
  * Desfecho da pesquisa social (#13c, G3:a) — rs.gerir. Anexo opcional pelo
  * caminho JSON base64 (molde api/documentos POST); ele vai para o GED
- * (rh.documento, categoria "outro", sensível) na mesma transação do desfecho.
+ * (rh.documento, categoria própria e oculta 'pesquisa_social', sensível — A2)
+ * na mesma transação do desfecho.
  */
 export async function POST(
   request: Request,

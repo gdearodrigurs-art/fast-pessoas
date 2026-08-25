@@ -11,6 +11,83 @@ export const CATEGORIAS_DOCUMENTO = [
 
 export type CategoriaDocumento = (typeof CATEGORIAS_DOCUMENTO)[number];
 
+/**
+ * Categoria OCULTA do anexo da pesquisa social (decisão G3:a, conserto A2).
+ *
+ * Fica FORA de `CATEGORIAS_DOCUMENTO` de propósito, e as três consequências
+ * são intencionais:
+ *   1. o envio comum do GED (esquemaEnvioMultipart/Base64) NÃO a aceita — só o
+ *      registro da pesquisa social (dominios/recrutamento) grava nela;
+ *   2. ela não aparece em ABA NENHUMA do acervo: `listar()` a exclui SEMPRE
+ *      (repositorio.ts) — o anexo só sai pela rota própria da candidatura ou
+ *      pelo download genérico, ambos sob rs.gerir;
+ *   3. `decidirVisibilidade` exige rs.gerir — documento.sensivel.ver NÃO basta
+ *      (era a porta lateral: diretoria via o anexo sem gerir a seleção).
+ */
+export const CATEGORIA_PESQUISA_SOCIAL = "pesquisa_social";
+
+// Chaves que a decisão de visibilidade do acervo consome (eixo 4 — decisão por
+// chave, nunca por papel). Moram aqui porque a REGRA (decidirVisibilidade) é
+// pura e mora aqui; o serviço as consulta no banco e aplica a regra.
+export const CHAVE_DOCUMENTO_SENSIVEL_VER = "documento.sensivel.ver";
+export const CHAVE_RS_GERIR = "rs.gerir";
+
+export interface ChavesDeAcervo {
+  /** documento.ver.todos — RH/DP/diretoria enxergam o acervo inteiro. */
+  verTodos: boolean;
+  /** documento.sensivel.ver — abre os sensíveis COMUNS, não a pesquisa social. */
+  sensivelVer: boolean;
+  /** rs.gerir — a ÚNICA chave que alcança o anexo da pesquisa social. */
+  rsGerir: boolean;
+}
+
+export interface DecisaoVisibilidade {
+  visivel: boolean;
+  /**
+   * Chave que precisa ir a `audit.leitura_sensivel` quando o conteúdo sai —
+   * a que DE FATO autorizou (eixo 8). null = leitura comum, sem trilha.
+   */
+  chaveTrilha: string | null;
+}
+
+/**
+ * A regra de visibilidade de UM documento do acervo, pura e num lugar só.
+ * O serviço (`exigirVisibilidade`) traz os fatos (chaves e vínculos do
+ * usuário) e converte `visivel: false` em 404 — ausência, não máscara.
+ */
+export function decidirVisibilidade(
+  documento: {
+    colaborador_id: number | null;
+    sensivel: boolean;
+    categoria: string;
+  },
+  chaves: ChavesDeAcervo,
+  vinculosDoUsuario: readonly number[]
+): DecisaoVisibilidade {
+  // A2: anexo de pesquisa social só existe para quem gere a seleção. A chave
+  // de sensível NÃO basta — o documento é sensível E de categoria própria, e
+  // a categoria manda. A trilha grava rs.gerir, a chave que autorizou.
+  if (documento.categoria === CATEGORIA_PESQUISA_SOCIAL) {
+    return chaves.rsGerir
+      ? { visivel: true, chaveTrilha: CHAVE_RS_GERIR }
+      : { visivel: false, chaveTrilha: null };
+  }
+  if (
+    !chaves.verTodos &&
+    documento.colaborador_id !== null &&
+    !vinculosDoUsuario.includes(documento.colaborador_id)
+  ) {
+    return { visivel: false, chaveTrilha: null };
+  }
+  if (documento.sensivel && !chaves.sensivelVer) {
+    return { visivel: false, chaveTrilha: null };
+  }
+  return {
+    visivel: true,
+    chaveTrilha: documento.sensivel ? CHAVE_DOCUMENTO_SENSIVEL_VER : null,
+  };
+}
+
 export const ROTULOS_CATEGORIA: Record<CategoriaDocumento, string> = {
   contrato: "Contrato",
   holerite: "Holerite",
