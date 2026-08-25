@@ -21,6 +21,8 @@
 // Vigência de tudo: HOJE em São Paulo (F1:a — a carga é a posição ATUAL; o
 // histórico não entra, e ajuste retroativo é ato auditado pela tela, depois).
 
+import { PoolClient } from "pg";
+
 import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo } from "../../lib/http";
@@ -89,8 +91,24 @@ function exigirLinhasUteis(conteudo: string): { numero: number; bruta: string }[
   return linhas;
 }
 
-/** Fecha o lote (uma transação só) com a trilha do ato de importar. */
+/**
+ * B4: a transação do lote nasce ANTES de qualquer leitura de identidade e toma
+ * o advisory lock da carga inicial. Dois imports simultâneos (estrutura e/ou
+ * cargos) corriam entre o "não existe" dos mapas e o criar — e duplicavam
+ * empresa sem CNPJ, estabelecimento e cargo, identidades que não têm UNIQUE no
+ * banco. Com o lock, o segundo lote só lê os mapas depois que o primeiro
+ * commitou o lote inteiro. xact_lock: solto no COMMIT/ROLLBACK, sem risco de
+ * ficar preso se a conexão cair.
+ */
+async function travarCargaInicial(cliente: PoolClient): Promise<void> {
+  await cliente.query(
+    "SELECT pg_advisory_xact_lock(hashtext('fast.carga-inicial'))"
+  );
+}
+
+/** Fecha o lote (na transação que segura o lock) com a trilha do ato de importar. */
 async function gravarLote(
+  cliente: PoolClient,
   sessao: PayloadSessao,
   tipo: TipoLoteCarga,
   entrada: EntradaCarga,
@@ -102,38 +120,35 @@ async function gravarLote(
     `${contas.aceitas} de ${contas.lidas} linha(s) criaram algo; ` +
     `${contas.jaExistiam} já existiam por inteiro; ` +
     `${rejeicoes.length} rejeitada(s) com motivo individual`;
-  const loteId = await comTransacao(sessao.usuario_id, async (cliente) => {
-    const id = await inserirLoteCarga(cliente, {
-      tipo,
-      arquivo: entrada.arquivo,
-      linhas_lidas: contas.lidas,
-      linhas_aceitas: contas.aceitas,
-      linhas_ja_existiam: contas.jaExistiam,
-      linhas_rejeitadas: rejeicoes.length,
-      relatorio: {
-        separador: entrada.separador,
-        colunas_esperadas: [...colunas],
-        rejeitadas: rejeicoes,
-        resumo,
-      },
-      importado_por: sessao.usuario_id,
-    });
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "carga.importacao",
-      tabela: "rh.lote_carga",
-      registroId: String(id),
-      diff: {
-        Tipo: { de: null, para: tipo },
-        Arquivo: { de: null, para: entrada.arquivo },
-        "Linhas lidas": { de: null, para: String(contas.lidas) },
-        "Linhas aceitas": { de: null, para: String(contas.aceitas) },
-        "Linhas que já existiam": { de: null, para: String(contas.jaExistiam) },
-        "Linhas rejeitadas": { de: null, para: String(rejeicoes.length) },
-      },
-    });
-    return id;
+  const loteId = await inserirLoteCarga(cliente, {
+    tipo,
+    arquivo: entrada.arquivo,
+    linhas_lidas: contas.lidas,
+    linhas_aceitas: contas.aceitas,
+    linhas_ja_existiam: contas.jaExistiam,
+    linhas_rejeitadas: rejeicoes.length,
+    relatorio: {
+      separador: entrada.separador,
+      colunas_esperadas: [...colunas],
+      rejeitadas: rejeicoes,
+      resumo,
+    },
+    importado_por: sessao.usuario_id,
+  });
+  await registrarAlteracao(cliente, {
+    usuarioId: sessao.usuario_id,
+    papel: sessao.papel,
+    acao: "carga.importacao",
+    tabela: "rh.lote_carga",
+    registroId: String(loteId),
+    diff: {
+      Tipo: { de: null, para: tipo },
+      Arquivo: { de: null, para: entrada.arquivo },
+      "Linhas lidas": { de: null, para: String(contas.lidas) },
+      "Linhas aceitas": { de: null, para: String(contas.aceitas) },
+      "Linhas que já existiam": { de: null, para: String(contas.jaExistiam) },
+      "Linhas rejeitadas": { de: null, para: String(rejeicoes.length) },
+    },
   });
   return {
     lote_id: loteId,
@@ -173,6 +188,19 @@ export async function importarEstrutura(
   entrada: EntradaCarga
 ): Promise<ResultadoCarga> {
   const linhas = exigirLinhasUteis(entrada.conteudo);
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    await travarCargaInicial(cliente);
+    return importarEstruturaTravado(cliente, sessao, entrada, linhas);
+  });
+}
+
+/** O miolo roda já DONO do lock (B4); `cliente` é a transação do lote. */
+async function importarEstruturaTravado(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  entrada: EntradaCarga,
+  linhas: { numero: number; bruta: string }[]
+): Promise<ResultadoCarga> {
   const hoje = await hojeDeSaoPaulo();
 
   // Identidades que JÁ existem — a base da idempotência. Os conjuntos são
@@ -290,6 +318,7 @@ export async function importarEstrutura(
   }
 
   return gravarLote(
+    cliente,
     sessao,
     "estrutura",
     entrada,
@@ -306,6 +335,19 @@ export async function importarCargos(
   entrada: EntradaCarga
 ): Promise<ResultadoCarga> {
   const linhas = exigirLinhasUteis(entrada.conteudo);
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    await travarCargaInicial(cliente);
+    return importarCargosTravado(cliente, sessao, entrada, linhas);
+  });
+}
+
+/** O miolo roda já DONO do lock (B4); `cliente` é a transação do lote. */
+async function importarCargosTravado(
+  cliente: PoolClient,
+  sessao: PayloadSessao,
+  entrada: EntradaCarga,
+  linhas: { numero: number; bruta: string }[]
+): Promise<ResultadoCarga> {
   const hoje = await hojeDeSaoPaulo();
 
   // Identidade do cargo: nome da versão ATIVA, normalizado — com nível e
@@ -412,6 +454,7 @@ export async function importarCargos(
   }
 
   return gravarLote(
+    cliente,
     sessao,
     "cargos",
     entrada,
