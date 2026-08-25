@@ -162,36 +162,122 @@ const esquemaMime = z
     ).join(", ")}.`
   );
 
+/**
+ * Regras cruzadas do CICLO DE CIÊNCIA no envio (decisões B1/B3, docs/20):
+ * bloqueante é um modo de exige_ciencia; prazo só existe na política não
+ * bloqueante (o bloqueante trava desde o 1º acesso — prazo nele seria promessa
+ * falsa); e o ciclo é do ACERVO GERAL — documento de colaborador não entra.
+ * Os mesmos CHECKs existem no banco (0086); aqui viram mensagem de campo.
+ */
+function validarCicloEnvio(
+  dados: {
+    exige_ciencia: boolean;
+    bloqueante: boolean;
+    prazo_ciencia_dias?: number;
+    substitui_documento_id?: number;
+    colaborador_id?: number;
+  },
+  contexto: z.core.$RefinementCtx
+): void {
+  if (dados.bloqueante && !dados.exige_ciencia) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["bloqueante"],
+      message: "Documento bloqueante precisa exigir ciência.",
+    });
+  }
+  if (dados.prazo_ciencia_dias !== undefined && !dados.exige_ciencia) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["prazo_ciencia_dias"],
+      message: "Prazo de ciência só vale para documento que exige ciência.",
+    });
+  }
+  if (dados.prazo_ciencia_dias !== undefined && dados.bloqueante) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["prazo_ciencia_dias"],
+      message:
+        "Documento bloqueante não tem prazo: ele trava o acesso desde o primeiro acesso.",
+    });
+  }
+  if (dados.exige_ciencia && dados.colaborador_id !== undefined) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["exige_ciencia"],
+      message:
+        "O ciclo de ciência é do acervo geral — documento de colaborador não exige ciência de todos.",
+    });
+  }
+  if (
+    dados.substitui_documento_id !== undefined &&
+    dados.colaborador_id !== undefined
+  ) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["substitui_documento_id"],
+      message:
+        "Versão nova na cadeia é do acervo geral — documento de colaborador não substitui.",
+    });
+  }
+}
+
+const booleanoMultipart = z
+  .enum(["true", "false"])
+  .transform((valor) => valor === "true");
+
+const esquemaPrazoDias = z.coerce
+  .number("Prazo inválido")
+  .int("Prazo inválido")
+  .min(1, "Prazo mínimo: 1 dia")
+  .max(365, "Prazo máximo: 365 dias");
+
 /** Metadados vindos de multipart/form-data — todo campo chega como texto. */
-export const esquemaEnvioMultipart = z.object({
-  categoria: z.enum(CATEGORIAS_DOCUMENTO),
-  titulo: esquemaTitulo,
-  sensivel: z.enum(["true", "false"]).transform((valor) => valor === "true"),
-  colaborador_id: z.coerce
-    .number("Colaborador inválido")
-    .int("Colaborador inválido")
-    .positive("Colaborador inválido")
-    .optional(),
-});
+export const esquemaEnvioMultipart = z
+  .object({
+    categoria: z.enum(CATEGORIAS_DOCUMENTO),
+    titulo: esquemaTitulo,
+    sensivel: z.enum(["true", "false"]).transform((valor) => valor === "true"),
+    colaborador_id: z.coerce
+      .number("Colaborador inválido")
+      .int("Colaborador inválido")
+      .positive("Colaborador inválido")
+      .optional(),
+    exige_ciencia: booleanoMultipart,
+    bloqueante: booleanoMultipart,
+    prazo_ciencia_dias: esquemaPrazoDias.optional(),
+    substitui_documento_id: z.coerce
+      .number("Documento substituído inválido")
+      .int("Documento substituído inválido")
+      .positive("Documento substituído inválido")
+      .optional(),
+  })
+  .superRefine(validarCicloEnvio);
 
 /** Envio em JSON com o conteúdo em base64 — alternativa ao multipart. */
-export const esquemaEnvioBase64 = z.object({
-  categoria: z.enum(CATEGORIAS_DOCUMENTO),
-  titulo: esquemaTitulo,
-  sensivel: z.boolean(),
-  colaborador_id: z.number().int().positive().optional(),
-  nome_arquivo: esquemaNomeArquivo,
-  mime: esquemaMime,
-  conteudo_base64: z
-    .string()
-    .min(1, "Conteúdo do arquivo ausente")
-    // 10 MB em base64 ocupam ~13,4 MB de texto — rejeita antes de decodificar
-    .max(
-      Math.ceil((TAMANHO_MAXIMO_BYTES * 4) / 3) + 4,
-      "Arquivo excede o limite de 10 MB"
-    )
-    .regex(/^[A-Za-z0-9+/]+={0,2}$/, "Conteúdo base64 inválido"),
-});
+export const esquemaEnvioBase64 = z
+  .object({
+    categoria: z.enum(CATEGORIAS_DOCUMENTO),
+    titulo: esquemaTitulo,
+    sensivel: z.boolean(),
+    colaborador_id: z.number().int().positive().optional(),
+    exige_ciencia: z.boolean().default(false),
+    bloqueante: z.boolean().default(false),
+    prazo_ciencia_dias: z.number().int().min(1).max(365).optional(),
+    substitui_documento_id: z.number().int().positive().optional(),
+    nome_arquivo: esquemaNomeArquivo,
+    mime: esquemaMime,
+    conteudo_base64: z
+      .string()
+      .min(1, "Conteúdo do arquivo ausente")
+      // 10 MB em base64 ocupam ~13,4 MB de texto — rejeita antes de decodificar
+      .max(
+        Math.ceil((TAMANHO_MAXIMO_BYTES * 4) / 3) + 4,
+        "Arquivo excede o limite de 10 MB"
+      )
+      .regex(/^[A-Za-z0-9+/]+={0,2}$/, "Conteúdo base64 inválido"),
+  })
+  .superRefine(validarCicloEnvio);
 
 export type EnvioBase64 = z.infer<typeof esquemaEnvioBase64>;
 
@@ -201,4 +287,136 @@ export interface MetadadosEnvio {
   titulo: string;
   sensivel: boolean;
   colaborador_id: number | null;
+  exige_ciencia: boolean;
+  bloqueante: boolean;
+  prazo_ciencia_dias: number | null;
+  substitui_documento_id: number | null;
+}
+
+// ===========================================================================
+// Ciclo de ciência (0086) — entradas das rotas do ciclo
+// ===========================================================================
+
+/** Recusa do PRÓPRIO usuário: "li e não aceito". Motivo é opcional. */
+export const esquemaRecusa = z.object({
+  motivo: z.string().trim().min(1).max(500).optional(),
+});
+
+/**
+ * Abertura do ato formal pelo DP (B2): a pessoa, de onde o ato nasce e as DUAS
+ * testemunhas — usuários do sistema, distintos entre si e da pessoa do ato.
+ */
+export const esquemaAbrirAto = z
+  .object({
+    usuario_id: z.number().int().positive(),
+    origem: z.enum(["recusa", "prazo_vencido"]),
+    descricao: z
+      .string()
+      .trim()
+      .min(5, "Descreva o ato (mínimo 5 caracteres)")
+      .max(2000),
+    testemunhas: z
+      .array(z.number().int().positive())
+      .length(2, "O ato exige exatamente 2 testemunhas"),
+  })
+  .superRefine((dados, contexto) => {
+    if (dados.testemunhas[0] === dados.testemunhas[1]) {
+      contexto.addIssue({
+        code: "custom",
+        path: ["testemunhas"],
+        message: "As 2 testemunhas precisam ser pessoas diferentes.",
+      });
+    }
+    if (dados.testemunhas.includes(dados.usuario_id)) {
+      contexto.addIssue({
+        code: "custom",
+        path: ["testemunhas"],
+        message: "A pessoa do ato não pode ser testemunha do próprio ato.",
+      });
+    }
+  });
+
+/** Ações sobre um ato já aberto: confirmar testemunho ou registrar desfecho. */
+export const esquemaAcaoAto = z.discriminatedUnion("acao", [
+  z.object({
+    acao: z.literal("confirmar"),
+    ato_id: z.number().int().positive(),
+  }),
+  z.object({
+    acao: z.literal("desfecho"),
+    ato_id: z.number().int().positive(),
+    desfecho: z
+      .string()
+      .trim()
+      .min(5, "Descreva o desfecho (mínimo 5 caracteres)")
+      .max(2000),
+  }),
+]);
+
+/** Liberação explícita (B6) — chave rh.conduta.liberar. */
+export const esquemaLiberar = z.object({
+  usuario_id: z.number().int().positive(),
+  justificativa: z
+    .string()
+    .trim()
+    .min(5, "Justifique a liberação (mínimo 5 caracteres)")
+    .max(2000),
+});
+
+// ===========================================================================
+// Ciclo de ciência — a REGRA de estado e bloqueio, pura e num lugar só.
+// O repositório traz os FATOS (tem ciência? recusa? ato? liberação? venceu?);
+// estas funções dizem o que os fatos significam. B1/B4/B6 moram aqui.
+// ===========================================================================
+
+export interface SituacaoPendencia {
+  /** O documento é o bloqueante (Código de Conduta). */
+  bloqueante: boolean;
+  temCiencia: boolean;
+  temRecusa: boolean;
+  /** Existe ato formal registrado (recusa ou prazo vencido). */
+  temAto: boolean;
+  temLiberacao: boolean;
+  /** O prazo (quando existe) já venceu para este usuário. */
+  vencida: boolean;
+}
+
+export type EstadoPendencia =
+  | "assinado"
+  | "liberado"
+  | "recusado"
+  | "vencido"
+  | "pendente";
+
+export const ROTULOS_ESTADO_PENDENCIA: Record<EstadoPendencia, string> = {
+  assinado: "Ciência dada",
+  liberado: "Liberado",
+  recusado: "Recusou",
+  vencido: "Prazo vencido",
+  pendente: "Pendente",
+};
+
+/** O estado que o quadro do ciclo exibe para uma pessoa numa versão. */
+export function estadoDaPendencia(situacao: SituacaoPendencia): EstadoPendencia {
+  if (situacao.temCiencia) return "assinado";
+  if (situacao.temLiberacao) return "liberado";
+  if (situacao.temRecusa) return "recusado";
+  if (situacao.vencida) return "vencido";
+  return "pendente";
+}
+
+/**
+ * O acesso desta pessoa está BLOQUEADO por esta pendência?
+ *
+ *   * ciência ou liberação destravam SEMPRE (a rota de regularização nunca
+ *     fecha — B4);
+ *   * documento bloqueante pendente trava (B1), inclusive recusado (B6:
+ *     recusar não destrava);
+ *   * política não bloqueante só trava quando o DP REGISTRA O ATO (B6:
+ *     "vencido com ato registrado segue bloqueado até liberação") — prazo
+ *     vencido sozinho lembra, não trava (B1).
+ */
+export function pendenciaBloqueia(situacao: SituacaoPendencia): boolean {
+  if (situacao.temCiencia || situacao.temLiberacao) return false;
+  return situacao.bloqueante || situacao.temAto;
 }

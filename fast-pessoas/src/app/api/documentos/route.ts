@@ -51,6 +51,11 @@ export async function POST(request: Request) {
         titulo: formulario.get("titulo"),
         sensivel: formulario.get("sensivel") ?? "false",
         colaborador_id: formulario.get("colaborador_id") || undefined,
+        exige_ciencia: formulario.get("exige_ciencia") ?? "false",
+        bloqueante: formulario.get("bloqueante") ?? "false",
+        prazo_ciencia_dias: formulario.get("prazo_ciencia_dias") || undefined,
+        substitui_documento_id:
+          formulario.get("substitui_documento_id") || undefined,
       });
       if (!analise.success) {
         return Response.json(
@@ -65,6 +70,11 @@ export async function POST(request: Request) {
           titulo: analise.data.titulo,
           sensivel: analise.data.sensivel,
           colaborador_id: analise.data.colaborador_id ?? null,
+          exige_ciencia: analise.data.exige_ciencia,
+          bloqueante: analise.data.bloqueante,
+          prazo_ciencia_dias: analise.data.prazo_ciencia_dias ?? null,
+          substitui_documento_id:
+            analise.data.substitui_documento_id ?? null,
         },
         {
           nome: arquivo.name || "documento",
@@ -90,6 +100,10 @@ export async function POST(request: Request) {
         titulo: analise.data.titulo,
         sensivel: analise.data.sensivel,
         colaborador_id: analise.data.colaborador_id ?? null,
+        exige_ciencia: analise.data.exige_ciencia,
+        bloqueante: analise.data.bloqueante,
+        prazo_ciencia_dias: analise.data.prazo_ciencia_dias ?? null,
+        substitui_documento_id: analise.data.substitui_documento_id ?? null,
       },
       {
         nome: analise.data.nome_arquivo,

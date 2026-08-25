@@ -8,14 +8,18 @@ import {
   abaDaCategoria,
   CATEGORIAS_DOCUMENTO,
   CategoriaDocumento,
+  EstadoPendencia,
   formatarTamanho,
   ROTULOS_ABA,
   ROTULOS_CATEGORIA,
+  ROTULOS_ESTADO_PENDENCIA,
 } from "@/dominios/documentos/esquemas";
 import estilos from "./page.module.css";
+import { QuadroCiclo } from "./quadro-ciclo";
 import {
   caminhoConteudoDocumento,
   DocumentoParaVer,
+  ModoCiencia,
   VisualizadorDocumento,
 } from "./visualizador-documento";
 
@@ -32,12 +36,46 @@ interface Documento {
   enviado_por: string;
   enviado_em: string;
   minha_ciencia_em: string | null;
+  exige_ciencia: boolean;
+  bloqueante: boolean;
+  prazo_ciencia_dias: number | null;
+  substitui_documento_id: number | null;
+  substituido_por_id: number | null;
+  minha_recusa_em: string | null;
 }
 
 interface ColaboradorOpcao {
   id: number;
   matricula: string;
   nome_completo: string;
+}
+
+interface PendenciaMinha {
+  documento_id: number;
+  titulo: string;
+  categoria: string;
+  bloqueante: boolean;
+  data_limite: string | null;
+  vencida: boolean;
+  estado: EstadoPendencia;
+  bloqueia: boolean;
+  recusada_em: string | null;
+}
+
+interface TestemunhoPendente {
+  ato_id: number;
+  documento_id: number;
+  documento_titulo: string;
+  pessoa_nome: string;
+  origem: "recusa" | "prazo_vencido";
+  aberto_em: string;
+}
+
+interface MinhasPendencias {
+  bloqueada: boolean;
+  bloqueio: PendenciaMinha | null;
+  pendencias: PendenciaMinha[];
+  testemunhos: TestemunhoPendente[];
 }
 
 const formatadorDataHora = new Intl.DateTimeFormat("pt-BR", {
@@ -53,12 +91,23 @@ function formatarDataHora(iso: string): string {
   return formatadorDataHora.format(new Date(iso));
 }
 
+function formatarData(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split("-");
+  return `${dia}/${mes}/${ano}`;
+}
+
 export function PainelDocumentos({
   podeEnviar,
   podeVerSensivel,
+  podeGerirCiclo,
+  podeLiberar,
+  usuarioId,
 }: {
   podeEnviar: boolean;
   podeVerSensivel: boolean;
+  podeGerirCiclo: boolean;
+  podeLiberar: boolean;
+  usuarioId: number;
 }) {
   const [documentos, setDocumentos] = useState<Documento[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -66,11 +115,20 @@ export function PainelDocumentos({
   const [mostrarSensiveis, setMostrarSensiveis] = useState(false);
   const [versaoLista, setVersaoLista] = useState(0);
 
+  const [minhas, setMinhas] = useState<MinhasPendencias | null>(null);
+  const [confirmandoTestemunho, setConfirmandoTestemunho] = useState<
+    number | null
+  >(null);
+
   const [colaboradores, setColaboradores] = useState<ColaboradorOpcao[]>([]);
   const [titulo, setTitulo] = useState("");
   const [categoria, setCategoria] = useState<CategoriaDocumento>("comunicado");
   const [colaboradorId, setColaboradorId] = useState("");
   const [sensivel, setSensivel] = useState(false);
+  const [exigeCiencia, setExigeCiencia] = useState(false);
+  const [bloqueante, setBloqueante] = useState(false);
+  const [prazoDias, setPrazoDias] = useState("");
+  const [substituiId, setSubstituiId] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erroEnvio, setErroEnvio] = useState<string | null>(null);
   const [avisoEnvio, setAvisoEnvio] = useState<string | null>(null);
@@ -80,8 +138,33 @@ export function PainelDocumentos({
   const [aba, setAba] = useState<AbaDocumento>(ABAS_DOCUMENTO[0]);
   const [documentoAberto, setDocumentoAberto] =
     useState<DocumentoParaVer | null>(null);
+  const [cienciaDoAberto, setCienciaDoAberto] = useState<ModoCiencia | null>(
+    null
+  );
+  const [cicloAberto, setCicloAberto] = useState<number | null>(null);
 
-  const fecharVisualizador = useCallback(() => setDocumentoAberto(null), []);
+  const fecharVisualizador = useCallback(() => {
+    setDocumentoAberto(null);
+    setCienciaDoAberto(null);
+  }, []);
+
+  const carregarMinhas = useCallback(async () => {
+    try {
+      const resposta = await fetch("/api/documentos/pendencias/minhas");
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        setMinhas(dados as MinhasPendencias);
+      }
+    } catch {
+      // O cartão de pendências é informativo — a lista principal segue.
+    }
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      await carregarMinhas();
+    })();
+  }, [carregarMinhas, versaoLista]);
 
   useEffect(() => {
     let ativo = true;
@@ -153,6 +236,15 @@ export function PainelDocumentos({
       formulario.append("sensivel", String(sensivel));
       if (colaboradorId) {
         formulario.append("colaborador_id", colaboradorId);
+      } else {
+        formulario.append("exige_ciencia", String(exigeCiencia));
+        formulario.append("bloqueante", String(exigeCiencia && bloqueante));
+        if (exigeCiencia && !bloqueante && prazoDias) {
+          formulario.append("prazo_ciencia_dias", prazoDias);
+        }
+        if (substituiId) {
+          formulario.append("substitui_documento_id", substituiId);
+        }
       }
       const resposta = await fetch("/api/documentos", {
         method: "POST",
@@ -164,6 +256,10 @@ export function PainelDocumentos({
         setCategoria("comunicado");
         setColaboradorId("");
         setSensivel(false);
+        setExigeCiencia(false);
+        setBloqueante(false);
+        setPrazoDias("");
+        setSubstituiId("");
         if (campoArquivo.current) {
           campoArquivo.current.value = "";
         }
@@ -171,7 +267,11 @@ export function PainelDocumentos({
         setAvisoEnvio(
           documento.sensivel
             ? "Documento sensível enviado. Ele só aparece na lista de quem tem permissão para dados sensíveis, com o filtro ativado."
-            : "Documento enviado."
+            : documento.exige_ciencia
+              ? documento.substitui_documento_id !== null
+                ? "Versão nova publicada — o ciclo de ciência reabriu para todos os ativos."
+                : "Documento publicado no ciclo de ciência — todo o quadro foi avisado."
+              : "Documento enviado."
         );
         setVersaoLista((versao) => versao + 1);
       } else {
@@ -184,7 +284,10 @@ export function PainelDocumentos({
     }
   }
 
-  async function darCiencia(documento: Documento) {
+  /** Ciência RÁPIDA — só para documento FORA do ciclo (sem exigência de
+   *  leitura até o fim). Documento com exige_ciencia passa pelo visualizador,
+   *  que rastreia a rolagem (B5). */
+  async function darCienciaRapida(documento: Documento) {
     const confirmado = window.confirm(
       `Confirmar ciência do documento "${documento.titulo}"? A ciência registra data, hora e a versão exata do arquivo, e não pode ser desfeita.`
     );
@@ -215,6 +318,82 @@ export function PainelDocumentos({
     }
   }
 
+  /** Abre o visualizador em MODO CIÊNCIA (B5): rolagem rastreada, botão só
+   *  habilita no fim; recusa disponível no mesmo lugar. */
+  function abrirParaCiencia(documento: Documento) {
+    setDocumentoAberto({
+      id: documento.id,
+      titulo: documento.titulo,
+      nome_arquivo: documento.nome_arquivo,
+      mime: documento.mime,
+      sensivel: documento.sensivel,
+    });
+    setCienciaDoAberto({
+      jaRecusou: documento.minha_recusa_em !== null,
+      aoRegistrar: (dadaEm) => {
+        setDocumentos((lista) =>
+          lista.map((item) =>
+            item.id === documento.id
+              ? { ...item, minha_ciencia_em: dadaEm }
+              : item
+          )
+        );
+        fecharVisualizador();
+        carregarMinhas();
+      },
+      aoRecusar: (recusadaEm) => {
+        setDocumentos((lista) =>
+          lista.map((item) =>
+            item.id === documento.id
+              ? { ...item, minha_recusa_em: recusadaEm }
+              : item
+          )
+        );
+        fecharVisualizador();
+        carregarMinhas();
+      },
+    });
+  }
+
+  function abrirParaLeitura(documento: Documento) {
+    setCienciaDoAberto(null);
+    setDocumentoAberto({
+      id: documento.id,
+      titulo: documento.titulo,
+      nome_arquivo: documento.nome_arquivo,
+      mime: documento.mime,
+      sensivel: documento.sensivel,
+    });
+  }
+
+  async function confirmarTestemunho(testemunho: TestemunhoPendente) {
+    setErro(null);
+    setConfirmandoTestemunho(testemunho.ato_id);
+    try {
+      const resposta = await fetch(
+        `/api/documentos/${testemunho.documento_id}/ato-testemunhas`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            acao: "confirmar",
+            ato_id: testemunho.ato_id,
+          }),
+        }
+      );
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        await carregarMinhas();
+      } else {
+        setErro(dados.erro ?? "Não foi possível confirmar o testemunho.");
+      }
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setConfirmandoTestemunho(null);
+    }
+  }
+
   // A aba separa CATEGORIA, que é apresentação — não escopo nem autorização.
   // Escopo (documento.ver.todos / vínculos da pessoa) e sensível continuam
   // filtrando no servidor, dentro da consulta de `listarDocumentos`; a aba
@@ -236,6 +415,16 @@ export function PainelDocumentos({
     contagemPorAba.set(chave, (contagemPorAba.get(chave) ?? 0) + 1);
   }
 
+  // Candidatos a "versão nova de…": documento geral, ponta da cadeia.
+  const substituiveis = documentos.filter(
+    (documento) =>
+      documento.colaborador_id === null &&
+      documento.substituido_por_id === null
+  );
+
+  const pendenciaDoDocumento = (id: number) =>
+    minhas?.pendencias.find((pendencia) => pendencia.documento_id === id);
+
   return (
     <div className={estilos.pagina}>
       <Cabecalho />
@@ -245,6 +434,63 @@ export function PainelDocumentos({
         <p className={estilos.subtitulo}>
           Documentos gerais e do colaborador, com registro de ciência.
         </p>
+
+        {minhas && minhas.pendencias.length > 0 && (
+          <section
+            className={`${estilos.cartaoAviso} ${
+              minhas.bloqueada ? estilos.cartaoBloqueio : ""
+            }`}
+          >
+            <h2>
+              {minhas.bloqueada
+                ? "Pendência que bloqueia o seu acesso"
+                : "Documentos aguardando a sua ciência"}
+            </h2>
+            {minhas.pendencias.map((pendencia) => (
+              <p key={pendencia.documento_id}>
+                <strong>{pendencia.titulo}</strong>
+                {" — "}
+                {ROTULOS_ESTADO_PENDENCIA[pendencia.estado]}
+                {pendencia.data_limite &&
+                  ` · prazo até ${formatarData(pendencia.data_limite)}`}
+                {pendencia.bloqueia &&
+                  " · o acesso ao sistema fica travado até a regularização"}
+              </p>
+            ))}
+            <p>
+              Abra o documento na lista abaixo, leia até o fim e registre a
+              ciência.
+            </p>
+          </section>
+        )}
+
+        {minhas && minhas.testemunhos.length > 0 && (
+          <section className={estilos.cartaoAviso}>
+            <h2>Testemunhos aguardando sua confirmação</h2>
+            {minhas.testemunhos.map((testemunho) => (
+              <div key={testemunho.ato_id} className={estilos.linhaTestemunho}>
+                <p>
+                  Ato sobre <strong>{testemunho.pessoa_nome}</strong> —{" "}
+                  {testemunho.documento_titulo} (
+                  {testemunho.origem === "recusa" ? "recusa" : "prazo vencido"}
+                  ), aberto em {formatarDataHora(testemunho.aberto_em)}. A
+                  confirmação registra data e a versão exata do documento, com
+                  a sua sessão.
+                </p>
+                <button
+                  className={estilos.botaoLinha}
+                  type="button"
+                  disabled={confirmandoTestemunho === testemunho.ato_id}
+                  onClick={() => confirmarTestemunho(testemunho)}
+                >
+                  {confirmandoTestemunho === testemunho.ato_id
+                    ? "Confirmando…"
+                    : "Confirmar testemunho"}
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
 
         {podeEnviar && (
           <section className={estilos.cartao}>
@@ -322,6 +568,82 @@ export function PainelDocumentos({
                 />
                 Sensível (acesso restrito e leitura auditada)
               </label>
+
+              {colaboradorId === "" && (
+                <fieldset className={estilos.grupoCiclo}>
+                  <legend>Ciclo de ciência (documento geral)</legend>
+                  <label className={estilos.campoMarcado}>
+                    <input
+                      type="checkbox"
+                      checked={exigeCiencia}
+                      onChange={(e) => setExigeCiencia(e.target.checked)}
+                    />
+                    Exige ciência de todo o quadro (pendência para cada usuário
+                    ativo; admitidos futuros herdam)
+                  </label>
+                  {exigeCiencia && (
+                    <>
+                      <label className={estilos.campoMarcado}>
+                        <input
+                          type="checkbox"
+                          checked={bloqueante}
+                          onChange={(e) => setBloqueante(e.target.checked)}
+                        />
+                        Bloqueante (Código de Conduta): trava o acesso de todos
+                        — inclusive DP, admin e diretoria — até a ciência
+                      </label>
+                      {!bloqueante && (
+                        <div className={estilos.campoGrupo}>
+                          <label className={estilos.rotulo} htmlFor="prazo">
+                            Prazo para ciência (dias corridos, opcional)
+                          </label>
+                          <input
+                            className={estilos.campo}
+                            id="prazo"
+                            type="number"
+                            min={1}
+                            max={365}
+                            value={prazoDias}
+                            onChange={(e) => setPrazoDias(e.target.value)}
+                            placeholder="ex.: 15"
+                          />
+                        </div>
+                      )}
+                      <p>
+                        Documento no ciclo precisa ser exibível no navegador
+                        (PDF, texto ou imagem): a ciência só habilita ao ler
+                        até o fim.
+                      </p>
+                    </>
+                  )}
+                  <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="substitui">
+                      Publicar como versão nova de… (opcional)
+                    </label>
+                    <select
+                      className={estilos.campo}
+                      id="substitui"
+                      value={substituiId}
+                      onChange={(e) => setSubstituiId(e.target.value)}
+                    >
+                      <option value="">Não substitui nenhum documento</option>
+                      {substituiveis.map((documento) => (
+                        <option key={documento.id} value={documento.id}>
+                          {documento.titulo} (#{documento.id})
+                        </option>
+                      ))}
+                    </select>
+                    {substituiId && (
+                      <p>
+                        A versão anterior fica imutável no acervo; se exigir
+                        ciência, a pendência reabre para TODOS os ativos — as
+                        ciências antigas ficam intactas.
+                      </p>
+                    )}
+                  </div>
+                </fieldset>
+              )}
+
               <button className={estilos.botao} type="submit" disabled={enviando}>
                 {enviando ? "Enviando…" : "Enviar"}
               </button>
@@ -385,9 +707,29 @@ export function PainelDocumentos({
                             Sensível
                           </span>
                         )}
+                        {documento.exige_ciencia &&
+                          (documento.bloqueante ? (
+                            <span className={estilos.etiquetaBloqueante}>
+                              Bloqueante
+                            </span>
+                          ) : (
+                            <span className={estilos.etiquetaCiclo}>
+                              Exige ciência
+                            </span>
+                          ))}
+                        {documento.substituido_por_id !== null && (
+                          <span className={estilos.etiquetaSubstituido}>
+                            Substituído
+                          </span>
+                        )}
                         <span className={estilos.detalheArquivo}>
                           {documento.nome_arquivo} ·{" "}
                           {formatarTamanho(documento.tamanho_bytes)}
+                          {documento.substitui_documento_id !== null &&
+                            ` · versão nova de #${documento.substitui_documento_id}`}
+                          {documento.exige_ciencia &&
+                            documento.prazo_ciencia_dias !== null &&
+                            ` · prazo de ${documento.prazo_ciencia_dias} dia(s)`}
                         </span>
                       </td>
                       <td>
@@ -404,12 +746,38 @@ export function PainelDocumentos({
                             Ciência em{" "}
                             {formatarDataHora(documento.minha_ciencia_em)}
                           </span>
+                        ) : documento.substituido_por_id !== null ? (
+                          <span className={estilos.etiquetaSubstituido}>
+                            Versão substituída
+                          </span>
+                        ) : documento.exige_ciencia ? (
+                          <>
+                            {documento.minha_recusa_em && (
+                              <span className={estilos.etiquetaRecusado}>
+                                Recusado em{" "}
+                                {formatarDataHora(documento.minha_recusa_em)}
+                              </span>
+                            )}
+                            {pendenciaDoDocumento(documento.id)?.vencida &&
+                              !documento.minha_recusa_em && (
+                                <span className={estilos.etiquetaVencido}>
+                                  Prazo vencido
+                                </span>
+                              )}
+                            <button
+                              className={estilos.botaoLinha}
+                              type="button"
+                              onClick={() => abrirParaCiencia(documento)}
+                            >
+                              Ler e dar ciência
+                            </button>
+                          </>
                         ) : (
                           <button
                             className={estilos.botaoLinha}
                             type="button"
                             disabled={dandoCiencia === documento.id}
-                            onClick={() => darCiencia(documento)}
+                            onClick={() => darCienciaRapida(documento)}
                           >
                             {dandoCiencia === documento.id
                               ? "Registrando…"
@@ -422,15 +790,7 @@ export function PainelDocumentos({
                           <button
                             className={estilos.botaoLinha}
                             type="button"
-                            onClick={() =>
-                              setDocumentoAberto({
-                                id: documento.id,
-                                titulo: documento.titulo,
-                                nome_arquivo: documento.nome_arquivo,
-                                mime: documento.mime,
-                                sensivel: documento.sensivel,
-                              })
-                            }
+                            onClick={() => abrirParaLeitura(documento)}
                           >
                             Visualizar
                           </button>
@@ -440,6 +800,17 @@ export function PainelDocumentos({
                           >
                             Baixar
                           </a>
+                          {podeGerirCiclo &&
+                            documento.exige_ciencia &&
+                            documento.colaborador_id === null && (
+                              <button
+                                className={estilos.botaoLinha}
+                                type="button"
+                                onClick={() => setCicloAberto(documento.id)}
+                              >
+                                Ciclo
+                              </button>
+                            )}
                         </div>
                       </td>
                     </tr>
@@ -466,6 +837,20 @@ export function PainelDocumentos({
           key={documentoAberto.id}
           documento={documentoAberto}
           aoFechar={fecharVisualizador}
+          ciencia={cienciaDoAberto ?? undefined}
+        />
+      )}
+
+      {cicloAberto !== null && (
+        <QuadroCiclo
+          key={cicloAberto}
+          documentoId={cicloAberto}
+          usuarioId={usuarioId}
+          podeLiberar={podeLiberar}
+          aoFechar={() => {
+            setCicloAberto(null);
+            setVersaoLista((versao) => versao + 1);
+          }}
         />
       )}
     </div>
