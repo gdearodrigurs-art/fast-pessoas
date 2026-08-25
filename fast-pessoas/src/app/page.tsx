@@ -109,9 +109,9 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'painel.executivo.ver')            AS painel_executivo_ver,
        sistema.tem_permissao($1, 'usuario.administrar')            AS usuario_administrar,
        sistema.tem_permissao($1, 'perfil.administrar')             AS perfil_administrar,
-       -- Não é permissão: é FATO de estrutura. Mesmo fragmento de vigência do
-       -- alcance em todo o sistema (rh.relacao_gestor com fim_vigencia NULL e
-       -- início já começado) — ver EQUIPE_VIGENTE em dominios/portais.
+       -- Não é permissão: é FATO de estrutura. Ter liderado DIRETO equivale a
+       -- ter sub-árvore (A2:a) — quem lidera alguém tem equipe; o portal é que
+       -- caminha a sub-árvore inteira (dominios/portais).
        EXISTS (
          SELECT 1
            FROM rh.relacao_gestor rg

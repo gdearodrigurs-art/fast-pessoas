@@ -10,19 +10,18 @@ import { ENTRADA_NO_GRUPO, SAIDA_DO_GRUPO } from "../../lib/sql-vinculo";
 // (avaliação), `listarAprovacoesPendentes` e `listarMovimentacoesDoLider`
 // (demandas). O que está aqui é o que não existia: a visão POR EQUIPE.
 //
-// Fonte única do alcance: rh.relacao_gestor com fim_vigencia IS NULL e
-// inicio_vigencia já começada — o mesmo fragmento usado em colaboradores e
-// demandas. Toda consulta é parametrizada pelo id do COLABORADOR gestor.
+// Fonte única do alcance: a SUB-ÁRVORE do gestor (decisão A2:a do docs/20 —
+// liderados diretos e INDIRETOS, uma semântica só de "minha equipe"). Os ids
+// chegam prontos do serviço: o quadro do organograma sai UMA vez por request e
+// a caminhada (organograma/esquemas.ts — visitados + teto; nunca WITH
+// RECURSIVE, que trava com ciclo) resolve quem é a equipe. Cada consulta aqui
+// só veste a lista — a relação direta deixou de ser consultada neste arquivo,
+// exceto no turnover (histórico, ver comentário lá) e no seletor de gestores.
 
 const HOJE_SP = "(now() AT TIME ZONE 'America/Sao_Paulo')::date";
 
-/** Liderados com relação VIGENTE — inclui desligados (o filtro é de quem chama). */
-const EQUIPE_VIGENTE = `
-  SELECT rg.liderado_colaborador_id AS id
-    FROM rh.relacao_gestor rg
-   WHERE rg.gestor_colaborador_id = $1
-     AND rg.fim_vigencia IS NULL
-     AND rg.inicio_vigencia <= ${HOJE_SP}`;
+/** Os vínculos da sub-árvore, prontos para JOIN — $1 é a lista de ids. */
+const EQUIPE_SUB_ARVORE = `SELECT sub.id FROM unnest($1::bigint[]) AS sub(id)`;
 
 // ------------------------------------------------------------------ gestor e seletor
 
@@ -30,11 +29,15 @@ export interface GestorPortal {
   colaborador_id: number;
   usuario_id: number;
   nome_completo: string;
-  liderados_vigentes: number;
   /** Empresa do grupo em que o CONTRATO do gestor está registrado. */
   empresa_id: number | null;
 }
 
+/**
+ * A ficha mínima do gestor. A contagem de liderados saiu daqui de propósito:
+ * quem conta a equipe é a sub-árvore caminhada no serviço — contar a relação
+ * direta aqui daria um número diferente do que a tela mostra.
+ */
 export async function buscarGestor(
   colaboradorId: number
 ): Promise<GestorPortal | null> {
@@ -42,11 +45,9 @@ export async function buscarGestor(
     colaborador_id: string;
     usuario_id: string;
     nome_completo: string;
-    liderados_vigentes: string;
     empresa_id: string | null;
   }>(
     `SELECT c.id AS colaborador_id, c.usuario_id, c.nome_completo,
-            (SELECT count(*) FROM (${EQUIPE_VIGENTE}) eq) AS liderados_vigentes,
             (SELECT ld.empresa_id
                FROM rh.lotacao_detalhada ld
               WHERE ld.colaborador_id = c.id AND ld.fim_vigencia IS NULL
@@ -62,7 +63,6 @@ export async function buscarGestor(
     colaborador_id: Number(linha.colaborador_id),
     usuario_id: Number(linha.usuario_id),
     nome_completo: linha.nome_completo,
-    liderados_vigentes: Number(linha.liderados_vigentes),
     empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
   };
 }
@@ -73,7 +73,13 @@ export interface OpcaoGestor {
   liderados: number;
 }
 
-/** Seletor de quem enxerga todo mundo: gestores com equipe vigente hoje. */
+/**
+ * Seletor de quem enxerga todo mundo: gestores com equipe vigente hoje. Quem
+ * tem sub-árvore tem ao menos um liderado DIRETO, então a associação direta
+ * basta para dizer QUEM entra no seletor; a CONTAGEM devolvida aqui é a dos
+ * diretos e o serviço a substitui pela da sub-árvore inteira (A2:a), para o
+ * número do seletor bater com o da tela.
+ */
 export async function listarGestoresComEquipe(): Promise<OpcaoGestor[]> {
   const linhas = await consultar<{
     colaborador_id: string;
@@ -128,15 +134,17 @@ export interface LinhaEquipe {
 }
 
 /**
- * Liderados NÃO desligados com a projeção vigente de cargo e unidade.
+ * Liderados NÃO desligados com a projeção vigente de cargo e unidade — a
+ * SUB-ÁRVORE inteira (diretos e indiretos), cujos ids o serviço já caminhou.
  *
  * `afastado_hoje` é o único dado de afastamento que sai daqui: o gestor precisa
  * saber que a pessoa não está no posto, e NADA além disso (tipo e conteúdo de
  * saúde ficam com afastamento.saude.ver, migration 0007).
  */
 export async function listarEquipe(
-  gestorColaboradorId: number
+  equipeIds: number[]
 ): Promise<LinhaEquipe[]> {
+  if (equipeIds.length === 0) return [];
   const linhas = await consultar<{
     colaborador_id: string;
     nome_completo: string;
@@ -167,7 +175,7 @@ export async function listarEquipe(
             fer.fim IS NOT NULL AS em_ferias_hoje,
             fer.fim::text AS ferias_ate,
             fb.ultimo_feedback_em, fb.dias_desde_feedback
-       FROM (${EQUIPE_VIGENTE}) eq
+       FROM (${EQUIPE_SUB_ARVORE}) eq
        JOIN rh.colaborador c ON c.id = eq.id
        LEFT JOIN LATERAL (
          SELECT cv.nome AS cargo_nome
@@ -202,7 +210,7 @@ export async function listarEquipe(
        ) fb ON TRUE
       WHERE c.status <> 'desligado'
       ORDER BY c.nome_completo, c.id`,
-    [gestorColaboradorId]
+    [equipeIds]
   );
   return linhas.map((linha) => ({
     ...linha,
@@ -227,9 +235,10 @@ export interface ProgramacaoEquipe {
 
 /** Programações já aprovadas (ou em gozo) que começam dentro da janela. */
 export async function listarProgramacoesAprovadas(
-  gestorColaboradorId: number,
+  equipeIds: number[],
   janelaDias: number
 ): Promise<ProgramacaoEquipe[]> {
+  if (equipeIds.length === 0) return [];
   const linhas = await consultar<{
     programacao_id: string;
     colaborador_id: string;
@@ -246,14 +255,14 @@ export async function listarProgramacoesAprovadas(
             (pf.inicio + pf.dias - 1)::text AS fim,
             pf.dias, pf.abono_dias, pf.status,
             (pf.inicio - ${HOJE_SP})::int AS dias_para_inicio
-       FROM (${EQUIPE_VIGENTE}) eq
+       FROM (${EQUIPE_SUB_ARVORE}) eq
        JOIN rh.colaborador c ON c.id = eq.id
        JOIN rh.programacao_ferias pf ON pf.colaborador_id = c.id
       WHERE pf.status IN ('aprovada','em_gozo')
         AND (pf.inicio + pf.dias - 1) >= ${HOJE_SP}
         AND pf.inicio <= ${HOJE_SP} + $2::int
       ORDER BY pf.inicio, c.nome_completo`,
-    [gestorColaboradorId, janelaDias]
+    [equipeIds, janelaDias]
   );
   return linhas.map((linha) => ({
     ...linha,
@@ -282,9 +291,10 @@ export interface PeriodoEmRisco {
  * solicitado ou aprovado, para o gestor não cobrar duas vezes.
  */
 export async function listarPeriodosEmRisco(
-  gestorColaboradorId: number,
+  equipeIds: number[],
   janelaDias: number
 ): Promise<PeriodoEmRisco[]> {
+  if (equipeIds.length === 0) return [];
   const linhas = await consultar<{
     periodo_id: string;
     colaborador_id: string;
@@ -308,14 +318,14 @@ export async function listarPeriodosEmRisco(
                WHERE pf.periodo_aquisitivo_id = pa.id
                  AND pf.status IN ('solicitada','aprovada','em_gozo','concluida')
             ), 0) AS dias_programados
-       FROM (${EQUIPE_VIGENTE}) eq
+       FROM (${EQUIPE_SUB_ARVORE}) eq
        JOIN rh.colaborador c ON c.id = eq.id
        JOIN rh.periodo_aquisitivo pa ON pa.colaborador_id = c.id
       WHERE c.status <> 'desligado'
         AND pa.status IN ('em_aberto','programado_parcial','vencido')
         AND (pa.limite_concessivo - ${HOJE_SP}) <= $2::int
       ORDER BY pa.limite_concessivo, c.nome_completo`,
-    [gestorColaboradorId, janelaDias]
+    [equipeIds, janelaDias]
   );
   return linhas.map((linha) => ({
     ...linha,
@@ -345,6 +355,13 @@ export interface ApuracaoTurnover {
  * medido nas duas pontas com a relação VÁLIDA NAQUELA DATA, e o serviço tira a
  * média. A analista confere a conta na tela: numerador, denominador e fórmula
  * ficam visíveis.
+ *
+ * ÚNICO bloco que segue na relação DIRETA, de propósito: o turnover é conta
+ * HISTÓRICA (quem era da equipe em cada data da janela), e a sub-árvore de
+ * hoje é um retrato do quadro atual — desligado não está nela, então o
+ * numerador viraria zero perpétuo. Estender a sub-árvore ao passado exige uma
+ * caminhada com vigência por data, que é decisão de produto, não conserto
+ * (fica anotado no relatório da tarefa).
  */
 export async function apurarTurnover(
   gestorColaboradorId: number,
@@ -451,10 +468,11 @@ export interface MarcoExperiencia {
  * tem processo no sistema — base legada, onde não há o que respeitar.
  */
 export async function listarMarcosExperiencia(
-  gestorColaboradorId: number,
+  equipeIds: number[],
   antecedenciaDias: number,
   atrasoDias: number
 ): Promise<MarcoExperiencia[]> {
+  if (equipeIds.length === 0) return [];
   const linhas = await consultar<{
     colaborador_id: string;
     nome_completo: string;
@@ -467,7 +485,7 @@ export async function listarMarcosExperiencia(
        SELECT c.id, c.nome_completo, c.data_admissao,
               pa.prazo_experiencia_1, pa.prazo_experiencia_2,
               pa.id IS NOT NULL AS tem_processo
-         FROM (${EQUIPE_VIGENTE}) eq
+         FROM (${EQUIPE_SUB_ARVORE}) eq
          JOIN rh.colaborador c ON c.id = eq.id
          LEFT JOIN LATERAL (
            SELECT p.id, p.prazo_experiencia_1, p.prazo_experiencia_2,
@@ -526,7 +544,7 @@ export async function listarMarcosExperiencia(
               AND (m.data_marco - ${HOJE_SP}) >= ($3::int * -1))
         )
       ORDER BY m.data_marco, m.nome_completo`,
-    [gestorColaboradorId, antecedenciaDias, atrasoDias]
+    [equipeIds, antecedenciaDias, atrasoDias]
   );
   return linhas.map((linha) => ({
     colaborador_id: Number(linha.colaborador_id),
@@ -565,9 +583,10 @@ export interface VencimentoAso {
  * de caso; ordena pela admissão (quanto mais antiga, mais tempo pendente).
  */
 export async function listarVencimentosAso(
-  gestorColaboradorId: number,
+  equipeIds: number[],
   antecedenciaDias: number
 ): Promise<VencimentoAso[]> {
+  if (equipeIds.length === 0) return [];
   const linhas = await consultar<{
     colaborador_id: string;
     nome_completo: string;
@@ -581,7 +600,7 @@ export async function listarVencimentosAso(
             (ult.validade - ${HOJE_SP})::int AS dias_ate_validade,
             c.data_admissao::text AS data_admissao,
             (${HOJE_SP} - c.data_admissao)::int AS dias_desde_admissao
-       FROM (${EQUIPE_VIGENTE}) eq
+       FROM (${EQUIPE_SUB_ARVORE}) eq
        JOIN rh.colaborador c ON c.id = eq.id
        LEFT JOIN LATERAL (
          SELECT a.validade
@@ -597,7 +616,7 @@ export async function listarVencimentosAso(
       ORDER BY (ult.validade IS NOT NULL),
                COALESCE(ult.validade, c.data_admissao),
                c.nome_completo`,
-    [gestorColaboradorId, antecedenciaDias]
+    [equipeIds, antecedenciaDias]
   );
   return linhas.map((linha) => ({
     ...linha,

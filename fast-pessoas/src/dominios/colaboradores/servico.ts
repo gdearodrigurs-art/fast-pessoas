@@ -1475,45 +1475,98 @@ export async function escopoDaMinhaEquipe(
 }
 
 /**
+ * A chave que DE FATO abriu o salário — molde `chaveQueAmpliouAFicha` (A1:a).
+ *
+ * `null` = nada a registrar: a PRÓPRIA posição (qualquer vínculo da MINHA
+ * pessoa — o contrato anterior no grupo continua sendo meu) não é leitura de
+ * terceiro. Fora isso, a global responde quando presente; quem só tem a de
+ * equipe grava a de equipe — nunca a mais ampla, que seria trilha mentindo.
+ */
+export function chaveQueAbriuAPosicao(
+  chavesConcedidas: ReadonlySet<string>,
+  ehVinculoMeu: boolean
+): string | null {
+  if (ehVinculoMeu) return null;
+  return chavesConcedidas.has("rh.posicao.ver")
+    ? "rh.posicao.ver"
+    : "rh.posicao.ver.equipe";
+}
+
+/**
+ * Costuras de `obterPosicoes` com o banco — o que os testes trocam por dublês
+ * (molde DepsPosse, pendência 16.2). Produção não passa o parâmetro.
+ */
+export interface DepsPosicoes {
+  colaboradorIdDoUsuario: typeof colaboradorIdDoUsuario;
+  colaboradorNoEscopo: typeof colaboradorNoEscopo;
+  lideradosDaSubArvore: typeof carregarLideradosDaSubArvore;
+  listarPosicoes: typeof listarPosicoes;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+}
+
+const DEPS_POSICOES_REAIS: DepsPosicoes = {
+  colaboradorIdDoUsuario,
+  colaboradorNoEscopo,
+  lideradosDaSubArvore: carregarLideradosDaSubArvore,
+  listarPosicoes,
+  registrarLeituraSensivel,
+};
+
+/**
  * Salário com DUAS chaves de alcances diferentes (decisão A1:a): a global
  * `rh.posicao.ver` continua como sempre foi; a nova `rh.posicao.ver.equipe`
  * alcança só a sub-árvore de quem pergunta (e os próprios vínculos, pela
- * cláusula de pessoa). A trilha grava a chave que DE FATO autorizou — molde
- * `chaveQueAmpliouAFicha`: gravar a global para um gestor que só alcança o
- * próprio ramo seria trilha que mente.
+ * cláusula de pessoa). A trilha grava a chave que DE FATO autorizou
+ * (`chaveQueAbriuAPosicao`) — e `chavesConcedidas` NÃO tem valor padrão de
+ * propósito: um default "rh.posicao.ver" deixava rota nova (o POST já caiu
+ * nisso) carimbar a chave global para quem talvez nem a tenha.
  */
 export async function obterPosicoes(
   sessao: PayloadSessao,
   colaboradorId: number,
-  chavesConcedidas: ReadonlySet<string> = new Set(["rh.posicao.ver"])
+  chavesConcedidas: ReadonlySet<string>,
+  deps: DepsPosicoes = DEPS_POSICOES_REAIS
 ): Promise<{ posicoes: Posicao[] }> {
-  const global = chavesConcedidas.has("rh.posicao.ver");
-  if (!global) {
-    // Só a chave de equipe: o alvo precisa estar na MINHA sub-árvore (ou ser
-    // um vínculo meu). Fora dela = ausência, o mesmo 404 de inexistente.
-    const escopoEquipe = await escopoDaMinhaEquipe(sessao);
-    const visivel = await colaboradorNoEscopo(colaboradorId, escopoEquipe);
-    if (!visivel) {
+  const meuVinculo = await deps.colaboradorIdDoUsuario(sessao.usuario_id);
+  // Cláusula de pessoa: qualquer vínculo MEU é a PRÓPRIA posição — leitura do
+  // titular sobre si, que não deixa trilha (molde `chaveQueAmpliouAFicha`).
+  const ehVinculoMeu =
+    meuVinculo !== null &&
+    (await deps.colaboradorNoEscopo(colaboradorId, {
+      alcance: "proprio",
+      colaboradorId: meuVinculo,
+    }));
+  if (!chavesConcedidas.has("rh.posicao.ver") && !ehVinculoMeu) {
+    // Só a chave de equipe: o alvo precisa estar na MINHA sub-árvore. Fora
+    // dela = ausência, o mesmo 404 de inexistente.
+    const liderados =
+      meuVinculo === null ? [] : await deps.lideradosDaSubArvore(meuVinculo);
+    if (!liderados.includes(colaboradorId)) {
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
   }
-  const chaveDaLeitura = global ? "rh.posicao.ver" : "rh.posicao.ver.equipe";
-  const posicoes = await listarPosicoes(colaboradorId);
+  const chaveDaLeitura = chaveQueAbriuAPosicao(chavesConcedidas, ehVinculoMeu);
+  const posicoes = await deps.listarPosicoes(colaboradorId);
   if (posicoes.length === 0) {
-    // Sem posição não há dado sensível lido; confere só a existência da ficha.
+    // Id fantasma é 404 ANTES da trilha: ler quem não existe não é leitura
+    // sensível de ninguém (molde do ponto).
     const escopoPleno: Escopo = { alcance: "todos" };
-    const existe = await colaboradorNoEscopo(colaboradorId, escopoPleno);
+    const existe = await deps.colaboradorNoEscopo(colaboradorId, escopoPleno);
     if (!existe) {
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
-    return { posicoes };
   }
-  await registrarLeituraSensivel({
-    usuarioId: sessao.usuario_id,
-    chavePermissao: chaveDaLeitura,
-    recurso: "colaborador.salario",
-    registroId: String(colaboradorId),
-  });
+  // "Vazio também é informação" (molde disciplinar/servico.ts): abrir o
+  // salário de terceiro grava trilha MESMO sem posição registrada — "esta
+  // pessoa não tem posição" também é resposta sobre ela.
+  if (chaveDaLeitura !== null) {
+    await deps.registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: chaveDaLeitura,
+      recurso: "colaborador.salario",
+      registroId: String(colaboradorId),
+    });
+  }
   return { posicoes };
 }
 
@@ -2671,26 +2724,49 @@ function projetarRacaCor(bruto: string | null): RacaCorVisao {
 }
 
 /**
+ * Costuras de `obterRacaCorColaborador` com o banco — dublês nos testes
+ * (molde DepsPosse, pendência 16.2). Produção não passa o parâmetro.
+ */
+export interface DepsRacaCor {
+  lerRacaCorDoColaborador: typeof lerRacaCorDoColaborador;
+  pessoaIdDoUsuario: typeof pessoaIdDoUsuario;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+}
+
+const DEPS_RACA_COR_REAIS: DepsRacaCor = {
+  lerRacaCorDoColaborador,
+  pessoaIdDoUsuario,
+  registrarLeituraSensivel,
+};
+
+/**
  * A leitura INDIVIDUAL do DP na ficha (decisão A5:b — escolha consciente do
  * dono, registrada em docs/20). A rota exige `rh.colaborador.sensivel.ver`
- * (a chave de dado sensível da ficha, que já obriga 2FA); aqui a leitura
- * grava trilha SEMPRE, no molde salário/ASO — inclusive quando o valor é
- * "não declarada", que também é informação sobre a pessoa.
+ * (a chave de dado sensível da ficha, que já obriga 2FA); aqui a leitura de
+ * TERCEIRO grava trilha sempre, no molde salário/ASO — inclusive quando o
+ * valor é "não declarada", que também é informação sobre a pessoa. A PRÓPRIA
+ * raça-cor (mesma pessoa da sessão, em qualquer vínculo) é leitura do titular
+ * sobre si e NÃO deixa trilha — molde `chaveQueAmpliouAFicha`: trilha é para
+ * dado de terceiro.
  */
 export async function obterRacaCorColaborador(
   sessao: PayloadSessao,
-  colaboradorId: number
+  colaboradorId: number,
+  deps: DepsRacaCor = DEPS_RACA_COR_REAIS
 ): Promise<RacaCorVisao> {
-  const linha = await lerRacaCorDoColaborador(colaboradorId);
+  const linha = await deps.lerRacaCorDoColaborador(colaboradorId);
   if (!linha) {
     throw new ErroHttp(404, "Colaborador não encontrado.");
   }
-  await registrarLeituraSensivel({
-    usuarioId: sessao.usuario_id,
-    chavePermissao: "rh.colaborador.sensivel.ver",
-    recurso: "colaborador.raca_cor",
-    registroId: String(colaboradorId),
-  });
+  const minhaPessoa = await deps.pessoaIdDoUsuario(sessao.usuario_id);
+  if (minhaPessoa !== linha.pessoa_id) {
+    await deps.registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "rh.colaborador.sensivel.ver",
+      recurso: "colaborador.raca_cor",
+      registroId: String(colaboradorId),
+    });
+  }
   return projetarRacaCor(linha.raca_cor);
 }
 

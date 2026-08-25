@@ -14,6 +14,10 @@ import {
   temPermissao,
 } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
+// A2:a (docs/20) — "minha equipe" é a SUB-ÁRVORE (diretos e indiretos), uma
+// semântica só no sistema. A caminhada é em JS com teto e imune a ciclo;
+// subarvore.ts carrega o quadro UMA vez por chamada.
+import { carregarLideradosDaSubArvore } from "../organograma/subarvore";
 import {
   agruparMarcacoesPorDia,
   apurarPonto,
@@ -2153,9 +2157,10 @@ async function ehVinculoProprio(
 
 /**
  * Alcance de leitura: DP/diretoria (ponto.administrar) veem todo mundo; gestor
- * (ponto.ver.equipe) só quem está na relação vigente. O papel do login não dá
- * alcance sozinho — quem dá é rh.relacao_gestor. Devolve a chave que autorizou,
- * para quem chama levá-la à trilha.
+ * (ponto.ver.equipe) só quem está na SUA SUB-ÁRVORE — diretos e indiretos
+ * (decisão A2:a). O papel do login não dá alcance sozinho — quem dá é
+ * rh.relacao_gestor, agora transitiva. Devolve a chave que autorizou, para
+ * quem chama levá-la à trilha.
  */
 async function exigirAlcanceSobre(
   sessao: PayloadSessao,
@@ -2167,8 +2172,8 @@ async function exigirAlcanceSobre(
   if (await temPermissao(sessao.usuario_id, "ponto.ver.equipe")) {
     const proprio = await repo.colaboradorDoUsuario(sessao.usuario_id);
     if (proprio) {
-      const equipe = await repo.liderados(proprio.id);
-      if (equipe.some((pessoa) => pessoa.id === colaboradorId)) {
+      const equipe = await carregarLideradosDaSubArvore(proprio.id);
+      if (equipe.includes(colaboradorId)) {
         return "ponto.ver.equipe";
       }
     }
@@ -2234,10 +2239,11 @@ export async function listarIntercorrencias(
       mais_antiga: null,
     };
   }
-  const equipe = await repo.liderados(proprio.id);
+  // A fila do gestor cobre a SUB-ÁRVORE (A2:a) — o quadro sai uma vez aqui.
+  const equipe = await carregarLideradosDaSubArvore(proprio.id);
   const fila = await repo.listarIntercorrencias({
     ...filtros,
-    colaboradoresPermitidos: equipe.map((pessoa) => pessoa.id),
+    colaboradoresPermitidos: equipe,
   });
   if (fila.itens.length > 0) {
     await registrarLeituraDePonto(
@@ -3138,19 +3144,44 @@ export interface ResumoPontoEquipe {
 }
 
 /**
+ * Costuras do resumo do time com o banco — o que os testes trocam por dublês
+ * (molde DepsPosse, pendência 16.2). Produção não passa o parâmetro.
+ */
+export interface DepsResumoEquipe {
+  lideradosDaSubArvore: typeof carregarLideradosDaSubArvore;
+  colaboradoresPorIds: typeof repo.colaboradoresPorIds;
+  saldosBanco: typeof repo.saldosBanco;
+  ultimasApuracoes: typeof repo.ultimasApuracoes;
+  contarIntercorrenciasAbertas: typeof repo.contarIntercorrenciasAbertas;
+  resolverRegraBanco: typeof repo.resolverRegraBanco;
+}
+
+const DEPS_RESUMO_EQUIPE_REAIS: DepsResumoEquipe = {
+  lideradosDaSubArvore: carregarLideradosDaSubArvore,
+  colaboradoresPorIds: repo.colaboradoresPorIds,
+  saldosBanco: repo.saldosBanco,
+  ultimasApuracoes: repo.ultimasApuracoes,
+  contarIntercorrenciasAbertas: repo.contarIntercorrenciasAbertas,
+  resolverRegraBanco: repo.resolverRegraBanco,
+};
+
+/**
  * Visão do portal do gestor: banco de horas do time e QUEM ESTÁ ESTOURANDO
  * hora extra — o limite vem da regra resolvida nos três níveis para cada
- * pessoa, não de um número fixo na tela.
+ * pessoa, não de um número fixo na tela. O time é a SUB-ÁRVORE do gestor
+ * (A2:a): o quadro é carregado UMA vez e a caminhada alcança diretos e
+ * indiretos.
  */
 export async function resumoPontoDaEquipe(
-  gestorColaboradorId: number
+  gestorColaboradorId: number,
+  deps: DepsResumoEquipe = DEPS_RESUMO_EQUIPE_REAIS
 ): Promise<ResumoPontoEquipe> {
-  const equipe = await repo.liderados(gestorColaboradorId);
-  const ids = equipe.map((pessoa) => pessoa.id);
+  const ids = await deps.lideradosDaSubArvore(gestorColaboradorId);
+  const equipe = await deps.colaboradoresPorIds(ids);
   const [saldos, ultimas, abertas] = await Promise.all([
-    repo.saldosBanco(ids),
-    repo.ultimasApuracoes(ids),
-    repo.contarIntercorrenciasAbertas(ids),
+    deps.saldosBanco(ids),
+    deps.ultimasApuracoes(ids),
+    deps.contarIntercorrenciasAbertas(ids),
   ]);
   const hoje = hojeLocal();
 
@@ -3158,7 +3189,7 @@ export async function resumoPontoDaEquipe(
   for (const pessoa of equipe) {
     const saldo = saldos.get(pessoa.id) ?? 0;
     const ultima = ultimas.get(pessoa.id) ?? null;
-    const regra = await repo.resolverRegraBanco(pessoa.id, hoje);
+    const regra = await deps.resolverRegraBanco(pessoa.id, hoje);
     linhas.push({
       colaborador_id: pessoa.id,
       nome: pessoa.nome_completo,

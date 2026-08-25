@@ -2364,22 +2364,29 @@ export async function colaboradorDoUsuario(
     : null;
 }
 
-/** Alcance do gestor vem da relação vigente, NUNCA do papel do login. */
-export async function liderados(
-  gestorColaboradorId: number
+/**
+ * Veste os vínculos de uma equipe com nome e matrícula. Desde a decisão A2:a
+ * (docs/20) a equipe do gestor é a SUB-ÁRVORE — diretos e INDIRETOS — e os ids
+ * chegam prontos do serviço, caminhados em JS sobre o quadro do organograma
+ * (organograma/subarvore.ts: visitados + teto; nunca WITH RECURSIVE, que trava
+ * com ciclo na hierarquia). O alcance continua nascendo de rh.relacao_gestor,
+ * NUNCA do papel do login — só que agora a relação é transitiva.
+ */
+export async function colaboradoresPorIds(
+  ids: number[]
 ): Promise<ColaboradorPonto[]> {
+  if (ids.length === 0) return [];
   const linhas = await consultar<{
     id: string;
     nome_completo: string;
     matricula: string;
   }>(
     `SELECT c.id, c.nome_completo, c.matricula
-       FROM rh.relacao_gestor r
-       JOIN rh.colaborador c ON c.id = r.liderado_colaborador_id
-      WHERE r.gestor_colaborador_id = $1 AND r.fim_vigencia IS NULL
+       FROM rh.colaborador c
+      WHERE c.id = ANY($1::bigint[])
         AND c.status <> 'desligado'
       ORDER BY c.nome_completo`,
-    [gestorColaboradorId]
+    [ids]
   );
   return linhas.map((linha) => ({
     id: paraNumero(linha.id),
