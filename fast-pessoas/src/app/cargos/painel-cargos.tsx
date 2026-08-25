@@ -9,6 +9,7 @@ import {
   type Cha,
   type TipoVinculo,
 } from "@/dominios/colaboradores/esquemas";
+import { BlocoCarga } from "@/app/estrutura/bloco-carga";
 import estilos from "./page.module.css";
 
 interface CargoResumo {
@@ -388,12 +389,15 @@ function CamposRcf({
 export function PainelCargos({
   podeAdministrar,
   podeAdminEstrutura,
+  podeImportar,
 }: {
   /** false = leitura do RCF apenas (chave rh.cargo.ver): sem formulários,
    *  sem faixa salarial (que a API já não envia). */
   podeAdministrar: boolean;
   /** Só para oferecer o atalho: os catálogos moram na tela de estrutura. */
   podeAdminEstrutura: boolean;
+  /** Chave sistema.carga.importar: o bloco de carga inicial por planilha. */
+  podeImportar: boolean;
 }) {
   const [cargos, setCargos] = useState<CargoResumo[]>([]);
   const [niveis, setNiveis] = useState<NivelHierarquico[]>([]);
@@ -966,6 +970,22 @@ export function PainelCargos({
               </div>
             )}
           </section>
+        )}
+
+        {podeImportar && (
+          <BlocoCarga
+            titulo="Carga inicial — importar cargos por planilha"
+            rota="/api/cargos/importacao"
+            colunas="cargo ; nivel ; faixa_min ; faixa_max"
+            explicacao={
+              "O nível é o NOME de um nível hierárquico do catálogo (opcional; " +
+              "a carga não cria nível). A faixa salarial vem em reais com " +
+              "vírgula (3.500,00) — mínimo e máximo juntos, ou nenhum. O RCF " +
+              "completo se escreve depois, cargo a cargo, nesta tela."
+            }
+            exemplo={"Vendedor(a);Operacional;2.400,00;3.800,00"}
+            aoImportar={() => void carregar()}
+          />
         )}
 
         {podeAdminEstrutura && (

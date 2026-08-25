@@ -13,11 +13,13 @@ export default async function PaginaCargos() {
     pode_admin_cargo: boolean;
     pode_ver_cargo: boolean;
     pode_admin_estrutura: boolean;
+    pode_importar: boolean;
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.cargo.administrar') AS pode_admin_cargo,
             sistema.tem_permissao($1, 'rh.cargo.ver')         AS pode_ver_cargo,
             sistema.tem_permissao($1, 'rh.estabelecimento.administrar')
-              AS pode_admin_estrutura`,
+              AS pode_admin_estrutura,
+            sistema.tem_permissao($1, 'sistema.carga.importar') AS pode_importar`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -28,6 +30,7 @@ export default async function PaginaCargos() {
     <PainelCargos
       podeAdministrar={Boolean(pode?.pode_admin_cargo)}
       podeAdminEstrutura={Boolean(pode?.pode_admin_estrutura)}
+      podeImportar={Boolean(pode?.pode_importar)}
     />
   );
 }
