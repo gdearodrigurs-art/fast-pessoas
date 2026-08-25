@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  avisoCompetenciasCalculadas,
   chaveDeNome,
   esquemaRegistroMedida,
+  trechoRemovidoDaSuspensao,
   validarEncurtamentoDeSuspensao,
   validarPeriodoDaMedida,
 } from "../src/dominios/disciplinar/esquemas";
@@ -187,6 +189,59 @@ test("janela com fim em aberto (schema permite) aceita o fechamento", () => {
     ),
     null
   );
+});
+
+// ---------------------------------------------------------------- trecho removido pelo encurtamento (D4)
+// O encurtamento pode chegar depois de uma competência já calculada ter lido a
+// janela cheia (D2:a): o serviço pergunta ao banco quais competências
+// CALCULADAS intersectam o trecho removido e devolve o aviso no payload, sem
+// bloquear. As duas pontas puras — o trecho e o texto — são cobertas aqui.
+
+test("D4: o trecho removido nasce no dia seguinte ao novo fim e vai até o fim antigo", () => {
+  assert.deepEqual(trechoRemovidoDaSuspensao("2026-09-10", "2026-09-04"), {
+    inicio: "2026-09-05",
+    fim: "2026-09-10",
+  });
+});
+
+test("D4: janela ABERTA encurtada remove dali em diante — fim nulo no trecho", () => {
+  assert.deepEqual(trechoRemovidoDaSuspensao(null, "2026-08-31"), {
+    inicio: "2026-09-01",
+    fim: null,
+  });
+});
+
+test("D4: o dia seguinte atravessa fim de mês, de ano e o 29 de fevereiro no calendário civil", () => {
+  assert.deepEqual(trechoRemovidoDaSuspensao(null, "2026-12-31"), {
+    inicio: "2027-01-01",
+    fim: null,
+  });
+  assert.deepEqual(trechoRemovidoDaSuspensao("2026-03-05", "2026-02-28"), {
+    inicio: "2026-03-01",
+    fim: "2026-03-05",
+  });
+  assert.deepEqual(trechoRemovidoDaSuspensao("2028-03-05", "2028-02-28"), {
+    inicio: "2028-02-29", // 2028 é bissexto
+    fim: "2028-03-05",
+  });
+});
+
+test("D4: novo fim igual ou posterior ao atual não remove nada (a régua D1 já barrou — defesa)", () => {
+  assert.equal(trechoRemovidoDaSuspensao("2026-09-10", "2026-09-10"), null);
+  assert.equal(trechoRemovidoDaSuspensao("2026-09-10", "2026-09-11"), null);
+});
+
+test("D4: o aviso nomeia cada competência calculada e pede recálculo/complementar; sem competência, sem aviso", () => {
+  assert.equal(avisoCompetenciasCalculadas([]), null);
+  const um = avisoCompetenciasCalculadas([{ ano: 2026, mes: 9 }]);
+  assert.match(um ?? "", /competência 9\/2026 calculada com esse período/);
+  assert.match(um ?? "", /recalcule/);
+  assert.match(um ?? "", /complementar/);
+  const dois = avisoCompetenciasCalculadas([
+    { ano: 2026, mes: 9 },
+    { ano: 2026, mes: 10 },
+  ]);
+  assert.match(dois ?? "", /competências 9\/2026, 10\/2026 calculadas/);
 });
 
 // ---------------------------------------------------------------- chave derivada do nome (catálogo)

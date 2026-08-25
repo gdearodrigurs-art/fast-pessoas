@@ -185,6 +185,59 @@ export function validarEncurtamentoDeSuspensao(
   return null;
 }
 
+// ------------------------------------------------------------------ trecho removido pelo encurtamento (D4)
+// O encurtamento pode chegar DEPOIS de uma competência já ter sido calculada
+// lendo a janela cheia (D2:a, 0100): a folha descontou dias que a janela nova
+// não cobre mais. O serviço pergunta ao banco quais competências CALCULADAS
+// deste colaborador intersectam o trecho removido e devolve o aviso no
+// payload (sem bloquear — D1:a segue valendo). As duas pontas PURAS moram
+// aqui, no molde de validarEncurtamentoDeSuspensao: testáveis sem banco.
+
+/** O pedaço da janela que o encurtamento REMOVE: (novo fim, fim antigo]. */
+export interface TrechoRemovido {
+  /** Primeiro dia removido — o dia seguinte ao novo fim. */
+  inicio: string;
+  /** Último dia removido; null quando a janela era ABERTA (removeu dali em diante). */
+  fim: string | null;
+}
+
+/** Dia civil seguinte, em aritmética de calendário UTC (molde suspensao.ts). */
+function diaSeguinte(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1, dia + 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * O que o encurtamento tira da janela. null = nada removido (novo fim não
+ * antecede o atual — a régua D1 já barrou isso antes; aqui é defesa).
+ */
+export function trechoRemovidoDaSuspensao(
+  fimAtual: string | null,
+  novoFim: string
+): TrechoRemovido | null {
+  if (fimAtual !== null && novoFim >= fimAtual) return null;
+  return { inicio: diaSeguinte(novoFim), fim: fimAtual };
+}
+
+/**
+ * O texto do aviso quando competências CALCULADAS intersectam o trecho
+ * removido. A correção não é automática de propósito: recalcular é decisão da
+ * folha (competência aberta/em conferência recalcula; fechada não reabre — é
+ * folha complementar, F2). null = nenhuma competência atingida, nada a avisar.
+ */
+export function avisoCompetenciasCalculadas(
+  competencias: { ano: number; mes: number }[]
+): string | null {
+  if (competencias.length === 0) return null;
+  const rotulos = competencias.map((item) => `${item.mes}/${item.ano}`);
+  const plural = rotulos.length > 1;
+  return (
+    `competência${plural ? "s" : ""} ${rotulos.join(", ")} calculada${plural ? "s" : ""} ` +
+    "com esse período de suspensão — recalcule (aberta/em conferência) ou lance " +
+    "folha complementar (fechada) para devolver os dias que a janela não cobre mais"
+  );
+}
+
 // ------------------------------------------------------------------ catálogo de tipos (administrável, molde 0054)
 
 export const esquemaCriacaoTipoMedida = z.object({

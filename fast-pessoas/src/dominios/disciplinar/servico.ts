@@ -11,10 +11,12 @@ import {
 import { carregarLideradosDaSubArvore } from "../organograma/subarvore";
 import { notificar } from "../notificacoes/servico";
 import {
+  avisoCompetenciasCalculadas,
   chaveDeNome,
   CriacaoTipoMedida,
   FechamentoSuspensao,
   RegistroMedida,
+  trechoRemovidoDaSuspensao,
   validarEncurtamentoDeSuspensao,
   validarPeriodoDaMedida,
 } from "./esquemas";
@@ -237,6 +239,17 @@ export async function registrarMedida(
 
 // ------------------------------------------------------------------ fechar/encurtar suspensão (decisão D1:a)
 
+/** O payload do fechamento manual: a medida atualizada + o aviso D4. */
+export interface MedidaEncerrada extends MedidaDisciplinar {
+  /**
+   * D4 (costura com a folha): competência JÁ CALCULADA intersecta o trecho que
+   * o encurtamento removeu — a folha descontou dias que a janela não cobre
+   * mais. Não bloqueia; o texto pede recálculo (aberta/em conferência) ou
+   * folha complementar (fechada). null = nenhuma folha a refazer.
+   */
+  aviso_recalculo: string | null;
+}
+
 /**
  * Fecha (encurta) manualmente a janela de uma suspensão. Regras do dono, D1:a:
  * SÓ ENCURTAR — nunca estender nem reabrir (estender = medida nova); data
@@ -253,7 +266,7 @@ export async function fecharSuspensaoManual(
   sessao: PayloadSessao,
   medidaId: number,
   dados: FechamentoSuspensao
-): Promise<MedidaDisciplinar> {
+): Promise<MedidaEncerrada> {
   return comTransacao(sessao.usuario_id, async (cliente) => {
     const medida = await buscarMedidaParaFechar(cliente, medidaId);
     if (!medida) {
@@ -274,19 +287,53 @@ export async function fecharSuspensaoManual(
         "A janela mudou enquanto você editava — recarregue e confira o fim atual."
       );
     }
+    // D4: a folha calculada leu esta janela (D2:a, 0100) — se alguma
+    // competência COM FOLHA CALCULADA deste colaborador intersecta o trecho
+    // removido, o desconto gravado ficou maior que a janela nova. Não bloqueia
+    // (recalcular é decisão da folha, não do disciplinar): o aviso volta no
+    // payload e vai junto para a trilha. A interseção usa a régua da própria
+    // busca do cálculo (mês estendido 6 dias para trás — o DSR do 1º domingo
+    // pode vir de janela do mês anterior, suspensao.ts). Consulta pontual aqui
+    // mesmo: é a única leitura de folha que o disciplinar faz, e ela não
+    // carrega valor nenhum — só ano/mês.
+    const trechoRemovido = trechoRemovidoDaSuspensao(medida.fim, dados.fim);
+    let avisoRecalculo: string | null = null;
+    if (trechoRemovido !== null) {
+      const { rows } = await cliente.query<{ ano: number; mes: number }>(
+        `SELECT DISTINCT c.ano, c.mes
+           FROM rh_folha.folha_colaborador f
+           JOIN rh_folha.competencia_folha c ON c.id = f.competencia_id
+          WHERE f.colaborador_id = $1
+            AND (make_date(c.ano, c.mes, 1)
+                 + INTERVAL '1 month' - INTERVAL '1 day')::date >= $2::date
+            AND ($3::date IS NULL
+                 OR make_date(c.ano, c.mes, 1) - 6 <= $3::date)
+          ORDER BY c.ano, c.mes`,
+        [medida.colaborador_id, trechoRemovido.inicio, trechoRemovido.fim]
+      );
+      avisoRecalculo = avisoCompetenciasCalculadas(
+        rows.map((linha) => ({ ano: Number(linha.ano), mes: Number(linha.mes) }))
+      );
+    }
+    const diff: Diff = {
+      Tipo: { de: null, para: medida.tipo_nome },
+      "Fim da suspensão": {
+        de: medida.fim ? formatarData(medida.fim) : "em aberto",
+        para: `${formatarData(dados.fim)} (encerrada manualmente)`,
+      },
+    };
+    if (avisoRecalculo !== null) {
+      // O aviso auditado junto: quem ler a trilha vê que o sistema apontou a
+      // folha a refazer no momento do encurtamento.
+      diff["Folha a refazer"] = { de: null, para: avisoRecalculo };
+    }
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,
       acao: "disciplinar.suspensao.encerrar",
       tabela: TABELA_MEDIDA,
       registroId: String(medidaId),
-      diff: {
-        Tipo: { de: null, para: medida.tipo_nome },
-        "Fim da suspensão": {
-          de: medida.fim ? formatarData(medida.fim) : "em aberto",
-          para: `${formatarData(dados.fim)} (encerrada manualmente)`,
-        },
-      },
+      diff,
     });
     // Eco NEUTRO na timeline, o mesmo do registro: payload restrita esconde a
     // linha de quem não tem a chave, e o resumo não carrega motivo nenhum.
@@ -306,7 +353,7 @@ export async function fecharSuspensaoManual(
     if (!atualizada) {
       throw new ErroHttp(500, "Falha ao reler a medida encerrada.");
     }
-    return atualizada;
+    return { ...atualizada, aviso_recalculo: avisoRecalculo };
   });
 }
 
