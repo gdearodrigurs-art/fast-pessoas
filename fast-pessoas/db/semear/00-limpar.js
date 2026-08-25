@@ -148,6 +148,11 @@ const ORDEM_LIMPEZA = [
   'rh.beneficio',
 
   // ---- GED (ciência antes do documento; documento antes do colaborador)
+  // ---- ciclo de ciência (0086): testemunha/liberação → ato → recusa, antes de ciência/documento
+  'rh.conduta_ato_testemunha',
+  'rh.conduta_liberacao',
+  'rh.conduta_ato',
+  'rh.documento_recusa',
   'rh.ciencia',
   'rh.documento',
 

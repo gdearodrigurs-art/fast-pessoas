@@ -777,6 +777,22 @@ async function semear(cliente) {
   }
   const modeloSelecaoId = Number(modelosSelecao[0].id);
 
+  // Modelo alternativo ativo (a tela de modelos e o PATCH da vaga têm o que
+  // mostrar). modelo_selecao_* é tratado como catálogo por 00-limpar; o
+  // WHERE NOT EXISTS dá a idempotência.
+  await cliente.query(
+    `WITH novo AS (
+       INSERT INTO rh.modelo_selecao_versao (nome, padrao, status, inicio_vigencia)
+       SELECT 'Processo enxuto — operação', false, 'ativa', rh.hoje()
+        WHERE NOT EXISTS (SELECT 1 FROM rh.modelo_selecao_versao
+                           WHERE nome = 'Processo enxuto — operação' AND status = 'ativa')
+       RETURNING id)
+     INSERT INTO rh.modelo_selecao_etapa (modelo_versao_id, etapa_selecao_versao_id, ordem)
+     SELECT novo.id, e.id, CASE e.tipo WHEN 'triagem' THEN 1 ELSE 2 END
+       FROM novo, rh.etapa_selecao_versao e
+      WHERE e.status = 'ativa' AND e.tipo IN ('triagem','oferta')`
+  );
+
   const idsVaga = await inserirLote(
     cliente,
     'rh.vaga',

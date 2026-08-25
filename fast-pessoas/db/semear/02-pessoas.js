@@ -1063,6 +1063,11 @@ async function semear(cliente) {
   const CHAVE_OCORRENCIAS = OCORRENCIAS.map((item) => item.descricao);
   const CHAVE_ACOES = ACOES.map((item) => item.descricao);
   const TABELAS_LIMPEZA = [
+    // ciclo de ciência (0086): filhas do documento, saem antes da ciência
+    'rh.conduta_ato_testemunha',
+    'rh.conduta_liberacao',
+    'rh.conduta_ato',
+    'rh.documento_recusa',
     'rh.ciencia',
     'rh.documento',
     'rh.acao_aberta',
@@ -1072,6 +1077,27 @@ async function semear(cliente) {
   ];
   const removidos = {};
   await comTriggersDesligados(cliente, TABELAS_LIMPEZA, async () => {
+    // Ciclo de ciência (0086) ANTES da ciência/documento: sem linhas do ciclo
+    // apontando para os docs da demo, os DELETEs são no-op — inofensivo.
+    for (const [tabela, sql] of [
+      ['rh.conduta_ato_testemunha',
+       `DELETE FROM rh.conduta_ato_testemunha
+         WHERE ato_id IN (SELECT a.id FROM rh.conduta_ato a
+                            JOIN rh.documento d ON d.id = a.documento_id
+                           WHERE d.nome_arquivo = ANY($1))`],
+      ['rh.conduta_liberacao',
+       `DELETE FROM rh.conduta_liberacao
+         WHERE documento_id IN (SELECT id FROM rh.documento WHERE nome_arquivo = ANY($1))`],
+      ['rh.conduta_ato',
+       `DELETE FROM rh.conduta_ato
+         WHERE documento_id IN (SELECT id FROM rh.documento WHERE nome_arquivo = ANY($1))`],
+      ['rh.documento_recusa',
+       `DELETE FROM rh.documento_recusa
+         WHERE documento_id IN (SELECT id FROM rh.documento WHERE nome_arquivo = ANY($1))`],
+    ]) {
+      const resultado = await cliente.query(sql, [nomesArquivo]);
+      removidos[tabela] = resultado.rowCount;
+    }
     const ciencias = await cliente.query(
       `DELETE FROM rh.ciencia
         WHERE documento_id IN (SELECT id FROM rh.documento WHERE nome_arquivo = ANY($1))`,
@@ -1272,6 +1298,32 @@ async function semear(cliente) {
     ['colaborador_id', 'tipo', 'ocorrido_em', 'origem_tabela', 'origem_id', 'resumo',
      'payload', 'registrado_por', 'registrado_em'],
     eventos
+  );
+
+  // ------------------------------------------------- visibilidade em camadas (0084/0085)
+  // Contato corporativo e raça-cor da demo. SÓ pessoas com conta
+  // @fastdemo.local: a pessoa do usuário real fica intacta — raça-cor é
+  // AUTODECLARADA, ninguém declara em nome do dono. UPDATEs determinísticos
+  // (função do id), logo idempotentes.
+  const contatos = await cliente.query(
+    `UPDATE rh.pessoa p
+        SET telefone_corporativo = '(11) 4000-' || lpad((p.id % 10000)::text, 4, '0'),
+            email_corporativo    = u.email
+       FROM sistema.usuario u
+      WHERE u.pessoa_id = p.id AND u.email LIKE '%@fastdemo.local'`
+  );
+  // metade declara (os 6 valores do IBGE aparecem), metade fica NULL — os dois
+  // estados convivem na demo, como na base real.
+  const declaracoes = await cliente.query(
+    `UPDATE rh.pessoa p
+        SET raca_cor = (ARRAY['branca','preta','parda','amarela','indigena','prefiro_nao_declarar'])[1 + (p.id % 6)]
+       FROM sistema.usuario u
+      WHERE u.pessoa_id = p.id AND u.email LIKE '%@fastdemo.local'
+        AND p.id % 2 = 0`
+  );
+  log(
+    `02-pessoas: contato corporativo em ${contatos.rowCount} pessoas; ` +
+      `raça-cor declarada por ${declaracoes.rowCount} (metade da demo, os dois estados visíveis).`
   );
 
   // ---------------------------------------------------------------- conferências duras
