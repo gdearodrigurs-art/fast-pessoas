@@ -2042,6 +2042,108 @@ export async function listarCasosTesteAtivos(): Promise<CasoTeste[]> {
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
 }
 
+// ------------------------------------------------------------------ prévia de férias (frente 1.6)
+
+/**
+ * A programação de férias como o MOTOR DE FÉRIAS a lê: dias de gozo, abono e a
+ * data de início (que resolve as vigências da prévia). Leitura NOVA aqui — e
+ * não em ferias/repositorio.ts — porque a frente da folha é dona só dos seus
+ * arquivos nesta onda; os dados são os mesmos de rh.programacao_ferias.
+ */
+export interface ProgramacaoParaPrevia {
+  id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  periodo_aquisitivo_id: number;
+  periodo_inicio: string;
+  periodo_fim: string;
+  inicio_gozo: string;
+  fim_gozo: string;
+  dias_gozo: number;
+  dias_abono: number;
+  status: string;
+}
+
+export async function buscarProgramacaoParaPrevia(
+  id: number
+): Promise<ProgramacaoParaPrevia | null> {
+  const linhas = await consultar<{
+    id: string;
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    periodo_aquisitivo_id: string;
+    periodo_inicio: string;
+    periodo_fim: string;
+    inicio_gozo: string;
+    fim_gozo: string;
+    dias_gozo: number;
+    dias_abono: number;
+    status: string;
+  }>(
+    `SELECT pr.id, pr.colaborador_id, c.nome_completo AS colaborador_nome,
+            c.matricula, pr.periodo_aquisitivo_id,
+            p.inicio::text AS periodo_inicio, p.fim::text AS periodo_fim,
+            pr.inicio::text AS inicio_gozo,
+            (pr.inicio + pr.dias - 1)::text AS fim_gozo,
+            pr.dias AS dias_gozo, pr.abono_dias AS dias_abono, pr.status
+       FROM rh.programacao_ferias pr
+       JOIN rh.colaborador c ON c.id = pr.colaborador_id
+       JOIN rh.periodo_aquisitivo p ON p.id = pr.periodo_aquisitivo_id
+      WHERE pr.id = $1`,
+    [id]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    ...linha,
+    id: Number(linha.id),
+    colaborador_id: Number(linha.colaborador_id),
+    periodo_aquisitivo_id: Number(linha.periodo_aquisitivo_id),
+    dias_gozo: Number(linha.dias_gozo),
+    dias_abono: Number(linha.dias_abono),
+  };
+}
+
+export interface ColaboradorParaFerias {
+  salario_centavos: number;
+  dependentes_irrf: number;
+}
+
+/**
+ * Salário e dependentes COMO ESTAVAM na data de referência da prévia — a mesma
+ * mecânica de `listarColaboradoresParaCalculo` (LATERAL com LIMIT 1 pela
+ * vigência mais recente; dependente conta por NASCIMENTO), para UMA pessoa.
+ * Null quando não há posição com salário vigente na data — a prévia não tem o
+ * que pagar e o serviço explica isso em vez de chutar o salário de hoje.
+ */
+export async function buscarColaboradorParaFerias(
+  colaboradorId: number,
+  dataRef: string
+): Promise<ColaboradorParaFerias | null> {
+  const linhas = await consultar<{ salario: string; dependentes: string }>(
+    `SELECT p.salario::text AS salario,
+            (SELECT COUNT(*) FROM rh.dependente d
+              WHERE d.colaborador_id = c.id
+                AND (d.nascimento IS NULL OR d.nascimento <= $2)) AS dependentes
+       FROM rh.colaborador c
+       JOIN LATERAL (
+              SELECT p.salario
+                FROM rh.posicao_colaborador p
+               WHERE p.colaborador_id = c.id AND ${vigenteEm("p", "$2")}
+               ORDER BY p.inicio_vigencia DESC, p.id DESC
+               LIMIT 1) p ON TRUE
+      WHERE c.id = $1`,
+    [colaboradorId, dataRef]
+  );
+  if (linhas.length === 0) return null;
+  return {
+    salario_centavos: paraCentavos(linhas[0].salario),
+    dependentes_irrf: Number(linhas[0].dependentes),
+  };
+}
+
 // ------------------------------------------------------------------ indicador
 
 /**

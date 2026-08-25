@@ -154,6 +154,14 @@ export const CODIGO_IRRF = "2002";
 export const CODIGO_DESCONTO_BENEFICIO = "2101";
 export const CODIGO_FGTS = "3001";
 
+// Códigos do MOTOR DE FÉRIAS (calculo-ferias.ts). 0136/0137 são os códigos
+// REAIS da folha da Fast (docs/18 §2b/§5 — planilha do Diego) e nascem na
+// migração 0092; 1401 é o abono pecuniário da 0028 (o terço do abono vai na
+// mesma rubrica — interpretação registrada lá, a conferir com o DP).
+export const CODIGO_FERIAS = "0136";
+export const CODIGO_ADICIONAL_FERIAS = "0137";
+export const CODIGO_ABONO_PECUNIARIO = "1401";
+
 /** Rubricas que o motor gera sozinho — lançar variável nelas é erro. */
 export const CODIGOS_AUTOMATICOS: readonly string[] = [
   CODIGO_SALARIO_BASE,

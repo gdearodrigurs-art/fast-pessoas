@@ -23,6 +23,7 @@ import {
 import { PayloadSessao } from "../identidade/esquemas";
 import { validarTotpDoUsuario } from "../identidade/servico";
 import { calcularFolha, EntradaMotor, ErroMotor, VariavelMotor } from "./calculo";
+import { calcularFerias, ResultadoMotorFerias } from "./calculo-ferias";
 import {
   AbrirCompetencia,
   CODIGO_ADICIONAL_NOTURNO,
@@ -54,8 +55,10 @@ import {
 } from "./esquemas";
 import {
   apagarFolhasDaCompetencia,
+  buscarColaboradorParaFerias,
   buscarCompetencia,
   buscarCompetenciaParaAtualizar,
+  buscarProgramacaoParaPrevia,
   buscarRubricaParaAtualizar,
   buscarVariavelParaAtualizar,
   buscarVersaoAtivaRubricaParaAtualizar,
@@ -108,6 +111,7 @@ import {
   listarVersoesParametros,
   marcarVersaoConferida,
   mudarEstado,
+  ProgramacaoParaPrevia,
   resumoEstruturaDaCompetencia,
   RubricaVigente,
   SituacaoConferencia,
@@ -1749,4 +1753,109 @@ export async function valorIndicadorFolhaNoPrazo(): Promise<number | null> {
   const dados = await indicadorFolhaNoPrazo();
   if (!dados) return null;
   return Math.round((dados.no_prazo / dados.total) * 1000) / 10;
+}
+
+// ------------------------------------------------------------------ prévia de férias (frente 1.6)
+
+export interface PreviaFerias {
+  programacao: ProgramacaoParaPrevia;
+  /** A data que resolveu TODAS as vigências da prévia (ver o comentário). */
+  data_referencia: string;
+  dependentes_irrf: number;
+  resultado: ResultadoMotorFerias;
+}
+
+/**
+ * Prévia de valores de uma programação de férias — SÓ LEITURA: nada é gravado
+ * em folha nenhuma; o resultado sai com a memória de cálculo de cada item.
+ *
+ * A DATA DE REFERÊNCIA é o INÍCIO DO GOZO: o art. 142 da CLT manda pagar as
+ * férias com a "remuneração que for devida na data da sua concessão", então é
+ * nela que se resolvem salário, dependentes, versão de rubrica e as tabelas
+ * legais — a mesma mecânica de vigência do cálculo mensal
+ * (dataReferenciaCompetencia), com a data que a lei dá a esta conta. Programar
+ * dezembro em agosto calcula com o que valerá em dezembro segundo o cadastro
+ * de hoje; se o salário mudar antes do gozo, a prévia muda junto — é prévia.
+ *
+ * TRIBUTAÇÃO: a prévia de programação é sempre de férias GOZADAS (quem gozará
+ * é quem programou); o motor aplica INSS/IRRF pelas incidências vigentes de
+ * 0136/0137. Férias INDENIZADAS (rescisão) usarão o mesmo motor com
+ * modalidade própria — sem incidência, verba indenizatória.
+ */
+export async function calcularPreviaFerias(
+  sessao: PayloadSessao,
+  programacaoId: number
+): Promise<PreviaFerias> {
+  const programacao = await buscarProgramacaoParaPrevia(programacaoId);
+  if (!programacao) {
+    throw new ErroHttp(404, "Programação de férias não encontrada.");
+  }
+  if (programacao.status === "recusada" || programacao.status === "cancelada") {
+    throw new ErroHttp(
+      409,
+      `Prévia indisponível: a programação está "${programacao.status}" — férias que não vão acontecer não têm valor a prever.`
+    );
+  }
+
+  const dataRef = programacao.inicio_gozo;
+  const [colaborador, { tabelas, faltantes }, rubricas] = await Promise.all([
+    buscarColaboradorParaFerias(programacao.colaborador_id, dataRef),
+    tabelasVigentes(dataRef),
+    listarRubricasVigentes(dataRef),
+  ]);
+  if (!colaborador) {
+    throw new ErroHttp(
+      409,
+      `Sem posição com salário vigente em ${dataRef} para ${programacao.colaborador_nome} (${programacao.matricula}) — a prévia não tem remuneração de referência.`
+    );
+  }
+  if (!tabelas) {
+    throw new ErroHttp(
+      409,
+      `Sem tabela legal vigente em ${dataRef}: ${faltantes
+        .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
+        .join(", ")} — cadastre em Parâmetros antes da prévia.`
+    );
+  }
+
+  let resultado: ResultadoMotorFerias;
+  try {
+    resultado = calcularFerias({
+      modalidade: "gozadas",
+      salario_base_centavos: colaborador.salario_centavos,
+      dependentes_irrf: colaborador.dependentes_irrf,
+      dias_gozo: programacao.dias_gozo,
+      dias_abono: programacao.dias_abono,
+      // Importadores de variáveis ainda não existem — o motor avisa na memória.
+      media_variaveis_centavos: null,
+      rubricas,
+      tabela_inss: tabelas.inss,
+      tabela_irrf: tabelas.irrf,
+      parametros: tabelas.parametros,
+    });
+  } catch (erro) {
+    if (erro instanceof ErroMotor) {
+      throw new ErroHttp(
+        409,
+        `Prévia de férias de ${programacao.colaborador_nome} (${programacao.matricula}): ${erro.message}.`
+      );
+    }
+    throw erro;
+  }
+
+  // Valor de férias deriva do salário — dado mais sensível do sistema: toda
+  // leitura autorizada deixa trilha, com a chave que DE FATO autorizou.
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.ver",
+    recurso: "rh.programacao_ferias",
+    registroId: String(programacaoId),
+  });
+
+  return {
+    programacao,
+    data_referencia: dataRef,
+    dependentes_irrf: colaborador.dependentes_irrf,
+    resultado,
+  };
 }
