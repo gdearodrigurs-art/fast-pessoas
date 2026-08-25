@@ -12,12 +12,13 @@ import {
   buscarColaboradorBasico,
   buscarPosseParaMutacao,
   cienciaExistente,
-  colaboradorDoUsuario,
   inserirPosse,
   listarPosse,
+  listarPosseDeVinculos,
   marcarCiencia,
   PosseLinha,
   registrarDevolucao,
+  vinculosDoUsuario,
 } from "./repositorio";
 
 // ===========================================================================
@@ -76,6 +77,19 @@ export async function listarPosseColaborador(
     listarCategoriasDevolucao(true),
   ]);
   return { itens, categorias };
+}
+
+/**
+ * Posse do PRÓPRIO titular (o cartão "Minha posse" do portal) — sem chave de
+ * posse: funcionário vê os seus itens e dá ciência (molde minhasEntregasEpi).
+ * Pela PESSOA, não pelo contrato corrente: todos os vínculos do titular no
+ * grupo (paridade com o GED, pendência 16.5). Sem categorias: o titular não
+ * registra entrega, só vê e dá ciência.
+ */
+export async function minhaPosse(sessao: PayloadSessao): Promise<PosseLinha[]> {
+  const vinculos = await vinculosDoUsuario(sessao.usuario_id);
+  if (vinculos.length === 0) return [];
+  return listarPosseDeVinculos(vinculos);
 }
 
 // ------------------------------------------------------------------ registro da entrega
@@ -236,8 +250,10 @@ export async function darCienciaPosse(
   if (!item) {
     throw new ErroHttp(404, "Item de posse não encontrado.");
   }
-  const meuColaboradorId = await colaboradorDoUsuario(sessao.usuario_id);
-  if (meuColaboradorId !== item.colaborador_id) {
+  // Pela PESSOA, não pelo contrato corrente: item entregue no vínculo anterior
+  // do mesmo grupo continua sendo do titular (molde GED, pendência 16.5).
+  const meusVinculos = await vinculosDoUsuario(sessao.usuario_id);
+  if (!meusVinculos.includes(item.colaborador_id)) {
     // Ausência, não máscara: quem não é o titular nem sabe que existe.
     throw new ErroHttp(404, "Item de posse não encontrado.");
   }

@@ -94,6 +94,22 @@ export async function listarPosse(
 }
 
 /**
+ * Posse de TODOS os vínculos da pessoa (o "minha posse" do portal do titular).
+ * Mesma ordenação da lista da ficha: em uso primeiro, recentes no topo.
+ */
+export async function listarPosseDeVinculos(
+  colaboradorIds: number[]
+): Promise<PosseLinha[]> {
+  const linhas = await consultar<PosseCrua>(
+    `${SELECT_POSSE}
+      WHERE p.colaborador_id = ANY($1)
+      ORDER BY (p.devolvido_em IS NULL) DESC, p.data_entrega DESC, p.id DESC`,
+    [colaboradorIds]
+  );
+  return linhas.map(mapearPosse);
+}
+
+/**
  * Itens ainda com o colaborador (devolvido_em IS NULL) — a consulta que o
  * DESLIGAMENTO faz para avisar as pendências de devolução (eixo 10). Usa o
  * índice parcial posse_item_pendente_devolucao da 0081.
@@ -203,15 +219,23 @@ export async function buscarColaboradorBasico(id: number): Promise<{
   };
 }
 
-/** O vínculo ATUAL de quem está logado (rh.vinculo_atual, 0046) — molde sst. */
-export async function colaboradorDoUsuario(
-  usuarioId: number
-): Promise<number | null> {
+/**
+ * TODOS os vínculos de quem está logado, do mais novo ao mais antigo — molde
+ * do GED (documentos/repositorio.ts, pendência 16.5). Era `rh.vinculo_atual`
+ * (UM vínculo, o corrente), e com isso o notebook entregue no contrato
+ * anterior do mesmo grupo sumia da vista do titular — e a ciência dele virava
+ * 404 — no dia em que ele mudava de CNPJ. O contrato acabou; o patrimônio em
+ * posse continua sendo da pessoa.
+ */
+export async function vinculosDoUsuario(usuarioId: number): Promise<number[]> {
   const linhas = await consultar<{ id: string }>(
-    "SELECT id FROM rh.colaborador WHERE id = rh.vinculo_atual($1)",
+    `SELECT c.id
+       FROM rh.colaborador c
+      WHERE c.pessoa_id = rh.pessoa_do_usuario($1)
+      ORDER BY c.data_admissao DESC, c.id DESC`,
     [usuarioId]
   );
-  return linhas.length > 0 ? Number(linhas[0].id) : null;
+  return linhas.map((linha) => Number(linha.id));
 }
 
 /** Ciência já dada no GED sobre este documento por este usuário? (molde sst) */
