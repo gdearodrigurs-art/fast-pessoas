@@ -630,11 +630,17 @@ export async function marcarDevolucaoEpi(
 export async function marcarCienciaEntregaEpi(
   cliente: PoolClient,
   id: number
-): Promise<void> {
-  await cliente.query(
-    "UPDATE rh.epi_entrega SET ciencia_registrada = TRUE WHERE id = $1",
+): Promise<boolean> {
+  // Condicional (ciencia_registrada = FALSE), molde marcarDevolucaoEpi: duas
+  // requisições concorrentes passam pelo mesmo pré-check; casando 0 linhas, a
+  // segunda leva 409 limpo no serviço em vez de projetar por cima.
+  const { rows } = await cliente.query<{ id: string }>(
+    `UPDATE rh.epi_entrega SET ciencia_registrada = TRUE
+      WHERE id = $1 AND ciencia_registrada = FALSE
+      RETURNING id`,
     [id]
   );
+  return rows.length > 0;
 }
 
 /** Ciência já dada no GED sobre este documento por este usuário? */

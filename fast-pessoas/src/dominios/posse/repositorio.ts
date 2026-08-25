@@ -189,11 +189,17 @@ export async function registrarDevolucao(
 export async function marcarCiencia(
   cliente: PoolClient,
   id: number
-): Promise<void> {
-  await cliente.query(
-    "UPDATE rh.posse_item SET ciencia_registrada = TRUE WHERE id = $1",
+): Promise<boolean> {
+  // Condicional (ciencia_registrada = FALSE), molde registrarDevolucao: duas
+  // requisições concorrentes passam pelo mesmo pré-check; casando 0 linhas, a
+  // segunda leva 409 limpo no serviço em vez de projetar por cima.
+  const { rows } = await cliente.query<{ id: string }>(
+    `UPDATE rh.posse_item SET ciencia_registrada = TRUE
+      WHERE id = $1 AND ciencia_registrada = FALSE
+      RETURNING id`,
     [id]
   );
+  return rows.length > 0;
 }
 
 // ------------------------------------------------------------------ apoio

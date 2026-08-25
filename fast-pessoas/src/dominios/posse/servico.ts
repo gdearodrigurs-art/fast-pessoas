@@ -1,6 +1,6 @@
 import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
-import { ErroHttpCampo } from "../../lib/http";
+import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { inserirEvento } from "../colaboradores/repositorio";
 import { listarCategoriasDevolucao } from "../desligamento/repositorio";
@@ -273,45 +273,59 @@ export async function darCienciaPosse(
   // Ciência já dada no GED (ex.: pela tela de documentos)? Então só projeta.
   const jaDeuCiencia = await cienciaExistente(termo.id, sessao.usuario_id);
 
-  const dadaEm = await comTransacao(sessao.usuario_id, async (cliente) => {
-    let momento = new Date().toISOString();
-    if (!jaDeuCiencia) {
-      const ciencia = await inserirCiencia(cliente, {
-        documentoId: termo.id,
-        usuarioId: sessao.usuario_id,
-        hashNoMomento: termo.hash_sha256,
-      });
-      momento = ciencia.dada_em;
+  try {
+    const dadaEm = await comTransacao(sessao.usuario_id, async (cliente) => {
+      let momento = new Date().toISOString();
+      if (!jaDeuCiencia) {
+        const ciencia = await inserirCiencia(cliente, {
+          documentoId: termo.id,
+          usuarioId: sessao.usuario_id,
+          hashNoMomento: termo.hash_sha256,
+        });
+        momento = ciencia.dada_em;
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "criacao",
+          tabela: TABELA_CIENCIA,
+          registroId: String(ciencia.id),
+          diff: {
+            Documento: { de: null, para: `${termo.titulo} (#${termo.id})` },
+            "Hash no momento": { de: null, para: termo.hash_sha256 },
+          },
+        });
+      }
+      const marcou = await marcarCiencia(cliente, posseId);
+      if (!marcou) {
+        // Corrida na projeção: outra requisição marcou entre o pré-check
+        // (fora da transação) e aqui. 409, molde registrarDevolucaoPosse.
+        throw new ErroHttp(409, "Ciência já registrada para este item.");
+      }
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
-        acao: "criacao",
-        tabela: TABELA_CIENCIA,
-        registroId: String(ciencia.id),
+        acao: "ciencia_posse",
+        tabela: TABELA_POSSE,
+        registroId: String(posseId),
         diff: {
-          Documento: { de: null, para: `${termo.titulo} (#${termo.id})` },
-          "Hash no momento": { de: null, para: termo.hash_sha256 },
+          "Ciência": {
+            de: "pendente",
+            para: jaDeuCiencia
+              ? "registrada (ciência prévia no GED reaproveitada)"
+              : "registrada",
+          },
         },
       });
-    }
-    await marcarCiencia(cliente, posseId);
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "ciencia_posse",
-      tabela: TABELA_POSSE,
-      registroId: String(posseId),
-      diff: {
-        "Ciência": {
-          de: "pendente",
-          para: jaDeuCiencia
-            ? "registrada (ciência prévia no GED reaproveitada)"
-            : "registrada",
-        },
-      },
+      return momento;
     });
-    return momento;
-  });
-
-  return { dada_em: dadaEm };
+    return { dada_em: dadaEm };
+  } catch (erro) {
+    // Corrida no INSERT de rh.ciencia (UNIQUE documento+usuário, 0006): as
+    // duas requisições do duplo clique passam pelo mesmo pré-check e a
+    // segunda estoura 23505 dentro da transação — sem esta tradução, 500 cru.
+    if (violacaoUnica(erro) === "ciencia_documento_id_usuario_id_key") {
+      throw new ErroHttp(409, "Ciência já registrada para este item.");
+    }
+    throw erro;
+  }
 }
