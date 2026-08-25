@@ -30,13 +30,18 @@ import {
 import {
   baixarDocumento,
   darCiencia,
+  exigirCienciaRegularParaGerirCiclo,
   liberarAcesso,
   type DepsAcervo,
   type DepsLiberar,
 } from "../src/dominios/documentos/servico";
 import type { PayloadSessao } from "../src/dominios/identidade/esquemas";
 import { ErroHttpCampo } from "../src/lib/http";
-import { ErroHttp } from "../src/lib/sessao";
+import {
+  ErroHttp,
+  exigirSessaoValida,
+  exigirSessaoValidaParaRegularizacao,
+} from "../src/lib/sessao";
 
 // ===========================================================================
 // CICLO DE CIÊNCIA (migration 0086) — decisões B1/B4/B6 de docs/20.
@@ -743,4 +748,74 @@ test("ciência em documento FORA do ciclo continua exigindo documento.ver (A5 n�
   });
   const ciencia = await darCiencia(SESSAO_COMUM, 5, comChave);
   assert.equal(ciencia.dada_em, "2026-08-25T16:30:00.000Z");
+});
+
+// ---------------------------------------------------------------- A1/A8: as trancas do bloqueado pelo gate de conduta
+
+const SESSAO_BLOQUEADA: PayloadSessao = {
+  ...SESSAO_COMUM,
+  ciencia_pendente: true,
+};
+
+test("bloqueado com rh.conduta.gerir NÃO gere o ciclo — a tranca da rota barra com 403 (A1)", () => {
+  assert.throws(
+    () => exigirCienciaRegularParaGerirCiclo(SESSAO_BLOQUEADA),
+    (erro: unknown) => {
+      assert.ok(erro instanceof ErroHttp);
+      assert.equal(erro.status, 403);
+      assert.match(erro.message, /Regularize sua ciência/);
+      return true;
+    }
+  );
+  // Sessão regular (ou nenhuma — o 401 é da guarda seguinte) passa direto.
+  assert.doesNotThrow(() => exigirCienciaRegularParaGerirCiclo(SESSAO_COMUM));
+  assert.doesNotThrow(() => exigirCienciaRegularParaGerirCiclo(null));
+});
+
+test("segunda tranca do gate: exigirSessaoValida barra o claim ciencia_pendente com 403 (A8)", () => {
+  assert.throws(
+    () => exigirSessaoValida(SESSAO_BLOQUEADA),
+    (erro: unknown) => {
+      assert.ok(erro instanceof ErroHttp);
+      assert.equal(erro.status, 403);
+      assert.match(erro.message, /regularização da ciência/);
+      return true;
+    }
+  );
+  // As trancas antigas continuam na frente: sem sessão 401, pendente_2fa 403.
+  assert.throws(
+    () => exigirSessaoValida(null),
+    (erro: unknown) => erro instanceof ErroHttp && erro.status === 401
+  );
+  assert.throws(
+    () => exigirSessaoValida({ ...SESSAO_COMUM, pendente_2fa: true }),
+    (erro: unknown) =>
+      erro instanceof ErroHttp &&
+      erro.status === 403 &&
+      /duas etapas/.test(erro.message)
+  );
+  // Sessão regular segue passando.
+  assert.equal(exigirSessaoValida(SESSAO_COMUM), SESSAO_COMUM);
+});
+
+test("a variante de REGULARIZAÇÃO não barra o bloqueado — senão ninguém se regulariza (A8/B4)", () => {
+  // O claim NÃO tranca aqui: ciência, recusa, download e pendências próprias
+  // são o caminho de saída do bloqueio.
+  assert.equal(
+    exigirSessaoValidaParaRegularizacao(SESSAO_BLOQUEADA),
+    SESSAO_BLOQUEADA
+  );
+  // Mas tudo o mais continua valendo: sessão e 2FA.
+  assert.throws(
+    () => exigirSessaoValidaParaRegularizacao(null),
+    (erro: unknown) => erro instanceof ErroHttp && erro.status === 401
+  );
+  assert.throws(
+    () =>
+      exigirSessaoValidaParaRegularizacao({
+        ...SESSAO_COMUM,
+        pendente_2fa: true,
+      }),
+    (erro: unknown) => erro instanceof ErroHttp && erro.status === 403
+  );
 });

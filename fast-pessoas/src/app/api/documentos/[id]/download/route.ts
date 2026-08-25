@@ -1,18 +1,24 @@
 import { baixarDocumento } from "@/dominios/documentos/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import { exigirPermissaoParaRegularizacao } from "@/lib/sessao";
 
 function validarId(id: string): number | null {
   const idNumero = Number(id);
   return Number.isInteger(idNumero) && idNumero > 0 ? idNumero : null;
 }
 
+/**
+ * A porta continua sendo documento.ver, mas pela variante de REGULARIZAÇÃO
+ * (A8): o bloqueado pelo gate de conduta precisa LER o documento até o fim
+ * para poder dar a ciência que o destrava (B4/B5) — a tranca do
+ * `ciencia_pendente` não pode fechar justamente o download.
+ */
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const sessao = await exigirPermissao("documento.ver");
+    const sessao = await exigirPermissaoParaRegularizacao("documento.ver");
     const { id } = await params;
     const idNumero = validarId(id);
     if (idNumero === null) {

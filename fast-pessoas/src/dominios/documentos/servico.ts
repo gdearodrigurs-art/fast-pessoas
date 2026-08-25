@@ -880,6 +880,26 @@ export async function confirmarTestemunho(
   });
 }
 
+/**
+ * A1 — a tranca DA ROTA para quem gere o ciclo: sessão com `ciencia_pendente`
+ * não registra desfecho de ato (nem qualquer outra gestão do ciclo). O furo
+ * era o proxy liberar PATCH /ato-testemunhas sem olhar o corpo (a confirmação
+ * da testemunha precisa passar) — e o ramo de DESFECHO pegava carona: o
+ * próprio bloqueado com rh.conduta.gerir fechava o ato sobre si. Bloqueado
+ * gere DEPOIS de regularizar (B4). Pura, para o teste provar sem HTTP;
+ * `exigirSessaoValida` (A8) é a segunda tranca, atrás desta.
+ */
+export function exigirCienciaRegularParaGerirCiclo(
+  sessao: PayloadSessao | null
+): void {
+  if (sessao?.ciencia_pendente === true) {
+    throw new ErroHttp(
+      403,
+      "Regularize sua ciência antes de gerir o ciclo."
+    );
+  }
+}
+
 /** Desfecho narrado pelo DP — fecha a história do ato no quadro do ciclo. */
 export async function registrarDesfechoAto(
   sessao: PayloadSessao,

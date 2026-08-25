@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { exigirSessaoDePagina } from "@/lib/sessao";
+import { exigirSessaoDePaginaParaRegularizacao } from "@/lib/sessao";
 import { PainelDocumentos } from "./painel-documentos";
 
 export default async function PaginaDocumentos() {
-  const sessao = await exigirSessaoDePagina();
+  // Variante de REGULARIZAÇÃO (A8): é NESTA página que o bloqueado pelo gate
+  // de conduta lê o documento e registra a ciência — a tranca do
+  // `ciencia_pendente` de exigirSessaoDePagina o mandaria embora daqui.
+  const sessao = await exigirSessaoDePaginaParaRegularizacao();
   const linhas = await consultar<{
     ver: boolean;
     enviar: boolean;

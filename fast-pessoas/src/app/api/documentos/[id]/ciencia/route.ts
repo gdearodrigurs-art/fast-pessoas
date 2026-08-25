@@ -1,6 +1,6 @@
 import { darCiencia } from "@/dominios/documentos/servico";
 import { responderErro } from "@/lib/http";
-import { exigirSessao } from "@/lib/sessao";
+import { exigirSessaoParaRegularizacao } from "@/lib/sessao";
 
 function validarId(id: string): number | null {
   const idNumero = Number(id);
@@ -12,14 +12,16 @@ function validarId(id: string): number | null {
  * é revogável, e perfil sem ela ficava em lockout sem cura quando o documento
  * bloqueante pedia ciência. A autorização fina mora no serviço (darCiencia):
  * documento do ciclo dispensa chave (a pendência é do próprio usuário);
- * documento fora do ciclo continua exigindo documento.ver.
+ * documento fora do ciclo continua exigindo documento.ver. A variante de
+ * REGULARIZAÇÃO (A8) mantém a rota aberta ao bloqueado — dar ciência é como
+ * ele sai do bloqueio.
  */
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const sessao = await exigirSessao();
+    const sessao = await exigirSessaoParaRegularizacao();
     const { id } = await params;
     const idNumero = validarId(id);
     if (idNumero === null) {

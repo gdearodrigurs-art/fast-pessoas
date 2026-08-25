@@ -72,16 +72,17 @@ export async function destruirSessao(): Promise<void> {
 }
 
 /**
- * As DUAS checagens que valem para toda rota de negócio, antes de qualquer
+ * As checagens que valem para TODA rota de regularização, antes de qualquer
  * chave: sessão existe e 2FA concluído. Função pura, sem cookie e sem banco —
  * é o pedaço da guarda que dá para provar num teste direto, sem HTTP.
  *
- * Existe extraída porque é defesa em PROFUNDIDADE, e defesa em profundidade
- * copiada é defesa que uma cópia esquece. O proxy (src/proxy.ts) já barra a
- * sessão pendente na borda; esta é a segunda tranca, do lado da aplicação,
- * para o dia em que alguém mexer no proxy.
+ * É a variante SEM a tranca do gate de conduta (A8), de propósito: as rotas
+ * de REGULARIZAÇÃO (ciência, recusa, download, pendências próprias e a
+ * confirmação de testemunho) são exatamente as que o bloqueado PRECISA
+ * alcançar para sair do bloqueio — se elas barrassem `ciencia_pendente`,
+ * ninguém se regularizaria nunca (B4: a rota de regularização nunca fecha).
  */
-export function exigirSessaoValida(
+export function exigirSessaoValidaParaRegularizacao(
   sessao: PayloadSessao | null
 ): PayloadSessao {
   if (!sessao) {
@@ -94,6 +95,31 @@ export function exigirSessaoValida(
     );
   }
   return sessao;
+}
+
+/**
+ * As TRÊS checagens que valem para toda rota de negócio, antes de qualquer
+ * chave: sessão existe, 2FA concluído e — A8 — sem o claim `ciencia_pendente`
+ * do gate de conduta (Onda 2, B1/B4).
+ *
+ * Existe extraída porque é defesa em PROFUNDIDADE, e defesa em profundidade
+ * copiada é defesa que uma cópia esquece. O proxy (src/proxy.ts) já barra a
+ * sessão pendente (de 2FA e de ciência) na borda; esta é a segunda tranca,
+ * do lado da aplicação, para o dia em que alguém mexer no proxy — foi por um
+ * furo assim (proxy liberando PATCH sem olhar o corpo) que o bloqueado
+ * conseguia registrar desfecho de ato (A1).
+ */
+export function exigirSessaoValida(
+  sessao: PayloadSessao | null
+): PayloadSessao {
+  const valida = exigirSessaoValidaParaRegularizacao(sessao);
+  if (valida.ciencia_pendente === true) {
+    throw new ErroHttp(
+      403,
+      "Acesso bloqueado até a regularização da ciência do Código de Conduta"
+    );
+  }
+  return valida;
 }
 
 /**
@@ -131,6 +157,20 @@ export async function exigirSessao(): Promise<PayloadSessao> {
 }
 
 /**
+ * A guarda keyless das rotas de REGULARIZAÇÃO do gate de conduta (A8):
+ * idêntica a `exigirSessao`, MENOS a tranca do `ciencia_pendente` — o
+ * bloqueado precisa alcançar exatamente estas rotas (pendências próprias,
+ * ciência, confirmação de testemunho) para sair do bloqueio. Toda rota que
+ * NÃO é de regularização fica em `exigirSessao`/`exigirPermissao` e herda a
+ * tranca.
+ */
+export async function exigirSessaoParaRegularizacao(): Promise<PayloadSessao> {
+  const sessao = exigirSessaoValidaParaRegularizacao(await lerSessao());
+  await garantirUsuarioAtivo(sessao.usuario_id);
+  return sessao;
+}
+
+/**
  * Guarda das PÁGINAS server-side (Onda 2, decisão C2 modificada): o espelho de
  * `exigirSessao` para quem renderiza em vez de responder JSON. Sessão ausente
  * ou de usuário DESATIVADO vira redirect("/entrar") — desativado perde TUDO na
@@ -140,6 +180,25 @@ export async function exigirSessao(): Promise<PayloadSessao> {
  * NELAS, depois deste guard — aqui só mora o que é igual nas 54.
  */
 export async function exigirSessaoDePagina(): Promise<PayloadSessao> {
+  const sessao = await exigirSessaoDePaginaParaRegularizacao();
+  // A8 — segunda tranca do gate de conduta, espelho da do proxy: sessão com
+  // `ciencia_pendente` só alcança as páginas de regularização (/documentos e
+  // /ciencia-pendente, que usam a variante SEM esta tranca); todas as outras
+  // voltam para o gate, como o proxy já faz na borda.
+  if (sessao.ciencia_pendente === true) {
+    redirect("/ciencia-pendente");
+  }
+  return sessao;
+}
+
+/**
+ * Variante de PÁGINA para a regularização do gate de conduta (A8): as páginas
+ * /ciencia-pendente e /documentos precisam abrir para o bloqueado — a
+ * primeira é o próprio gate (a tranca aqui viraria redirect em laço) e a
+ * segunda é onde a ciência se registra. Mantém tudo o mais: sessão, 2FA e
+ * usuário ativo.
+ */
+export async function exigirSessaoDePaginaParaRegularizacao(): Promise<PayloadSessao> {
   const sessao = await lerSessao();
   if (!sessao) {
     redirect("/entrar");
@@ -172,6 +231,27 @@ export async function exigirSessaoDePagina(): Promise<PayloadSessao> {
  */
 export async function exigirPermissao(chave: string): Promise<PayloadSessao> {
   const sessao = exigirSessaoValida(await lerSessao());
+  return conferirChave(sessao, chave);
+}
+
+/**
+ * Rota de REGULARIZAÇÃO que continua tendo chave (A8): hoje, a recusa e o
+ * download do documento (documento.ver). A checagem da chave é a mesma de
+ * `exigirPermissao`; só a tranca do `ciencia_pendente` fica de fora — recusar
+ * e LER o documento fazem parte do caminho de regularização (B4), e barrá-los
+ * deixaria o bloqueado sem como ler o que precisa assinar.
+ */
+export async function exigirPermissaoParaRegularizacao(
+  chave: string
+): Promise<PayloadSessao> {
+  const sessao = exigirSessaoValidaParaRegularizacao(await lerSessao());
+  return conferirChave(sessao, chave);
+}
+
+async function conferirChave(
+  sessao: PayloadSessao,
+  chave: string
+): Promise<PayloadSessao> {
   const linhas = await consultar<{ autorizado: boolean }>(
     "SELECT sistema.tem_permissao($1, $2) AS autorizado",
     [sessao.usuario_id, chave]

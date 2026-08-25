@@ -6,10 +6,15 @@ import {
   abrirAtoTestemunhas,
   CHAVE_CONDUTA_GERIR,
   confirmarTestemunho,
+  exigirCienciaRegularParaGerirCiclo,
   registrarDesfechoAto,
 } from "@/dominios/documentos/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao, exigirSessao } from "@/lib/sessao";
+import {
+  exigirPermissao,
+  exigirSessaoParaRegularizacao,
+  lerSessao,
+} from "@/lib/sessao";
 
 function validarId(id: string): number | null {
   const idNumero = Number(id);
@@ -73,7 +78,9 @@ export async function PATCH(
       );
     }
     if (analise.data.acao === "confirmar") {
-      const sessao = await exigirSessao();
+      // Regularização (A8): a testemunha pode estar ela mesma bloqueada pelo
+      // gate — confirmar o testemunho é dever dela e não pode fechar.
+      const sessao = await exigirSessaoParaRegularizacao();
       const confirmacao = await confirmarTestemunho(
         sessao,
         idNumero,
@@ -81,6 +88,11 @@ export async function PATCH(
       );
       return Response.json({ testemunho: confirmacao });
     }
+    // A1: o proxy libera PATCH neste caminho SEM olhar o corpo (a confirmação
+    // precisa passar) — então é AQUI que o ramo de gestão barra o bloqueado:
+    // quem deve ciência não registra desfecho de ato (B4 — gere depois de
+    // regularizar). A tranca geral de exigirPermissao (A8) fica logo atrás.
+    exigirCienciaRegularParaGerirCiclo(await lerSessao());
     const sessao = await exigirPermissao(CHAVE_CONDUTA_GERIR);
     const desfecho = await registrarDesfechoAto(
       sessao,

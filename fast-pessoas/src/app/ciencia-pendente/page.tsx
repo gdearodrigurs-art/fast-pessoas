@@ -3,7 +3,7 @@ import {
   ROTULOS_ESTADO_PENDENCIA,
 } from "@/dominios/documentos/esquemas";
 import { pendenciaBloqueante } from "@/dominios/documentos/servico";
-import { exigirSessaoDePagina } from "@/lib/sessao";
+import { exigirSessaoDePaginaParaRegularizacao } from "@/lib/sessao";
 import { BotaoRevalidarAcesso } from "./botao-revalidar";
 import estilos from "./page.module.css";
 
@@ -23,7 +23,9 @@ function formatarData(dataIso: string): string {
  * leva de volta ao início, sem exigir novo login.
  */
 export default async function PaginaCienciaPendente() {
-  const sessao = await exigirSessaoDePagina();
+  // Variante SEM a tranca do claim (A8): esta página É o gate — a tranca de
+  // exigirSessaoDePagina redirecionaria para cá em laço infinito.
+  const sessao = await exigirSessaoDePaginaParaRegularizacao();
   const pendencia = await pendenciaBloqueante(sessao.usuario_id);
 
   if (!pendencia) {
