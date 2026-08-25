@@ -52,6 +52,25 @@ export async function POST(request: Request) {
         { status: 401 }
       );
     }
+    // Conta inativa — tanto a que o DP desativou quanto a que acabou de cair
+    // pela 5ª falha de TOTP (C1 modificada). Resposta ÚNICA e neutra, para não
+    // vazar que foi o segundo fator que derrubou.
+    if (resultado.motivo === "conta_desativada") {
+      return Response.json(
+        { erro: "Conta desativada. Procure o Departamento Pessoal." },
+        { status: 403 }
+      );
+    }
+    // Bloqueio temporário de TOTP (caso último-admin): mesma voz do rate-limit
+    // de senha, sem citar o segundo fator.
+    if (resultado.motivo === "totp_bloqueado") {
+      return Response.json(
+        {
+          erro: "Muitas tentativas de acesso. Aguarde alguns minutos e tente novamente.",
+        },
+        { status: 429 }
+      );
+    }
     return Response.json({ erro: MENSAGEM_GENERICA }, { status: 401 });
   }
 

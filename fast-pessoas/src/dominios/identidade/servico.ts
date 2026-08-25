@@ -11,18 +11,23 @@ import {
   PayloadSessao,
   TrocaSenha,
 } from "./esquemas";
+import { processarCodigoTotp, PortasFalhasTotp } from "./falhas-totp";
 import {
   atualizarSenhaHash,
   atualizarTotpSecret,
+  bloquearTotpPorFalhas,
   buscarPorEmail,
   buscarPorId,
   consumirPassoTotp,
   contarFalhasLoginRecentes,
+  desativarPorFalhasTotp,
   lerParametroSeguranca,
   listarChavesDoUsuario,
   registrarAcao,
+  registrarFalhaTotp,
   registrarTentativaLogin,
   UsuarioIdentidade,
+  zerarFalhasTotp,
 } from "./repositorio";
 import { validarTotpComPasso } from "./totp";
 
@@ -59,8 +64,40 @@ export type ResultadoAutenticacao =
   | { ok: true; sessao: PayloadSessao; precisa_configurar_2fa: boolean }
   | {
       ok: false;
-      motivo: "credenciais_invalidas" | "totp_obrigatorio" | "totp_invalido";
+      motivo:
+        | "credenciais_invalidas"
+        | "totp_obrigatorio"
+        | "totp_invalido"
+        // Conta inativa com a senha CERTA — inclusive a recém-desativada pela
+        // regra de falhas de TOTP (C1 modificada): a resposta é a MESMA nos
+        // dois casos, para não vazar que foi o TOTP que derrubou.
+        | "conta_desativada"
+        // Bloqueio temporário de TOTP vigente (caso último-admin).
+        | "totp_bloqueado";
     };
+
+// ---------------------------------------------------------------------------
+// Falhas consecutivas de TOTP (0087, decisão C1 modificada): a POLÍTICA mora
+// em falhas-totp.ts (pura, testável com contador mockado); aqui só se ligam
+// as portas reais do banco. Vale no login E nas revalidações críticas.
+// ---------------------------------------------------------------------------
+const PORTAS_FALHAS_TOTP: PortasFalhasTotp = {
+  registrarFalha: registrarFalhaTotp,
+  zerarFalhas: zerarFalhasTotp,
+  lerParametros: async () => {
+    const { maxFalhasTotp, bloqueioTotpMinutos } = await lerParametroSeguranca();
+    return { maxFalhasTotp, bloqueioTotpMinutos };
+  },
+  desativarComAuditoria: desativarPorFalhasTotp,
+  bloquearComAuditoria: bloquearTotpPorFalhas,
+};
+
+// Mensagens do bloqueio/queda — na voz do rate-limit e da reconferência de
+// sessão que já existem, sem citar TOTP (nada a vazar para quem só tem a senha).
+const MENSAGEM_TOTP_BLOQUEADO =
+  "Muitas tentativas de acesso. Aguarde alguns minutos e tente novamente.";
+const MENSAGEM_CONTA_INATIVA =
+  "Sessão inválida — a conta não está mais ativa.";
 
 // Validação simples (sem consumir o passo). É o que usam:
 //  - o ENROLAMENTO (secret pendente, sem usuário para consumir);
@@ -74,20 +111,24 @@ function validarCodigoTotp(secret: string, codigo: string): boolean {
 
 /**
  * Valida E CONSOME o código — SÓ no LOGIN, onde a ameaça de replay é real (código
- * + senha capturados para reentrar). Verdadeiro só se o código bate E o passo
- * dele ainda não foi consumido por este usuário; reapresentar o MESMO código
- * devolve falso. Um código fresco tem sempre passo maior, então login legítimo
- * não é barrado (salvo reenvio do mesmo código após resposta perdida — raro, e é
- * o comportamento correto de uso único).
+ * + senha capturados para reentrar). "ok" só se o código bate E o passo dele
+ * ainda não foi consumido por este usuário. Um código fresco tem sempre passo
+ * maior, então login legítimo não é barrado (salvo reenvio do mesmo código após
+ * resposta perdida — raro, e é o comportamento correto de uso único).
+ *
+ * Os dois fracassos são DISTINTOS de propósito: "codigo_errado" alimenta o
+ * contador de falhas consecutivas (0087); "replay" não — replay é código CERTO
+ * já consumido, o anti-replay (camada própria, 0060) barra sozinho, e contá-lo
+ * como falha baratearia a negação de serviço além do risco aceito na C1.
  */
 async function validarEConsumirTotp(
   usuarioId: number,
   secret: string,
   codigo: string
-): Promise<boolean> {
+): Promise<"ok" | "codigo_errado" | "replay"> {
   const passo = validarTotpComPasso(secret, codigo);
-  if (passo === null) return false;
-  return consumirPassoTotp(usuarioId, passo);
+  if (passo === null) return "codigo_errado";
+  return (await consumirPassoTotp(usuarioId, passo)) ? "ok" : "replay";
 }
 
 /**
@@ -132,7 +173,7 @@ export async function autenticar(
   }
 
   const senhaConfere = await compare(credenciais.senha, usuario.senha_hash);
-  if (!senhaConfere || !usuario.ativo) {
+  if (!senhaConfere) {
     await registrarAcao(
       "login_falha",
       { id: usuario.id, papel: usuario.papel },
@@ -140,9 +181,31 @@ export async function autenticar(
     );
     return { ok: false, motivo: "credenciais_invalidas" };
   }
+  if (!usuario.ativo) {
+    // Senha certa em conta inativa: resposta própria ("conta desativada,
+    // procure o DP") — a MESMA que sai quando a 5ª falha de TOTP acabou de
+    // desativar, para não denunciar qual das duas coisas aconteceu.
+    await registrarAcao(
+      "login_falha",
+      { id: usuario.id, papel: usuario.papel },
+      { email: credenciais.email, motivo: "conta_desativada" }
+    );
+    return { ok: false, motivo: "conta_desativada" };
+  }
 
   let precisaConfigurar2fa = false;
   if (usuario.totp_secret) {
+    // Bloqueio temporário vigente (último-admin que estourou as falhas de
+    // TOTP): congela ANTES de validar qualquer código — bloqueio que ainda
+    // aceita tentativas não bloqueia nada.
+    if (usuario.totp_bloqueado) {
+      await registrarAcao(
+        "login_falha",
+        { id: usuario.id, papel: usuario.papel },
+        { email: credenciais.email, motivo: "totp_bloqueado" }
+      );
+      return { ok: false, motivo: "totp_bloqueado" };
+    }
     // Quem tem segredo cadastrado SEMPRE valida o código — inclusive quem
     // ativou o 2FA por conta própria sem ser obrigado. Antes o código só era
     // cobrado quando a chave tornava o 2FA obrigatório, então o segundo fator
@@ -151,18 +214,36 @@ export async function autenticar(
     if (!credenciais.codigo_totp) {
       return { ok: false, motivo: "totp_obrigatorio" };
     }
-    if (
-      !(await validarEConsumirTotp(
-        usuario.id,
-        usuario.totp_secret,
-        credenciais.codigo_totp
-      ))
-    ) {
+    const codigo = await validarEConsumirTotp(
+      usuario.id,
+      usuario.totp_secret,
+      credenciais.codigo_totp
+    );
+    if (codigo === "ok") {
+      // Acerto ZERA o contador — são falhas CONSECUTIVAS, não janela (C1.i).
+      await processarCodigoTotp(PORTAS_FALHAS_TOTP, usuario.id, true);
+    } else {
       await registrarAcao(
         "login_falha",
         { id: usuario.id, papel: usuario.papel },
         { email: credenciais.email, motivo: "totp_invalido" }
       );
+      if (codigo === "codigo_errado") {
+        const desfecho = await processarCodigoTotp(
+          PORTAS_FALHAS_TOTP,
+          usuario.id,
+          false
+        );
+        if (desfecho === "desativado") {
+          // Sessões vigentes morrem junto: a reconferência central de usuário
+          // ativo (garantirUsuarioAtivo + tem_permissao, que filtra u.ativo)
+          // derruba o JWT de 8h no próximo request.
+          return { ok: false, motivo: "conta_desativada" };
+        }
+        if (desfecho === "bloqueado") {
+          return { ok: false, motivo: "totp_bloqueado" };
+        }
+      }
       return { ok: false, motivo: "totp_invalido" };
     }
   } else if (await usuarioExige2fa(usuario.id)) {
@@ -232,6 +313,13 @@ export async function trocarSenha(
 /**
  * Revalidação pontual de TOTP para operações críticas de outros domínios
  * (ex.: aprovação de folha). Não emite sessão — só confere o código.
+ *
+ * As falhas daqui alimentam o MESMO contador consecutivo do login (C1.iv):
+ * errar 5 códigos na aprovação de folha desativa igual. Quem estourar aqui
+ * recebe ErroHttp (429 bloqueio temporário / 401 conta desativada) — as rotas
+ * chamadoras já convertem via responderErro; o retorno em string fica restrito
+ * aos três valores que os chamadores conhecem, para nenhum valor novo cair no
+ * caminho do "ok".
  */
 export async function validarTotpDoUsuario(
   usuarioId: number,
@@ -241,7 +329,23 @@ export async function validarTotpDoUsuario(
   if (!usuario || !usuario.ativo || !usuario.totp_secret) {
     return "sem_2fa";
   }
-  return validarCodigoTotp(usuario.totp_secret, codigo) ? "ok" : "invalido";
+  if (usuario.totp_bloqueado) {
+    throw new ErroHttp(429, MENSAGEM_TOTP_BLOQUEADO);
+  }
+  if (validarCodigoTotp(usuario.totp_secret, codigo)) {
+    await processarCodigoTotp(PORTAS_FALHAS_TOTP, usuario.id, true);
+    return "ok";
+  }
+  const desfecho = await processarCodigoTotp(PORTAS_FALHAS_TOTP, usuario.id, false);
+  if (desfecho === "desativado") {
+    // A partir daqui a reconferência central de usuário ativo derruba a
+    // sessão em qualquer rota; esta resposta só antecipa a notícia.
+    throw new ErroHttp(401, MENSAGEM_CONTA_INATIVA);
+  }
+  if (desfecho === "bloqueado") {
+    throw new ErroHttp(429, MENSAGEM_TOTP_BLOQUEADO);
+  }
+  return "invalido";
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +471,11 @@ export async function desativar2fa(
   if (!usuario.totp_secret) {
     throw new ErroHttp(409, "A autenticação em duas etapas não está ativa.");
   }
+  // Desativar 2FA é revalidação CRÍTICA (C1.iv): bloqueio vigente congela
+  // antes de qualquer validação de código.
+  if (usuario.totp_bloqueado) {
+    throw new ErroHttp(429, MENSAGEM_TOTP_BLOQUEADO);
+  }
 
   const senhaConfere = usuario.senha_hash
     ? await compare(dados.senha, usuario.senha_hash)
@@ -384,12 +493,22 @@ export async function desativar2fa(
       id: usuario.id,
       papel: usuario.papel,
     });
+    // Falha de CÓDIGO conta no mesmo contador consecutivo do login. A falha
+    // de SENHA logo acima não conta — a regra da C1 é sobre o código TOTP.
+    const desfecho = await processarCodigoTotp(PORTAS_FALHAS_TOTP, usuario.id, false);
+    if (desfecho === "desativado") {
+      throw new ErroHttp(401, MENSAGEM_CONTA_INATIVA);
+    }
+    if (desfecho === "bloqueado") {
+      throw new ErroHttp(429, MENSAGEM_TOTP_BLOQUEADO);
+    }
     throw new ErroHttpCampo(
       400,
       "Código inválido. Confira o aplicativo autenticador.",
       "codigo"
     );
   }
+  await processarCodigoTotp(PORTAS_FALHAS_TOTP, usuario.id, true);
 
   await comTransacao(sessao.usuario_id, async (cliente) => {
     await atualizarTotpSecret(cliente, usuario.id, null);
