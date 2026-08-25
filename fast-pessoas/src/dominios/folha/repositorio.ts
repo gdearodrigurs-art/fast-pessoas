@@ -2804,22 +2804,41 @@ export async function listarCatalogoContaContabil(): Promise<
   }));
 }
 
-export async function buscarContaContabilAtivaParaAtualizar(
+/**
+ * TODAS as vigências do de-para da rubrica — encerradas incluídas — travadas
+ * (FOR UPDATE) para a criação validar interseção contra o histórico inteiro:
+ * retro-datada não pode sobrepor janela que já valeu. Ordem cronológica, para
+ * a mensagem de conflito apontar a primeira janela alcançada.
+ */
+export async function listarVigenciasContaContabilParaAtualizar(
   cliente: PoolClient,
   rubricaId: number
-): Promise<{ id: number; inicio_vigencia: string } | null> {
+): Promise<
+  {
+    id: number;
+    conta_contabil: string;
+    status: string;
+    inicio_vigencia: string;
+    fim_vigencia: string | null;
+  }[]
+> {
   const { rows } = await cliente.query<{
     id: string;
+    conta_contabil: string;
+    status: string;
     inicio_vigencia: string;
+    fim_vigencia: string | null;
   }>(
-    `SELECT id, inicio_vigencia::text AS inicio_vigencia
+    `SELECT id, conta_contabil, status,
+            inicio_vigencia::text AS inicio_vigencia,
+            fim_vigencia::text AS fim_vigencia
        FROM rh_folha.conta_contabil_rubrica
-      WHERE rubrica_id = $1 AND status = 'ativa'
+      WHERE rubrica_id = $1
+      ORDER BY inicio_vigencia, id
       FOR UPDATE`,
     [rubricaId]
   );
-  if (rows.length === 0) return null;
-  return { id: Number(rows[0].id), inicio_vigencia: rows[0].inicio_vigencia };
+  return rows.map((linha) => ({ ...linha, id: Number(linha.id) }));
 }
 
 export async function buscarContaContabilParaAtualizar(

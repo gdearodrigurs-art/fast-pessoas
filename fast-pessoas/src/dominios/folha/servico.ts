@@ -33,6 +33,7 @@ import {
   apurarSuspensaoNaCompetencia,
   inicioBuscaSuspensao,
 } from "./suspensao";
+import { vigenciaContaConflitante } from "./conta-contabil";
 import { calcularFerias, ResultadoMotorFerias } from "./calculo-ferias";
 import {
   calcularDecimo,
@@ -89,7 +90,7 @@ import {
   apagarEspelhoOlacAnterior,
   apagarFolhasDaCompetencia,
   buscarColaboradorParaDecimo,
-  buscarContaContabilAtivaParaAtualizar,
+  listarVigenciasContaContabilParaAtualizar,
   buscarContaContabilParaAtualizar,
   ContaContabilRubrica,
   encerrarContaContabilNoBanco,
@@ -2627,6 +2628,12 @@ function diaAnterior(dataIso: string): string {
  * encerrada NO DIA ANTERIOR ao início da nova, na mesma transação — o catálogo
  * nunca fica com duas contas valendo no mesmo dia (o índice parcial do banco
  * é o cinto; isto é a regra).
+ *
+ * A validação corre contra TODAS as vigências da rubrica, ENCERRADAS
+ * incluídas: uma vigência retro-datada que sobrepõe janela já encerrada
+ * criaria duas contas "valendo" no mesmo dia — e quem escolheria qual sai no
+ * arquivo seria o desempate da LATERAL, não uma regra. Interseção → 409 com a
+ * janela conflitante.
  */
 export async function criarContaContabil(
   sessao: PayloadSessao,
@@ -2637,19 +2644,31 @@ export async function criarContaContabil(
     if (!rubrica) {
       throw new ErroHttpCampo(404, "Rubrica não encontrada.", "rubrica_id");
     }
-    const ativa = await buscarContaContabilAtivaParaAtualizar(
+    const vigencias = await listarVigenciasContaContabilParaAtualizar(
       cliente,
       dados.rubrica_id
     );
+    const ativa = vigencias.find((vigencia) => vigencia.status === "ativa");
+    if (ativa && dados.inicio_vigencia <= ativa.inicio_vigencia) {
+      throw new ErroHttpCampo(
+        400,
+        `A nova vigência precisa começar depois de ${ativa.inicio_vigencia}, o início da vigência atual.`,
+        "inicio_vigencia"
+      );
+    }
+    const conflito = vigenciaContaConflitante(dados.inicio_vigencia, vigencias);
+    if (conflito) {
+      throw new ErroHttpCampo(
+        409,
+        `A vigência começando em ${dados.inicio_vigencia} sobrepõe a conta ` +
+          `${conflito.conta_contabil}, que valeu de ${conflito.inicio_vigencia} ` +
+          `a ${conflito.fim_vigencia ?? "(sem fim)"} — duas contas não podem ` +
+          `valer no mesmo dia. Comece depois de ${conflito.fim_vigencia ?? conflito.inicio_vigencia}.`,
+        "inicio_vigencia"
+      );
+    }
     let contaAnterior: string | null = null;
     if (ativa) {
-      if (dados.inicio_vigencia <= ativa.inicio_vigencia) {
-        throw new ErroHttpCampo(
-          400,
-          `A nova vigência precisa começar depois de ${ativa.inicio_vigencia}, o início da vigência atual.`,
-          "inicio_vigencia"
-        );
-      }
       await encerrarContaContabilNoBanco(
         cliente,
         ativa.id,
