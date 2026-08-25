@@ -962,3 +962,42 @@ virar folha de verdade (integrar competência 13o_1a/13o_2a):
    sem dizer qual é qual, e o adiantamento fica num intervalo ("0008–0018"). A adoção dos códigos
    reais vai JUNTO dos importadores, com as demais duplicatas (docs/18 §2a, decisão do dono).
 
+
+---
+
+## 20 · Registros da revisão adversarial FINAL (Ondas 2–3 + lane Folha, 25/08/2026)
+
+Os 6 ALTA e 13 MÉDIA foram corrigidos pela frota final (commits 47fbbe5..71ec836 + a costura
+do contrato do recorte). Ficam registrados os de política/raridade/refinamento:
+
+1. **13c — candidatos preteridos nunca expurgam:** ao aceitar a oferta a vaga FECHA e as demais
+   candidaturas ficam `ativa` para sempre (vaga fechada não movimenta) → a retenção de 6 meses
+   não as alcança. Saída recomendada: encerrar as candidaturas restantes como `reprovada` no
+   mesmo ato do aceite (decisão de produto — muda o que o candidato "é" no funil).
+2. **OLAC — espelho/lote sem o `tipo` da competência:** latente até existir competência
+   13º/rescisão no mesmo ano/mês (o UNIQUE da 0013 já prevê); quando nascer, chavear
+   espelho/lote/arquivo por tipo também.
+3. **Rescisão — adiantamento de 13º informado pode dupla-contar 8% na base da multa** (o
+   depósito do adiantamento tende a já estar no saldo externo). Refinar quando o adiantamento
+   alimentar o motor a partir da 13o_1a gravada.
+4. **D4 — a tela do disciplinar ainda não renderiza `aviso_recalculo`** (payload e trilha já o
+   carregam) — follow-up de UI.
+5. **`exigirSessaoRs` e `exigirSessaoNotificacoes` não reconferem `usuario.ativo`** — mesma
+   cirurgia do A6/A7 quando essas superfícies forem tocadas.
+6. **Bloqueado sem `documento.ver` dá ciência mas não BAIXA nem recusa o bloqueante** (a ciência
+   dispensou a chave no A5; download/recusa a mantêm). Hoje todo perfil semeado tem a chave;
+   se um dia /perfis separar, decidir se leitura do documento do ciclo também dispensa.
+7. **Líquido negativo por acúmulo de descontos:** o teto do C2 cobre só a 1203; faltas
+   1201/1202 + suspensão no mesmo mês ainda podem, em tese, negativar — teto global de
+   descontos é decisão de folha (compensação em competências seguintes?), não trivial.
+8. **Conta contábil:** a validação de interseção é de serviço; um `EXCLUDE` gist nas janelas
+   seria cinto extra de banco (migration futura, baixo risco hoje).
+9. **Acerto da rescisão × suspensão (D3):** a prévia AVISA (dias capados no término + DSR, ids)
+   mas não desconta — quando a rescisão virar folha gravada, reusar o recorte + rubrica 1203
+   capada no término; validar com o contador se o dia suspenso reduz o saldo 1701 ou sai como
+   desconto 1203.
+10. **AMBIENTE (não é código): um processo externo — provável antivírus — apaga
+    `docs/05-pesquisa-mercado.md` do working tree repetidamente** (aconteceu em 3 worktrees e no
+    repo principal, com temporários `docs/unp*.tmp`). Os commits estão íntegros; restaurar com
+    `git checkout -- docs/05-pesquisa-mercado.md` quando sumir, e investigar exclusão do AV
+    para a pasta do projeto.
