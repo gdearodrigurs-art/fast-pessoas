@@ -326,6 +326,11 @@ export async function pendenciasDoUsuario(
       WHERE u.id = $1
         AND d.exige_ciencia
         AND d.colaborador_id IS NULL
+        -- Cinto-e-suspensório de A1: o envio já recusa sensível no ciclo
+        -- (validarCicloEnvio); se um dado antigo violar isso, a pendência não
+        -- nasce — senão o TÍTULO do documento sensível vazaria para todo o
+        -- quadro pelo cartão de pendências.
+        AND d.sensivel = FALSE
         AND c.dada_em IS NULL
         AND ${EXPR_SEM_SUCESSOR}
       ORDER BY d.bloqueante DESC, d.enviado_em DESC, d.id DESC`,

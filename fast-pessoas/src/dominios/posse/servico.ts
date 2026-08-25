@@ -172,6 +172,16 @@ export async function registrarPosse(
         "termo_documento_id"
       );
     }
+    // Costura 1.4×1.5: documento do CICLO de ciência não vira termo de posse.
+    // A ciência do ciclo tem regras próprias (ler até o fim, recusa, ato,
+    // versão vigente) e a ciência da posse as atropelaria — barra na origem.
+    if (termo.exige_ciencia) {
+      throw new ErroHttpCampo(
+        400,
+        "Este documento participa do ciclo de ciência e não pode ser usado como termo de posse — publique o termo fora do ciclo.",
+        "termo_documento_id"
+      );
+    }
     termoTitulo = termo.titulo;
   }
   const termoId = dados.termo_documento_id ?? null;
@@ -307,6 +317,23 @@ export async function darCienciaPosse(
   const termo = await deps.buscarMetadados(item.termo_documento_id);
   if (!termo) {
     throw new ErroHttp(404, "Termo não encontrado no GED.");
+  }
+  // Costura 1.4×1.5: a ciência de posse NÃO assina documento do ciclo — o
+  // ciclo exige ler até o fim e tem recusa/ato/liberação; este atalho pularia
+  // tudo isso. registrarPosse barra na origem; aqui é o cinto para dado antigo.
+  if (termo.exige_ciencia) {
+    throw new ErroHttp(
+      409,
+      "Este documento participa do ciclo de ciência — registre a ciência pelo fluxo do documento, na tela de Documentos."
+    );
+  }
+  // Espelho de darCiencia (documentos/servico.ts): versão substituída não
+  // colhe ciência nova — a ciência vale na ponta da cadeia.
+  if (termo.substituido_por_id !== null) {
+    throw new ErroHttp(
+      409,
+      "Este documento foi substituído por uma versão nova — registre a ciência na versão vigente."
+    );
   }
   // Ciência já dada no GED (ex.: pela tela de documentos)? Então só projeta.
   const jaDeuCiencia = await deps.cienciaExistente(termo.id, sessao.usuario_id);

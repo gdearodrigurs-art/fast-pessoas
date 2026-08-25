@@ -9,6 +9,7 @@ import {
   alturaEstimadaPdf,
   contarPaginasPdf,
 } from "@/dominios/documentos/paginas-pdf";
+import { chegouAoFim, conteudoRenderizado } from "./rolagem-ciencia";
 import estilos from "./page.module.css";
 
 /**
@@ -84,20 +85,33 @@ export function VisualizadorDocumento({
   const [registrando, setRegistrando] = useState(false);
   const [erroCiencia, setErroCiencia] = useState<string | null>(null);
 
-  // O rastreio da rolagem (B5): fim = o rodapé do conteúdo entrou na janela.
-  // A folga de 32px perdoa arredondamento de zoom/DPI, não uma página inteira.
+  // O rastreio da rolagem (B5): a decisão é pura e mora em rolagem-ciencia.ts.
+  // Só se mede conteúdo RENDERIZADO — "carregando" e "erro" não têm overflow, e
+  // medi-los marcava "leu até o fim" antes de existir documento na tela.
   const verificarFim = useCallback(() => {
     const corpo = corpoRef.current;
     if (!corpo) return;
-    if (corpo.scrollTop + corpo.clientHeight >= corpo.scrollHeight - 32) {
+    if (!conteudoRenderizado(conteudo.estado)) return;
+    if (chegouAoFim(corpo)) {
       setLeuAteOFim(true);
     }
-  }, []);
+  }, [conteudo.estado]);
+
+  // A marca não sobrevive à troca de ESTADO do conteúdo: o "fim" medido num
+  // conteúdo não vale para o que entra no lugar dele (padrão "ajustar estado
+  // durante o render", react.dev/you-might-not-need-an-effect). Troca de
+  // DOCUMENTO nem precisa disso: o chamador remonta com key={documento.id}.
+  const [estadoMedido, setEstadoMedido] = useState(conteudo.estado);
+  if (estadoMedido !== conteudo.estado) {
+    setEstadoMedido(conteudo.estado);
+    setLeuAteOFim(false);
+  }
 
   // Conteúdo que coube inteiro sem rolagem também conta como lido até o fim —
-  // senão o botão nunca habilitaria num comunicado de três linhas.
+  // senão o botão nunca habilitaria num comunicado de três linhas. O timeout
+  // deixa o layout assentar (iframe do PDF com a altura estimada aplicada).
   useEffect(() => {
-    if (!ciencia) return;
+    if (!ciencia || !conteudoRenderizado(conteudo.estado)) return;
     const temporizador = setTimeout(verificarFim, 150);
     return () => clearTimeout(temporizador);
   }, [ciencia, conteudo, verificarFim]);

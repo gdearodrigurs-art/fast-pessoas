@@ -53,15 +53,25 @@ export async function buscarDocumento(id: number): Promise<{
   titulo: string;
   colaborador_id: number | null;
   hash_sha256: string;
+  /** O documento está no ciclo de ciência (0086) — termo de EPI não pode. */
+  exige_ciencia: boolean;
+  /** Id da versão que SUBSTITUIU esta — null = versão vigente da cadeia. */
+  substituido_por_id: number | null;
 } | null> {
   const linhas = await consultar<{
     id: string;
     titulo: string;
     colaborador_id: string | null;
     hash_sha256: string;
+    exige_ciencia: boolean;
+    substituido_por_id: string | null;
   }>(
-    `SELECT id, titulo, colaborador_id, hash_sha256
-       FROM rh.documento WHERE id = $1`,
+    `SELECT d.id, d.titulo, d.colaborador_id, d.hash_sha256, d.exige_ciencia,
+            sucessor.id AS substituido_por_id
+       FROM rh.documento d
+       LEFT JOIN rh.documento sucessor
+         ON sucessor.substitui_documento_id = d.id
+      WHERE d.id = $1`,
     [id]
   );
   if (linhas.length === 0) return null;
@@ -73,6 +83,11 @@ export async function buscarDocumento(id: number): Promise<{
         ? null
         : Number(linhas[0].colaborador_id),
     hash_sha256: linhas[0].hash_sha256,
+    exige_ciencia: linhas[0].exige_ciencia,
+    substituido_por_id:
+      linhas[0].substituido_por_id === null
+        ? null
+        : Number(linhas[0].substituido_por_id),
   };
 }
 

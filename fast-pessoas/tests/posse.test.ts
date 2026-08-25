@@ -305,6 +305,86 @@ test("corrida do duplo clique: 23505 da UNIQUE de rh.ciencia vira 409 amigável"
   );
 });
 
+// ---------------------------------------------------------------- costura 1.4×1.5: posse × ciclo de ciência
+
+test("termo do CICLO de ciência não vira termo de posse — barrado na origem (A3)", async () => {
+  const deps = depsDuble({
+    buscarColaboradorBasico: async () => ({
+      id: 10,
+      nome_completo: "Fulana de Tal",
+      matricula: "0001",
+    }),
+    listarCategoriasDevolucao: async () => [
+      {
+        id: 1,
+        chave: "equipamento_ti",
+        nome: "Equipamento de TI",
+        ordem: 1,
+        ativa: true,
+        em_uso: 0,
+      },
+    ],
+    // O termo apontado participa do ciclo (geral + exige_ciencia).
+    buscarMetadados: async () => ({
+      ...TERMO,
+      colaborador_id: null,
+      exige_ciencia: true,
+    }),
+  });
+  const dados = esquemaRegistroPosse.parse({
+    ...BASE,
+    termo_documento_id: 42,
+  });
+  await assert.rejects(
+    registrarPosse(SESSAO, 10, dados, deps),
+    (erro: unknown) => {
+      assert.ok(erro instanceof ErroHttpCampo);
+      assert.equal(erro.status, 400);
+      assert.equal(erro.campo, "termo_documento_id");
+      return true;
+    }
+  );
+});
+
+test("ciência de posse NÃO assina documento do ciclo — 409 manda ao fluxo do documento (A3)", async () => {
+  const deps = depsDuble({
+    buscarPosseParaMutacao: async () => itemPosse(),
+    vinculosDoUsuario: async () => [10],
+    // Dado antigo: o termo entrou no ciclo DEPOIS de amarrado à posse.
+    buscarMetadados: async () => ({
+      ...TERMO,
+      colaborador_id: null,
+      exige_ciencia: true,
+    }),
+  });
+  await assert.rejects(darCienciaPosse(SESSAO, 1, deps), (erro: unknown) => {
+    assert.ok(erro instanceof ErroHttp);
+    assert.equal(erro.status, 409);
+    assert.match(erro.message, /ciclo de ciência/);
+    return true;
+  });
+});
+
+test("termo SUBSTITUÍDO não colhe ciência de posse — a ciência vale na versão vigente (A3)", async () => {
+  const deps = depsDuble({
+    buscarPosseParaMutacao: async () => itemPosse(),
+    vinculosDoUsuario: async () => [10],
+    // Termo do acervo geral que ganhou versão nova na cadeia (0086).
+    buscarMetadados: async () => ({
+      ...TERMO,
+      colaborador_id: null,
+      substituido_por_id: 77,
+    }),
+  });
+  await assert.rejects(
+    darCienciaPosse(SESSAO, 1, deps),
+    esperaErroHttp(
+      409,
+      "Este documento foi substituído por uma versão nova — registre a ciência na versão vigente."
+    )
+  );
+});
+
 test("corrida na projeção: ciência prévia do GED reaproveitada duas vezes vira 409", async () => {
   const deps = depsDuble({
     buscarPosseParaMutacao: async () => itemPosse(),

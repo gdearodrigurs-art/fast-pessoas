@@ -171,6 +171,7 @@ const esquemaMime = z
  */
 function validarCicloEnvio(
   dados: {
+    sensivel: boolean;
     exige_ciencia: boolean;
     bloqueante: boolean;
     prazo_ciencia_dias?: number;
@@ -179,6 +180,18 @@ function validarCicloEnvio(
   },
   contexto: z.core.$RefinementCtx
 ): void {
+  // Documento SENSÍVEL não entra no ciclo: a pendência anunciaria o título a
+  // todo o quadro, e a ciência exige ler até o fim — o que colide com a chave
+  // documento.sensivel.ver, que esconde o documento de quem não a tem. Quem
+  // não pode VER não pode ficar devendo ciência do que não vê.
+  if (dados.sensivel && (dados.exige_ciencia || dados.bloqueante)) {
+    contexto.addIssue({
+      code: "custom",
+      path: ["sensivel"],
+      message:
+        "Documento sensível não entra no ciclo de ciência — publique-o sem exigir ciência, ou publique no ciclo uma versão não sensível.",
+    });
+  }
   if (dados.bloqueante && !dados.exige_ciencia) {
     contexto.addIssue({
       code: "custom",
@@ -220,6 +233,24 @@ function validarCicloEnvio(
         "Versão nova na cadeia é do acervo geral — documento de colaborador não substitui.",
     });
   }
+}
+
+/**
+ * O envio PUBLICA NO CICLO de ciência? (A4) Pendência para o quadro inteiro,
+ * bloqueio de acesso ou versão nova reabrindo a cadeia é gestão do rito, não
+ * envio comum de arquivo: além de documento.enviar (a porta da rota), o
+ * serviço exige rh.conduta.gerir (dp/diretoria, 0086) quando isto é true.
+ */
+export function envioEntraNoCiclo(metadados: {
+  exige_ciencia: boolean;
+  bloqueante: boolean;
+  substitui_documento_id: number | null;
+}): boolean {
+  return (
+    metadados.exige_ciencia ||
+    metadados.bloqueante ||
+    metadados.substitui_documento_id !== null
+  );
 }
 
 const booleanoMultipart = z

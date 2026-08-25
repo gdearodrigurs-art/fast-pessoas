@@ -8,6 +8,7 @@ import { notificar, notificarLote } from "../notificacoes/servico";
 import { ArmazenamentoDocumentos, armazenamentoBytea } from "./armazenamento";
 import {
   CategoriaDocumento,
+  envioEntraNoCiclo,
   EstadoPendencia,
   estadoDaPendencia,
   formatarTamanho,
@@ -199,6 +200,20 @@ export async function enviarDocumento(
       400,
       "Documento que exige ciência precisa ser exibível no navegador (PDF, texto ou imagem): a ciência só habilita ao ler até o fim.",
       "arquivo"
+    );
+  }
+
+  // A4: publicar no CICLO (exige_ciencia/bloqueante/versão nova na cadeia) é
+  // gestão do rito, não envio comum — recrutador e T&D têm documento.enviar,
+  // mas criar pendência para o quadro inteiro (ou bloquear o acesso de todos)
+  // pede a chave de gestão do ciclo, rh.conduta.gerir (dp/diretoria, 0086).
+  if (
+    envioEntraNoCiclo(metadados) &&
+    !(await temPermissao(sessao.usuario_id, CHAVE_CONDUTA_GERIR))
+  ) {
+    throw new ErroHttp(
+      403,
+      "Publicar no ciclo de ciência (exigir ciência, bloquear acesso ou substituir versão) exige a permissão de gestão do ciclo (rh.conduta.gerir)."
     );
   }
 
@@ -794,28 +809,75 @@ export async function registrarDesfechoAto(
 }
 
 /**
+ * Costuras de liberarAcesso com o banco — o que os testes trocam por dublês
+ * (molde DepsPosse, pendência 16.2). Produção nunca passa o parâmetro: a rota
+ * chama como sempre e cai em DEPS_LIBERAR_REAIS.
+ */
+export interface DepsLiberar {
+  buscarMetadados: typeof buscarMetadados;
+  buscarUsuarioBasico: typeof buscarUsuarioBasico;
+  buscarLiberacao: typeof buscarLiberacao;
+  pendenciasDoUsuario: typeof pendenciasDoUsuario;
+  buscarAtoDoUsuario: typeof buscarAtoDoUsuario;
+  inserirLiberacao: typeof inserirLiberacao;
+  registrarAlteracao: typeof registrarAlteracao;
+  notificar: typeof notificar;
+  comTransacao: typeof comTransacao;
+}
+
+const DEPS_LIBERAR_REAIS: DepsLiberar = {
+  buscarMetadados,
+  buscarUsuarioBasico,
+  buscarLiberacao,
+  pendenciasDoUsuario,
+  buscarAtoDoUsuario,
+  inserirLiberacao,
+  registrarAlteracao,
+  notificar,
+  comTransacao,
+};
+
+/**
  * Liberação explícita (B6 modificado): o único destrave que não é ciência.
  * A rota já exigiu rh.conduta.liberar; aqui se confere que HÁ o que liberar —
- * liberar quem não está bloqueado viraria ruído na trilha.
+ * liberar quem não está bloqueado viraria ruído na trilha — e que a liberação
+ * é de OUTRA pessoa: quem se auto-liberasse esvaziaria o bloqueio (B4 diz que
+ * ele vale para todos, inclusive quem tem a chave).
  */
 export async function liberarAcesso(
   sessao: PayloadSessao,
   documentoId: number,
   usuarioId: number,
-  justificativa: string
+  justificativa: string,
+  deps: DepsLiberar = DEPS_LIBERAR_REAIS
 ): Promise<{ liberado_em: string }> {
-  const metadados = await buscarMetadados(documentoId);
+  // A5(b): AUTO-liberação não existe. O ato foi desenhado como controle de
+  // segunda pessoa (B6: "usuário de maior patente" destrava o bloqueado) —
+  // a própria mão liberando a própria pendência anularia o B4.
+  if (usuarioId === sessao.usuario_id) {
+    throw new ErroHttp(
+      403,
+      "Você não pode liberar o próprio acesso — a liberação exige um segundo par de olhos."
+    );
+  }
+  const metadados = await deps.buscarMetadados(documentoId);
   if (!metadados || metadados.colaborador_id !== null) {
     throw new ErroHttp(404, "Documento não encontrado.");
   }
-  const alvo = await buscarUsuarioBasico(usuarioId);
-  if (!alvo) {
-    throw new ErroHttpCampo(400, "Usuário não encontrado.", "usuario_id");
+  // A5(a): alvo desativado não recebe liberação (molde abrirAtoTestemunhas) —
+  // conta desligada não usa o sistema; a liberação seria ruído na trilha.
+  const alvo = await deps.buscarUsuarioBasico(usuarioId);
+  if (!alvo || !alvo.ativo) {
+    throw new ErroHttpCampo(
+      400,
+      "Usuário não encontrado ou inativo.",
+      "usuario_id"
+    );
   }
-  if (await buscarLiberacao(documentoId, usuarioId)) {
+  if (await deps.buscarLiberacao(documentoId, usuarioId)) {
     throw new ErroHttp(409, "Liberação já registrada para esta pessoa.");
   }
-  const pendencias = await pendenciasDoUsuario(usuarioId);
+  const pendencias = await deps.pendenciasDoUsuario(usuarioId);
   const pendencia = pendencias
     .map(paraVisao)
     .find((linha) => linha.documento_id === documentoId);
@@ -825,17 +887,17 @@ export async function liberarAcesso(
       "Esta pessoa não está bloqueada por este documento — não há o que liberar."
     );
   }
-  const ato = await buscarAtoDoUsuario(documentoId, usuarioId);
+  const ato = await deps.buscarAtoDoUsuario(documentoId, usuarioId);
   try {
-    return await comTransacao(sessao.usuario_id, async (cliente) => {
-      const liberacao = await inserirLiberacao(cliente, {
+    return await deps.comTransacao(sessao.usuario_id, async (cliente) => {
+      const liberacao = await deps.inserirLiberacao(cliente, {
         documentoId,
         usuarioId,
         atoId: ato?.id ?? null,
         justificativa,
         liberadoPor: sessao.usuario_id,
       });
-      await registrarAlteracao(cliente, {
+      await deps.registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
         acao: "criacao",
@@ -851,7 +913,7 @@ export async function liberarAcesso(
           Acesso: { de: "bloqueado", para: "liberado" },
         },
       });
-      await notificar(cliente, {
+      await deps.notificar(cliente, {
         usuarioId,
         tipo: "documento.acesso_liberado",
         titulo: "Seu acesso ao sistema foi regularizado",
