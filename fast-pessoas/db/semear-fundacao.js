@@ -128,11 +128,25 @@ async function main() {
       'SELECT count(*)::int AS total FROM rh.empresa_grupo'
     );
     if (totalEmpresas > 0) {
+      // A âncora do centro de custo precisa ser uma empresa VIVA: ativa e com
+      // versão vigente. Sem o filtro, ORDER BY id podia devolver uma empresa
+      // inativada (ou sem versão ativa) e o CC de exemplo nascia pendurado
+      // nela — invisível nos seletores e errado no catálogo.
       const { rows } = await cliente.query(
-        'SELECT id FROM rh.empresa_grupo ORDER BY id LIMIT 1'
+        `SELECT eg.id
+           FROM rh.empresa_grupo eg
+           JOIN rh.empresa_grupo_versao v
+             ON v.empresa_id = eg.id AND v.status = 'ativa'
+          WHERE eg.inativada_em IS NULL
+          ORDER BY eg.id
+          LIMIT 1`
       );
-      empresaId = Number(rows[0].id);
-      resumo.push(`empresa: já existia (${totalEmpresas}) — nada a criar`);
+      empresaId = rows.length > 0 ? Number(rows[0].id) : null;
+      resumo.push(
+        empresaId === null
+          ? `empresa: já existia (${totalEmpresas}) — mas NENHUMA ativa com versão vigente`
+          : `empresa: já existia (${totalEmpresas}) — nada a criar`
+      );
     } else {
       const { rows } = await cliente.query(
         'INSERT INTO rh.empresa_grupo (cnpj) VALUES (NULL) RETURNING id'
@@ -175,6 +189,14 @@ async function main() {
     );
     if (totalCentros > 0) {
       resumo.push(`centro de custo: já existia (${totalCentros}) — nada a criar`);
+    } else if (empresaId === null) {
+      // Todas as empresas existentes estão inativadas ou sem versão ativa —
+      // criar o CC de exemplo penduraria ele numa empresa morta. Reative (ou
+      // complete a versão de) uma empresa pela tela e rode de novo.
+      resumo.push(
+        'centro de custo: NÃO criado — nenhuma empresa ativa com versão ' +
+          'vigente para ancorá-lo (reative uma pela tela de estrutura e repita)'
+      );
     } else {
       const { rows } = await cliente.query(
         `INSERT INTO rh.centro_custo (empresa_id, codigo)
