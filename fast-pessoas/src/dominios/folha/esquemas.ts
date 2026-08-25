@@ -168,7 +168,7 @@ export const CODIGO_ABONO_PECUNIARIO = "1401";
 // Códigos do MOTOR DE 13º (calculo-13.ts), migração 0094. 0138 é o código REAL
 // da folha da Fast (docs/18 §2e — planilha do Diego); 1601/1602/2003/2004 são
 // PLACEHOLDERS no esquema-exemplo da casa, porque a planilha não dá o código
-// real inequívoco dessas verbas (pendência #17) — a adoção dos reais vai junto
+// real inequívoco dessas verbas (pendência #19) — a adoção dos reais vai junto
 // dos importadores, com as demais duplicatas (docs/18 §2a).
 export const CODIGO_DECIMO = "0138";
 export const CODIGO_ADIANTAMENTO_DECIMO = "1601";

@@ -34,11 +34,11 @@
 //     próprio: usa a mecânica completo × simplificado do mensal, vale o
 //     imposto MENOR, e a saída REGISTRA que é tributação exclusiva; a
 //     aplicação do desconto simplificado ao 13º é interpretação conservadora
-//     registrada na pendência #17).
+//     registrada na pendência #19).
 // • O desconto do adiantamento na 2ª parcela é RECALCULADO como metade do 13º
 //   da data da 2ª parcela, a menos que o valor efetivamente pago venha como
 //   parâmetro (adiantamento_pago_centavos) — se o salário mudou entre as
-//   parcelas os dois números divergem, e a saída avisa (pendência #17).
+//   parcelas os dois números divergem, e a saída avisa (pendência #19).
 // • Data de referência das vigências (salário/tabelas/rubricas): a data da
 //   PARCELA calculada — quem resolve é o serviço; o motor recebe tudo pronto.
 // • FGTS fica FORA desta prévia (escopo da onda é INSS/IRRF); a flag da 0094
@@ -136,10 +136,10 @@ export const AVISO_TRIBUTACAO_EXCLUSIVA =
   "13º tem tributação EXCLUSIVA, apurada em separado do salário do mês: INSS sobre o 13º total pela tabela progressiva vigente (Lei 8.212/91, art. 28 §7º) e IRRF exclusivo na fonte (RIR/2018, art. 700) — nada desta prévia soma com a base da competência mensal";
 
 export const AVISO_IRRF_REGIME_DECIMO =
-  "IRRF do 13º apurado na mecânica completo × simplificado do mensal (vale o imposto MENOR) — a aplicação do desconto simplificado ao 13º é interpretação conservadora registrada na pendência #17";
+  "IRRF do 13º apurado na mecânica completo × simplificado do mensal (vale o imposto MENOR) — a aplicação do desconto simplificado ao 13º é interpretação conservadora registrada na pendência #19";
 
 export const AVISO_ADIANTAMENTO_RECALCULADO =
-  "adiantamento deduzido como metade do 13º recalculado na data da 2ª parcela — se o valor pago na 1ª parcela foi outro (salário mudou entre as parcelas), informe o pago para a quitação fechar no centavo (pendência #17)";
+  "adiantamento deduzido como metade do 13º recalculado na data da 2ª parcela — se o valor pago na 1ª parcela foi outro (salário mudou entre as parcelas), informe o pago para a quitação fechar no centavo (pendência #19)";
 
 // ------------------------------------------------------------------ aritmética
 // Cópia fiel de folha/calculo.ts — é a regra de precisão da casa. As funções
