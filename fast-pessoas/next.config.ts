@@ -1,33 +1,19 @@
 import type { NextConfig } from "next";
 
-// Fora de produção o React usa `eval` para reconstruir stacks de erro no browser,
-// então 'unsafe-eval' entra SÓ em dev. Em produção o Next não usa eval por padrão.
-const emDev = process.env.NODE_ENV !== "production";
-
-// CSP sem nonce. O app não tem infraestrutura de nonce (o proxy.ts não gera um), e
-// o Next injeta scripts e estilos inline no shell — sem nonce eles exigem
-// 'unsafe-inline'. Ainda assim o CSP fecha o resto: default-src 'self',
-// object-src 'none', frame-ancestors 'none', base-uri 'self', form-action 'self' —
-// defesa em profundidade junto do X-Frame-Options. As fontes são self-hospedadas
-// pelo next/font (servidas na própria origem), então font-src 'self' basta.
-// `upgrade-insecure-requests` só em produção: em dev o servidor é http://localhost
-// e o upgrade para https quebraria o carregamento dos assets.
-const cspDiretivas = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${emDev ? " 'unsafe-eval'" : ""}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' blob: data:",
-  "font-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  ...(emDev ? [] : ["upgrade-insecure-requests"]),
-];
-const CSP = cspDiretivas.join("; ");
-
-// Os quatro primeiros são seguros e obrigatórios em toda rota; o CSP é a camada
-// best-effort verificada no dev server (login + tela interna, console sem bloqueio).
+// O CSP NÃO mora mais aqui (decisão C3:a — Onda 2): headers() é estático, e um
+// nonce precisa nascer por request. Ele é montado no src/proxy.ts, com
+// script-src 'self' 'nonce-…' 'strict-dynamic' e SEM 'unsafe-inline' em
+// script-src. Uma exceção sobrevive lá, e o porquê fica registrado AQUI:
+//
+//   style-src 'self' 'unsafe-inline'
+//
+// porque (a) atributo style={{…}} do React — usado em dezenas de componentes
+// (barras de progresso, larguras calculadas) — é regido por style-src e nonce
+// NÃO se aplica a atributo, só a <style>/<link>; e (b) em dev o Next injeta
+// <style> inline sem nonce no hot-reload. Trocar isso exigiria migrar todo
+// style={{…}} para CSS custom properties — fora do escopo da C3.
+//
+// Os quatro cabeçalhos abaixo seguem aqui: são estáticos e valem em toda rota.
 const CABECALHOS_SEGURANCA = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -36,7 +22,6 @@ const CABECALHOS_SEGURANCA = [
     value: "max-age=63072000; includeSubDomains",
   },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Content-Security-Policy", value: CSP },
 ];
 
 const nextConfig: NextConfig = {

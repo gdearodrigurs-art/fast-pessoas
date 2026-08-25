@@ -54,6 +54,42 @@ function apiDeRegularizacao(pathname: string, metodo: string): boolean {
   return pathname === "/api/identidade/sair";
 }
 
+// ---------------------------------------------------------------------------
+// CSP com NONCE por request (decisão C3:a — Onda 2). O CSP saiu do
+// next.config.ts (lá é estático, um nonce por request é impossível) e passou a
+// ser montado aqui, no molde LITERAL da doc oficial do Next
+// (node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md):
+//  - o nonce viaja no header x-nonce E dentro do próprio CSP na REQUISIÇÃO —
+//    é do CSP da requisição que o Next extrai o nonce para pendurar nos
+//    scripts que renderiza (framework, bundles e inline do shell);
+//  - a RESPOSTA leva o mesmo CSP, que é o que o browser aplica.
+// script-src SEM 'unsafe-inline': só 'self' + o nonce + 'strict-dynamic' (os
+// chunks que o runtime injeta herdam a confiança do script com nonce — sem
+// isso o lazy-load quebraria). 'unsafe-eval' SÓ em dev: o React usa eval para
+// reconstruir stack de erro no browser; em produção ninguém usa eval.
+// style-src mantém 'unsafe-inline' — o porquê está documentado no
+// next.config.ts, junto dos demais cabeçalhos de segurança.
+// ---------------------------------------------------------------------------
+const EM_DEV = process.env.NODE_ENV !== "production";
+
+function montarCsp(nonce: string): string {
+  const diretivas = [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${EM_DEV ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' blob: data:",
+    "font-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    // Em dev o servidor é http://localhost — o upgrade para https quebraria
+    // o carregamento dos assets.
+    ...(EM_DEV ? [] : ["upgrade-insecure-requests"]),
+  ];
+  return diretivas.join("; ");
+}
+
 async function lerPayloadSessao(token: string): Promise<JWTPayload | null> {
   const segredo = process.env.SESSAO_SEGREDO;
   if (!segredo) return null;
@@ -71,8 +107,24 @@ async function lerPayloadSessao(token: string): Promise<JWTPayload | null> {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Nonce novo a CADA request (nonce reusado não é nonce) e o mesmo CSP nos
+  // dois sentidos: requisição (de onde o Next extrai o nonce) e resposta (o
+  // que o browser aplica). Todo caminho que deixa a request SEGUIR usa
+  // seguirComCsp(); redirect e resposta de erro não renderizam documento.
+  const nonce = btoa(globalThis.crypto.randomUUID());
+  const csp = montarCsp(nonce);
+  const seguirComCsp = () => {
+    const cabecalhos = new Headers(request.headers);
+    cabecalhos.set("x-nonce", nonce);
+    cabecalhos.set("Content-Security-Policy", csp);
+    const resposta = NextResponse.next({ request: { headers: cabecalhos } });
+    resposta.headers.set("Content-Security-Policy", csp);
+    return resposta;
+  };
+
   if (ROTAS_LIVRES.has(pathname)) {
-    return NextResponse.next();
+    return seguirComCsp();
   }
 
   const token = request.cookies.get(NOME_COOKIE_SESSAO)?.value;
@@ -87,7 +139,7 @@ export async function proxy(request: NextRequest) {
         ROTAS_PENDENTE_2FA.has(pathname) ||
         pathname.startsWith(PREFIXO_API_2FA)
       ) {
-        return NextResponse.next();
+        return seguirComCsp();
       }
       if (pathname.startsWith("/api/")) {
         return Response.json(
@@ -102,7 +154,7 @@ export async function proxy(request: NextRequest) {
         PAGINAS_CIENCIA_PENDENTE.has(pathname) ||
         apiDeRegularizacao(pathname, request.method)
       ) {
-        return NextResponse.next();
+        return seguirComCsp();
       }
       if (pathname.startsWith("/api/")) {
         return Response.json(
@@ -114,7 +166,7 @@ export async function proxy(request: NextRequest) {
       }
       return NextResponse.redirect(new URL("/ciencia-pendente", request.url));
     }
-    return NextResponse.next();
+    return seguirComCsp();
   }
 
   if (pathname.startsWith("/api/")) {
