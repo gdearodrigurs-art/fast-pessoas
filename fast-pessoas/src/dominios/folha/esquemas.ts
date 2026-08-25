@@ -173,6 +173,17 @@ export const CODIGO_DESCONTO_ADIANTAMENTO_DECIMO = "1602";
 export const CODIGO_INSS_DECIMO = "2003";
 export const CODIGO_IRRF_DECIMO = "2004";
 
+// Códigos do MOTOR DE RESCISÃO (calculo-rescisao.ts), migração 0097. Os três
+// são PLACEHOLDERS no esquema-exemplo da casa (1xxx remuneração), porque a
+// planilha do Diego cita as verbas rescisórias num intervalo ambíguo
+// ("0078/0002/0015", docs/18 §2e) — a adoção dos reais vai junto dos
+// importadores, com as demais duplicatas (docs/18 §2a). As férias INDENIZADAS
+// da rescisão saem pelas mesmas 0136/0137 (decisão registrada na 0092) e o 13º
+// proporcional pelas 0138/1602/2003/2004 (0094, reuso do motor de 13º).
+export const CODIGO_SALDO_SALARIO = "1701";
+export const CODIGO_AVISO_INDENIZADO = "1702";
+export const CODIGO_MULTA_FGTS = "1703";
+
 /** Rubricas que o motor gera sozinho — lançar variável nelas é erro. */
 export const CODIGOS_AUTOMATICOS: readonly string[] = [
   CODIGO_SALARIO_BASE,
@@ -186,10 +197,12 @@ export const CODIGOS_AUTOMATICOS: readonly string[] = [
  * Rubricas que o sistema procura PELO CÓDIGO: as automáticas do motor mais as
  * que a importação do ponto (HE 50/100, adicional noturno, faltas) e o desconto
  * de benefício lançam sozinhas — e as do MOTOR DE FÉRIAS (calculo-ferias.ts),
- * que resolve 0136/0137/1401 pelo código, e as do MOTOR DE 13º (calculo-13.ts),
- * que resolve 0138/1601/1602/2003/2004. Encerrar qualquer uma derruba o
- * cálculo da competência inteira, a importação ou a prévia/folha de férias e
- * de 13º — o encerramento recusa, e a tela nem oferece o botão.
+ * que resolve 0136/0137/1401 pelo código, as do MOTOR DE 13º (calculo-13.ts),
+ * que resolve 0138/1601/1602/2003/2004, e as do MOTOR DE RESCISÃO
+ * (calculo-rescisao.ts), que resolve 1701/1702/1703. Encerrar qualquer uma
+ * derruba o cálculo da competência inteira, a importação ou a prévia/folha de
+ * férias, de 13º e de rescisão — o encerramento recusa, e a tela nem oferece o
+ * botão.
  */
 export const CODIGOS_DO_MOTOR: readonly string[] = [
   ...CODIGOS_AUTOMATICOS,
@@ -206,6 +219,9 @@ export const CODIGOS_DO_MOTOR: readonly string[] = [
   CODIGO_DESCONTO_ADIANTAMENTO_DECIMO,
   CODIGO_INSS_DECIMO,
   CODIGO_IRRF_DECIMO,
+  CODIGO_SALDO_SALARIO,
+  CODIGO_AVISO_INDENIZADO,
+  CODIGO_MULTA_FGTS,
 ];
 
 const esquemaDinheiro = z

@@ -2221,6 +2221,117 @@ export async function buscarColaboradorParaDecimo(
   };
 }
 
+// ------------------------------------------------------------------ prévia de rescisão (onda 3)
+
+export interface DesligamentoParaRescisao {
+  processo_id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data_admissao: string;
+  /** Valor real de rh.tipo_desligamento_versao.tipo, congelado no processo. */
+  tipo: string;
+  tipo_nome: string;
+  iniciativa: string;
+  modalidade_aviso: string;
+  estado: string;
+  data_comunicacao: string;
+  data_projetada_termino: string;
+  data_termino_efetiva: string | null;
+}
+
+/**
+ * O processo de desligamento como o MOTOR DE RESCISÃO (calculo-rescisao.ts) o
+ * lê: tipo congelado na abertura (é ele que decide QUAIS verbas entram),
+ * iniciativa e modalidade do aviso, as três datas e a admissão do colaborador.
+ * LEITURA APENAS do domínio desligamento — nenhum campo restrito (motivo,
+ * entrevista) sai por aqui; quem lê motivo é o próprio módulo, com a chave dele.
+ */
+export async function buscarDesligamentoParaRescisao(
+  processoId: number
+): Promise<DesligamentoParaRescisao | null> {
+  const linhas = await consultar<{
+    processo_id: string;
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    data_admissao: string;
+    tipo: string;
+    tipo_nome: string;
+    iniciativa: string;
+    modalidade_aviso: string;
+    estado: string;
+    data_comunicacao: string;
+    data_projetada_termino: string;
+    data_termino_efetiva: string | null;
+  }>(
+    `SELECT p.id AS processo_id, p.colaborador_id,
+            c.nome_completo AS colaborador_nome, c.matricula,
+            c.data_admissao::text AS data_admissao,
+            t.tipo, t.nome AS tipo_nome,
+            p.iniciativa, p.modalidade_aviso, p.estado,
+            p.data_comunicacao::text AS data_comunicacao,
+            p.data_projetada_termino::text AS data_projetada_termino,
+            p.data_termino_efetiva::text AS data_termino_efetiva
+       FROM rh.processo_desligamento p
+       JOIN rh.colaborador c ON c.id = p.colaborador_id
+       JOIN rh.tipo_desligamento_versao t ON t.id = p.tipo_desligamento_versao_id
+      WHERE p.id = $1`,
+    [processoId]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    ...linha,
+    processo_id: Number(linha.processo_id),
+    colaborador_id: Number(linha.colaborador_id),
+  };
+}
+
+export interface PeriodoAquisitivoParaRescisao {
+  id: number;
+  inicio: string;
+  fim: string;
+  /** Dias ainda não gozados (NUMERIC(4,1) — meio dia existe). */
+  saldo_dias: number;
+  status: string;
+  limite_concessivo: string;
+}
+
+/**
+ * TODOS os períodos aquisitivos do colaborador, do mais antigo ao mais novo —
+ * quem separa VENCIDOS (fim <= término, saldo > 0 → indenizados na rescisão)
+ * do período EM CURSO (dá os avos das proporcionais) é o serviço, que conhece
+ * a data do término. saldo_dias já desconta o gozado/abonado (o módulo de
+ * férias mantém a linha); status não filtra aqui de propósito: até um período
+ * 'vencido' (passou do concessivo) continua sendo dívida na rescisão.
+ */
+export async function listarPeriodosAquisitivosParaRescisao(
+  colaboradorId: number
+): Promise<PeriodoAquisitivoParaRescisao[]> {
+  const linhas = await consultar<{
+    id: string;
+    inicio: string;
+    fim: string;
+    saldo_dias: string;
+    status: string;
+    limite_concessivo: string;
+  }>(
+    `SELECT p.id, p.inicio::text AS inicio, p.fim::text AS fim,
+            p.saldo_dias::text AS saldo_dias, p.status,
+            p.limite_concessivo::text AS limite_concessivo
+       FROM rh.periodo_aquisitivo p
+      WHERE p.colaborador_id = $1
+      ORDER BY p.inicio, p.id`,
+    [colaboradorId]
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    saldo_dias: Number(linha.saldo_dias),
+  }));
+}
+
 // ------------------------------------------------------------------ indicador
 
 /**

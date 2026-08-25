@@ -30,6 +30,10 @@ import {
   ResultadoMotorDecimo,
 } from "./calculo-13";
 import {
+  calcularRescisao,
+  ResultadoMotorRescisao,
+} from "./calculo-rescisao";
+import {
   AbrirCompetencia,
   CODIGO_ADICIONAL_NOTURNO,
   CODIGO_DESCONTO_BENEFICIO,
@@ -62,6 +66,9 @@ import {
   apagarFolhasDaCompetencia,
   buscarColaboradorParaDecimo,
   buscarColaboradorParaFerias,
+  buscarDesligamentoParaRescisao,
+  DesligamentoParaRescisao,
+  listarPeriodosAquisitivosParaRescisao,
   buscarCompetencia,
   buscarCompetenciaParaAtualizar,
   buscarProgramacaoParaPrevia,
@@ -1994,6 +2001,143 @@ export async function calcularPreviaDecimo(
     },
     ano,
     parcela,
+    data_referencia: dataRef,
+    dependentes_irrf: colaborador.dependentes_irrf,
+    resultado,
+  };
+}
+
+// ------------------------------------------------------------------ prévia de rescisão (onda 3)
+
+export interface PreviaRescisao {
+  processo: DesligamentoParaRescisao;
+  /** A data que resolveu TODAS as vigências da prévia (ver o comentário). */
+  data_referencia: string;
+  dependentes_irrf: number;
+  resultado: ResultadoMotorRescisao;
+}
+
+/**
+ * Prévia de valores da rescisão de UM processo de desligamento — SÓ LEITURA:
+ * nada é gravado em folha nenhuma; o resultado sai com a memória de cálculo de
+ * cada item. O motor consome os motores de férias (modalidade indenizadas) e
+ * de 13º (avos até a data) — ver calculo-rescisao.ts.
+ *
+ * A DATA DE REFERÊNCIA é o TÉRMINO do contrato: efetivo quando o processo já
+ * encerrou, projetado enquanto está em andamento (é a data que o acerto do
+ * art. 477 usa). É nela que se resolvem salário, dependentes, versões de
+ * rubrica e tabelas legais — a mesma mecânica de vigência do cálculo mensal
+ * (dataReferenciaCompetencia), da prévia de férias (art. 142) e da de 13º.
+ *
+ * Processo CANCELADO não tem prévia (409 explicável): rescisão que não vai
+ * acontecer não tem valor a prever. Em andamento ou encerrado, tem.
+ *
+ * O SALDO DO FGTS é dado EXTERNO (extrato da Caixa) — vem do chamador quando
+ * houver; sem ele a multa sai zerada com AVISO (decisão registrada no motor).
+ */
+export async function calcularPreviaRescisao(
+  sessao: PayloadSessao,
+  processoId: number,
+  saldoFgtsCentavos: number | null = null
+): Promise<PreviaRescisao> {
+  const processo = await buscarDesligamentoParaRescisao(processoId);
+  if (!processo) {
+    throw new ErroHttp(404, "Processo de desligamento não encontrado.");
+  }
+  if (processo.estado === "cancelado") {
+    throw new ErroHttp(
+      409,
+      "Prévia indisponível: o processo de desligamento foi cancelado — rescisão que não vai acontecer não tem valor a prever."
+    );
+  }
+
+  const dataRef =
+    processo.data_termino_efetiva ?? processo.data_projetada_termino;
+  const [colaborador, periodos, { tabelas, faltantes }, rubricas] =
+    await Promise.all([
+      buscarColaboradorParaDecimo(processo.colaborador_id, dataRef),
+      listarPeriodosAquisitivosParaRescisao(processo.colaborador_id),
+      tabelasVigentes(dataRef),
+      listarRubricasVigentes(dataRef),
+    ]);
+  if (!colaborador || colaborador.salario_centavos === null) {
+    throw new ErroHttp(
+      409,
+      `Sem posição com salário vigente em ${dataRef} para ${processo.colaborador_nome} (${processo.matricula}) — a prévia não tem remuneração de referência.`
+    );
+  }
+  if (!tabelas) {
+    throw new ErroHttp(
+      409,
+      `Sem tabela legal vigente em ${dataRef}: ${faltantes
+        .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
+        .join(", ")} — cadastre em Parâmetros antes da prévia.`
+    );
+  }
+
+  // Quem separa vencidos de em-curso é o serviço, que conhece o término:
+  // período COMPLETO até o término com saldo → indenizado; o período que o
+  // término corta ao meio → dá os avos das proporcionais.
+  const feriasVencidas = periodos
+    .filter((periodo) => periodo.fim <= dataRef && periodo.saldo_dias > 0)
+    .map((periodo) => ({
+      periodo_inicio: periodo.inicio,
+      periodo_fim: periodo.fim,
+      saldo_dias: periodo.saldo_dias,
+      limite_concessivo: periodo.limite_concessivo,
+    }));
+  const emCurso = periodos.filter(
+    (periodo) => periodo.inicio <= dataRef && periodo.fim > dataRef
+  );
+  const periodoEmCursoInicio =
+    emCurso.length > 0 ? emCurso[emCurso.length - 1].inicio : null;
+
+  let resultado: ResultadoMotorRescisao;
+  try {
+    resultado = calcularRescisao({
+      tipo_desligamento: processo.tipo,
+      iniciativa: processo.iniciativa,
+      modalidade_aviso: processo.modalidade_aviso,
+      data_admissao: processo.data_admissao,
+      data_comunicacao: processo.data_comunicacao,
+      data_termino: dataRef,
+      salario_base_centavos: colaborador.salario_centavos,
+      dependentes_irrf: colaborador.dependentes_irrf,
+      // Importadores de variáveis, extrato do FGTS, 1ª parcela de 13º gravada
+      // e afastamento sem remuneração ainda não alimentam o motor — os
+      // defaults conservadores avisam na saída (molde pendências #17/#19).
+      media_variaveis_centavos: null,
+      ferias_vencidas: feriasVencidas,
+      periodo_aquisitivo_em_curso_inicio: periodoEmCursoInicio,
+      saldo_fgts_centavos: saldoFgtsCentavos,
+      adiantamento_decimo_pago_centavos: null,
+      avos_afastamento_13: null,
+      rubricas,
+      tabela_inss: tabelas.inss,
+      tabela_irrf: tabelas.irrf,
+      parametros: tabelas.parametros,
+    });
+  } catch (erro) {
+    if (erro instanceof ErroMotor) {
+      throw new ErroHttp(
+        409,
+        `Prévia de rescisão de ${processo.colaborador_nome} (${processo.matricula}): ${erro.message}.`
+      );
+    }
+    throw erro;
+  }
+
+  // Valor de rescisão deriva do salário — dado mais sensível do sistema: toda
+  // leitura autorizada deixa trilha, com a chave que DE FATO autorizou.
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.ver",
+    recurso: "rh.processo_desligamento",
+    registroId: String(processoId),
+  });
+
+  return {
+    processo,
     data_referencia: dataRef,
     dependentes_irrf: colaborador.dependentes_irrf,
     resultado,
