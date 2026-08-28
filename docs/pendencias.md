@@ -812,7 +812,15 @@ desligamento. Itens 1–3 e a miudeza do `vinculo_atual` RESOLVIDOS em 2026-08-2
 
 ---
 
-## 17 · Motor de férias (1.6) — defaults conservadores que pedem confirmação (não bloqueantes)
+## 17 · Motor de férias (1.6) — defaults conservadores · ✅ CONFIRMADOS PELO DONO (25/08/2026)
+
+> **DECISÃO DO DONO (25/08/2026): "o que você fez está correto".** As interpretações abaixo — e
+> as irmãs da #19 (13º) e a régua do DSR da suspensão (D2:a) — ficam ADOTADAS como regra da Fast,
+> não mais como pergunta aberta. Os AVISOS na saída dos motores **permanecem** de propósito: eles
+> não dizem "isto pode estar errado", dizem "esta conta seguiu uma interpretação registrada" — é
+> o que permite ao DP explicar um centavo divergente sem abrir o código. Se um dia o contador
+> sentenciar diferente, cada item abaixo diz exatamente o que muda.
+
 
 A prévia de férias (calculo-ferias.ts + GET api/folha/ferias-previa) entrou com estes defaults,
 todos explicados na memória de cálculo:
@@ -924,7 +932,13 @@ registrados, com dono e desenho, os de política/raridade:
     recorte próprio de liderado direto — alinhar quando aquelas telas forem tocadas.
 ---
 
-## 19 · Motor de 13º — os defaults conservadores que precisam de confirmação (DP/contador)
+## 19 · Motor de 13º — defaults conservadores · ✅ CONFIRMADOS PELO DONO (25/08/2026)
+
+> **DECISÃO DO DONO (25/08/2026): "o que você fez está correto".** Vale para os itens abaixo, com
+> a mesma leitura registrada na #17: adotados como regra, avisos mantidos na saída. O item 5
+> (códigos placeholder 1601/1602/2003/2004) NÃO é interpretação e continua aberto — a troca pelos
+> códigos reais vai junto dos importadores, quando o Diego devolver a aba 5.
+
 
 O motor de 13º (onda 2 da lane Folha — `src/dominios/folha/calculo-13.ts`, prévia em
 `GET /api/folha/decimo-previa`) tomou quatro decisões pelo caminho conservador, cada uma com AVISO
@@ -1001,3 +1015,31 @@ do contrato do recorte). Ficam registrados os de política/raridade/refinamento:
     repo principal, com temporários `docs/unp*.tmp`). Os commits estão íntegros; restaurar com
     `git checkout -- docs/05-pesquisa-mercado.md` quando sumir, e investigar exclusão do AV
     para a pasta do projeto.
+
+---
+
+## 21 · As três interpretações de folha — ✅ DECIDIDAS (25/08/2026)
+
+O dono foi consultado sobre as três contas que entraram com AVISO por terem mais de uma leitura
+defensável na lei, e respondeu **"o que você fez está correto"**. Ficam adotadas:
+
+1. **DSR da suspensão disciplinar (Lei 605/49).** A suspensão desconta os dias corridos da janela
+   **e o descanso semanal remunerado da semana** — mesma lógica da falta injustificada. Regra em
+   `folha/suspensao.ts` (semana civil seg–sáb, DSR atribuído à competência do domingo, união
+   entre medidas para nunca contar em dobro, teto no divisor de dias).
+   *Se um dia mudar:* tirar o bloco de domingos do recorte — o desconto passa a ser só dos dias.
+
+2. **IRRF do 13º e das férias pela mecânica completo × simplificado (vale o menor).** A tributação
+   é em separado (13º exclusiva na fonte, RIR/2018 art. 700); o que era interpretação nossa é
+   aplicar o desconto simplificado também a elas — o que nunca desconta mais que o regime
+   completo. Regra em `calculo-13.ts` e `calculo-ferias.ts`.
+   *Se um dia mudar:* apurar só pelo completo (uma linha na entrada de cada motor).
+
+3. **Suspensão de quem é desligado no mesmo mês.** A prévia de rescisão **AVISA** (dias capados no
+   término + DSR + ids das medidas) mas **não desconta** — o cálculo mensal exclui o desligado, e
+   o desenho do acerto pertence à integração futura da rescisão como competência gravada.
+   *Enquanto isso:* o DP lança o desconto à mão no acerto, orientado pelo aviso.
+
+**Os avisos na tela CONTINUAM** — eles registram a interpretação seguida, não uma dúvida: é o que
+deixa o DP explicar um centavo divergente sem abrir o código. Nenhuma dessas três é mais um
+bloqueio para a primeira folha real.
