@@ -23,6 +23,11 @@ export interface EntradaGuardarDocumento {
   sensivel: boolean;
   hash_sha256: string;
   enviado_por_usuario: number;
+  // ciclo de ciência (0086)
+  exige_ciencia: boolean;
+  bloqueante: boolean;
+  prazo_ciencia_dias: number | null;
+  substitui_documento_id: number | null;
 }
 
 export interface DocumentoGuardado {
@@ -44,8 +49,9 @@ export const armazenamentoBytea: ArmazenamentoDocumentos = {
     const { rows } = await cliente.query<{ id: string; enviado_em: Date }>(
       `INSERT INTO rh.documento
          (colaborador_id, categoria, titulo, nome_arquivo, mime,
-          tamanho_bytes, conteudo, sensivel, hash_sha256, enviado_por_usuario)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          tamanho_bytes, conteudo, sensivel, hash_sha256, enviado_por_usuario,
+          exige_ciencia, bloqueante, prazo_ciencia_dias, substitui_documento_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id, enviado_em`,
       [
         entrada.colaborador_id,
@@ -58,6 +64,10 @@ export const armazenamentoBytea: ArmazenamentoDocumentos = {
         entrada.sensivel,
         entrada.hash_sha256,
         entrada.enviado_por_usuario,
+        entrada.exige_ciencia,
+        entrada.bloqueante,
+        entrada.prazo_ciencia_dias,
+        entrada.substitui_documento_id,
       ]
     );
     const linha = rows[0];

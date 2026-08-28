@@ -311,22 +311,23 @@ export const ANDAMENTO_CICLO: Record<StatusCiclo, string> = {
 };
 
 export const ROTULOS_STATUS_PDI: Record<string, string> = {
-  aberta: "Em andamento",
+  aberta: "Pendente",
+  em_andamento: "Em andamento",
   concluida: "Concluída",
   cancelada: "Cancelada",
 };
 
 /**
- * Bloco 8 do pedido da analista: treinamentos. O texto é a resposta honesta —
- * o LMS é o Sults (seção 7 do documento de feedback: fronteira Fast Pessoas ×
- * Sults é decisão de escopo pendente). Enquanto não houver integração, o
- * portal DIZ isso em vez de mostrar uma lista vazia que parece defeito.
+ * Bloco 8 do pedido da analista: treinamentos. Decisão do dono (13/08/2026): o
+ * DESENVOLVIMENTO passa a viver no PDI (Meu PDI) — planejar, agir e acompanhar.
+ * O Sults deixa de ser dependência: vira, no máximo, repositório de conteúdo que
+ * uma ação de formação referencia por link. O texto aponta o colaborador pro PDI.
  */
 export const EXPLICACAO_TREINAMENTOS =
-  "O histórico de treinamentos ainda não vive aqui: hoje as trilhas, provas e " +
-  "certificados são registrados no Sults. Quando a integração for definida, " +
-  "este bloco passa a mostrar os seus treinamentos concluídos e os obrigatórios " +
-  "em aberto. Até então, consulte o Sults ou abra uma solicitação para o RH.";
+  "Seu desenvolvimento agora vive no Meu PDI: é lá que ficam o plano combinado " +
+  "com o seu gestor, as ações (inclusive as de formação) e o andamento de cada " +
+  "uma. Cursos e certificados de conteúdo externo, quando houver, são referenciados " +
+  "pela ação de formação do próprio PDI.";
 
 // ------------------------------------------------------------------ derivações
 
@@ -420,3 +421,28 @@ export const esquemaMeuDependenteEdicao = z
   });
 
 export type MeuDependenteEdicao = z.infer<typeof esquemaMeuDependenteEdicao>;
+
+// ------------------------------------------------- Meu PDI: aceite + andamento
+//
+// Também sem `colaborador_id` (nem `acao_id`): o aceite e o registro de andamento
+// saem da sessão + do id na ROTA, escopados pelo vínculo do dono. O corpo só traz
+// o que a pessoa escreve.
+
+/** Os três estados que o COLABORADOR pode marcar. Cancelar é ato do gestor/RH. */
+export const ESTADOS_ANDAMENTO_COLABORADOR = [
+  "aberta",
+  "em_andamento",
+  "concluida",
+] as const;
+
+export const esquemaRegistrarAndamento = z.object({
+  texto: z
+    .string()
+    .trim()
+    .min(1, "Escreva o que avançou")
+    .max(2000, "No máximo 2000 caracteres"),
+  /** Ausente = só um recado no log, sem mover o estado da ação. */
+  status_novo: z.enum(ESTADOS_ANDAMENTO_COLABORADOR).optional(),
+});
+
+export type RegistrarAndamento = z.infer<typeof esquemaRegistrarAndamento>;

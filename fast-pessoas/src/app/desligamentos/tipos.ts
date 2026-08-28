@@ -78,6 +78,18 @@ export interface Item {
 
 export type { CategoriaDevolucao };
 
+/**
+ * O que ainda está COM o colaborador segundo os REGISTROS DE ENTREGA
+ * (rh.epi_entrega + rh.posse_item sem devolução) — aviso do eixo 10, não
+ * trava o encerramento.
+ */
+export interface PendenciaDevolucao {
+  origem: "epi" | "posse";
+  descricao: string;
+  quantidade: number;
+  data_entrega: string;
+}
+
 export interface CatalogoCategorias {
   pode_administrar: boolean;
   categorias: CategoriaDevolucao[];
@@ -127,6 +139,8 @@ export interface Detalhe {
   motivo?: string | null;
   verificacoes: Verificacao[];
   itens: Item[];
+  /** Pendências vindas dos registros de entrega (EPI + posse) — só aviso. */
+  pendencias_devolucao: PendenciaDevolucao[];
   /** Só as ATIVAS, e vazio para quem não gere itens — o seletor sai daqui. */
   categorias: CategoriaDevolucao[];
   entrevista: Entrevista | null;

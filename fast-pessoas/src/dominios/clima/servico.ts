@@ -4,7 +4,7 @@ import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { lerMinimoPorRecorte } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
-import { FiltroIndividual, RespostaCheckin } from "./esquemas";
+import { FiltroIndividual, RespostaCheckin, TextoPergunta } from "./esquemas";
 import {
   AgregadoDia,
   AgregadoGeral,
@@ -15,16 +15,25 @@ import {
   agregadoPorPergunta,
   agregadoPorUnidade,
   adesaoCheckinPorDia,
+  atualizarTextoPergunta,
   buscarColaboradorPorUsuario,
+  buscarPerguntaParaMutacao,
+  contarRespostasDaPergunta,
+  criarPerguntaAtiva,
+  encerrarPergunta,
   inserirResposta,
+  listarPerguntasAdmin,
   listarPerguntasAtivas,
   listarRespostasDoDia,
   listarRespostasIndividuais,
+  PerguntaAdmin,
+  proximaOrdemAtiva,
   registrarLeituraSensivel,
   RespostaIndividual,
 } from "./repositorio";
 
 const TABELA_RESPOSTA = "rh_clima.checkin_resposta";
+const TABELA_PERGUNTA = "rh_clima.pergunta_versao";
 const CHAVE_INDIVIDUAL = "clima.resposta.individual.ver";
 const RECURSO_INDIVIDUAL = "clima.checkin_resposta.individual";
 const FUSO_EXIBICAO = "America/Sao_Paulo";
@@ -210,10 +219,13 @@ export async function obterAgregado(): Promise<AgregadoClima> {
   // Lido a cada chamada, e não guardado em módulo: mudar o piso pela tela tem
   // de valer na próxima abertura do painel, sem reiniciar o servidor.
   const minimoRespondentes = await lerMinimoPorRecorte();
+  // O MESMO piso k vai aos quatro agregados: geral, por dia e por pergunta
+  // também suprimem/omitem quando os respondentes ficam abaixo do mínimo — sem
+  // isso, um recorte de baixa adesão publicaria a nota exata de uma pessoa.
   const [geral, porDia, porPergunta, porUnidade] = await Promise.all([
-    agregadoGeral(inicio, fim),
-    agregadoPorDia(inicio, fim),
-    agregadoPorPergunta(inicio, fim),
+    agregadoGeral(inicio, fim, minimoRespondentes),
+    agregadoPorDia(inicio, fim, minimoRespondentes),
+    agregadoPorPergunta(inicio, fim, minimoRespondentes),
     agregadoPorUnidade(inicio, fim, DIAS_RECORTE_RECENTE, minimoRespondentes),
   ]);
   // Agregado: média, contagens e nada mais — NUNCA autor. O corte por unidade
@@ -310,4 +322,167 @@ export async function obterRespostasIndividuais(
     return linhas;
   });
   return { periodo: { inicio, fim }, respostas };
+}
+
+// ------------------------------------------------------------------ administração das perguntas do check-in (0075)
+//
+// Os quatro atos do dono (docs/16:459-464): EDITAR (só sem resposta) ·
+// REFORMULAR (versão nova apontando pra anterior, encerra a anterior no mesmo
+// ato) · APOSENTAR (encerra sem continuidade) · ASSUNTO NOVO (pergunta nova,
+// sem continuidade). O check-in não tem etapa de rascunho: nasce ativa.
+
+export interface PerguntasAdmin {
+  /** As que valem hoje, na ordem em que aparecem no check-in. */
+  ativas: PerguntaAdmin[];
+  /** Encerradas (aposentadas ou substituídas por reformulação), mais nova primeiro. */
+  encerradas: PerguntaAdmin[];
+}
+
+export async function obterPerguntasAdmin(): Promise<PerguntasAdmin> {
+  const todas = await listarPerguntasAdmin();
+  return {
+    ativas: todas
+      .filter((p) => p.status === "ativa")
+      .sort((a, b) => a.ordem - b.ordem),
+    encerradas: todas
+      .filter((p) => p.status === "encerrada")
+      .sort((a, b) => (b.fim_vigencia ?? "").localeCompare(a.fim_vigencia ?? "")),
+  };
+}
+
+/** Assunto novo: pergunta nova, ordem no fim, sem continuidade. */
+export async function criarPergunta(
+  sessao: PayloadSessao,
+  dados: TextoPergunta
+): Promise<{ id: number }> {
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const ordem = await proximaOrdemAtiva(cliente);
+      const id = await criarPerguntaAtiva(cliente, {
+        texto: dados.texto,
+        ordem,
+        continua_de: null,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_PERGUNTA,
+        registroId: String(id),
+        diff: {
+          Texto: { de: null, para: dados.texto },
+          Ordem: { de: null, para: String(ordem) },
+        },
+      });
+      return { id };
+    });
+  } catch (erro) {
+    // Dois "assunto novo" concorrentes leem o mesmo MAX(ordem) e colidem no
+    // índice parcial pergunta_versao_ordem_ativa (23505). O dado fica íntegro
+    // (o índice barrou o segundo INSERT); traduzimos para 409 amigável em vez
+    // do 500 cru. Reformular não sofre disso (reusa a ordem da anterior,
+    // serializado pelo FOR UPDATE).
+    if (violacaoUnica(erro) === "pergunta_versao_ordem_ativa") {
+      throw new ErroHttp(
+        409,
+        "Outra pergunta foi criada ao mesmo tempo — recarregue e tente de novo."
+      );
+    }
+    throw erro;
+  }
+}
+
+/** Editar: só enquanto não houver resposta (o trigger é a trava dura). */
+export async function editarTextoPergunta(
+  sessao: PayloadSessao,
+  id: number,
+  dados: TextoPergunta
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const pergunta = await buscarPerguntaParaMutacao(cliente, id);
+    if (!pergunta) throw new ErroHttp(404, "Pergunta não encontrada.");
+    if (pergunta.status === "encerrada") {
+      throw new ErroHttp(409, "Pergunta encerrada é imutável.");
+    }
+    if (pergunta.texto === dados.texto) return;
+    const respostas = await contarRespostasDaPergunta(cliente, id);
+    if (respostas > 0) {
+      throw new ErroHttp(
+        409,
+        `Esta pergunta já tem ${respostas} resposta(s) — o enunciado é imutável. Use "Reformular" para publicar uma nova versão.`
+      );
+    }
+    await atualizarTextoPergunta(cliente, id, dados.texto);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_PERGUNTA,
+      registroId: String(id),
+      diff: { Texto: { de: pergunta.texto, para: dados.texto } },
+    });
+  });
+}
+
+/** Reformular: encerra a ativa e publica uma nova na MESMA ordem, ligada a ela. */
+export async function reformularPergunta(
+  sessao: PayloadSessao,
+  id: number,
+  dados: TextoPergunta
+): Promise<{ id: number }> {
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    const anterior = await buscarPerguntaParaMutacao(cliente, id);
+    if (!anterior) throw new ErroHttp(404, "Pergunta não encontrada.");
+    if (anterior.status !== "ativa") {
+      throw new ErroHttp(409, "Só uma pergunta ativa pode ser reformulada.");
+    }
+    // Encerra a anterior ANTES de inserir a nova ativa: as duas dividem a mesma
+    // ordem, e o índice "uma ativa por ordem" só admite uma por vez.
+    await encerrarPergunta(cliente, id);
+    const novaId = await criarPerguntaAtiva(cliente, {
+      texto: dados.texto,
+      ordem: anterior.ordem,
+      continua_de: id,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_PERGUNTA,
+      registroId: String(novaId),
+      diff: {
+        Reformula: { de: `#${id}: ${anterior.texto}`, para: dados.texto },
+        Ordem: { de: null, para: String(anterior.ordem) },
+      },
+    });
+    return { id: novaId };
+  });
+}
+
+/** Aposentar: encerra sem substituta — a pergunta sai do check-in. */
+export async function aposentarPergunta(
+  sessao: PayloadSessao,
+  id: number
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const pergunta = await buscarPerguntaParaMutacao(cliente, id);
+    if (!pergunta) throw new ErroHttp(404, "Pergunta não encontrada.");
+    if (pergunta.status !== "ativa") {
+      throw new ErroHttp(409, "Só uma pergunta ativa pode ser aposentada.");
+    }
+    await encerrarPergunta(cliente, id);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_PERGUNTA,
+      registroId: String(id),
+      diff: {
+        Situação: {
+          de: "ativa",
+          para: "aposentada (encerrada, sem substituta)",
+        },
+      },
+    });
+  });
 }

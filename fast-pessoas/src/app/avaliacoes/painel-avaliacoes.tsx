@@ -195,7 +195,7 @@ export function PainelAvaliacoes() {
                 setResultadoLote(null);
                 setDialogoLote(true);
               }}
-              disabled={!painel.modelo_ativo}
+              disabled={!painel.modelos.geral_ativo}
             >
               + Abrir ciclo de desempenho (lote)
             </button>
@@ -212,10 +212,11 @@ export function PainelAvaliacoes() {
 
         {painel && (
           <>
-            {painel.pode.configurar && !painel.modelo_ativo && (
+            {painel.pode.configurar && !painel.modelos.geral_ativo && (
               <div className={comum.avisoAtencao}>
-                Nenhum modelo de avaliação ativo — ciclos não podem ser
-                abertos. Ative uma versão em{" "}
+                Nenhum modelo GERAL ativo — sem ele nenhum ciclo pode ser
+                aberto (o Geral é o piso que cobre quem não tem modelo do
+                próprio cargo). Defina-o em{" "}
                 <Link href="/avaliacoes/modelos">Modelos</Link>.
               </div>
             )}
@@ -319,12 +320,12 @@ export function PainelAvaliacoes() {
                   </div>
                   <div className={estilos.cardIndicador}>
                     <div className={estilos.numeroIndicador}>
-                      {painel.modelo_ativo
-                        ? `v${painel.modelo_ativo.versao}`
+                      {painel.modelos.geral_ativo
+                        ? 1 + painel.modelos.cargos_com_modelo
                         : "—"}
                     </div>
                     <div className={estilos.rotuloIndicador}>
-                      modelo vigente
+                      modelos ativos
                     </div>
                   </div>
                 </div>
@@ -397,9 +398,9 @@ export function PainelAvaliacoes() {
             <h3>Abrir ciclo de desempenho em lote</h3>
             <p className={comum.subDialogo}>
               Abre um ciclo para TODO colaborador ativo com gestor vigente que
-              ainda não tenha ciclo de desempenho em andamento. O modelo
-              vigente (v{painel?.modelo_ativo?.versao}) é congelado em cada
-              ciclo.
+              ainda não tenha ciclo de desempenho em andamento. O modelo de
+              cada pessoa — o do seu cargo, com fallback no Geral — é congelado
+              em cada ciclo.
             </p>
             {resultadoLote ? (
               <>

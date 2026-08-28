@@ -362,3 +362,214 @@
   gap: 10px;
   margin-top: 16px;
 }
+
+/* ---------------------------------------------------------------- ciclo de ciência (0086) */
+
+.etiquetaCiclo {
+  display: inline-block;
+  margin-left: 8px;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #eef3fb;
+  color: #1d4f91;
+  border: 1px solid #1d4f91;
+}
+
+.etiquetaBloqueante {
+  display: inline-block;
+  margin-left: 8px;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #d21217;
+  color: #ffffff;
+}
+
+.etiquetaSubstituido {
+  display: inline-block;
+  margin-left: 8px;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #f0eeeb;
+  color: #6b6763;
+}
+
+.etiquetaRecusado {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #fdf3f3;
+  color: #d21217;
+  white-space: nowrap;
+}
+
+.etiquetaVencido {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #fdf6e8;
+  color: #9a6b00;
+  white-space: nowrap;
+}
+
+.etiquetaLiberado {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #eef3fb;
+  color: #1d4f91;
+  white-space: nowrap;
+}
+
+.etiquetaPendente {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  background: #f0eeeb;
+  color: #6b6763;
+  white-space: nowrap;
+}
+
+.grupoCiclo {
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.grupoCiclo legend,
+.grupoCiclo p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6b6763;
+}
+
+.rodapeCiencia {
+  border-top: 1px solid #f0eeeb;
+  padding: 10px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.avisoRolagem {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6b6763;
+}
+
+.acoesCiencia {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.cartaoAviso {
+  background: #fdf6e8;
+  border: 1px solid #e8d9b0;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.cartaoAviso h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.cartaoAviso p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.cartaoBloqueio {
+  background: #fdf3f3;
+  border-color: #f0c1c2;
+}
+
+.linhaTestemunho {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.dialogoCiclo {
+  width: min(960px, 94vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #ffffff;
+  color: #1c1b1a;
+  border: 1px solid #e3e0dc;
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: grid;
+  gap: 12px;
+}
+
+.secaoCiclo {
+  display: grid;
+  gap: 10px;
+}
+
+.secaoCiclo h4 {
+  margin: 8px 0 0;
+  font-size: 0.95rem;
+}
+
+.cartaoAto {
+  border: 1px solid #e3e0dc;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.cartaoAto p {
+  margin: 0;
+}
+
+.detalheAto {
+  font-size: 0.8rem;
+  color: #6b6763;
+}
+
+.formAto {
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}

@@ -137,6 +137,7 @@ export interface OpcoesMovimentacao {
     nome_completo: string;
     cargo_atual: string | null;
     unidade_atual: string | null;
+    cnpj_atual: string | null;
   }[];
   cargos: { id: number; nome: string }[];
   unidades: { id: number; unidade: string }[];

@@ -9,11 +9,21 @@ import {
   listarDocumentos,
 } from "@/dominios/documentos/servico";
 import { responderErro } from "@/lib/http";
-import { exigirPermissao } from "@/lib/sessao";
+import {
+  exigirPermissao,
+  exigirPermissaoParaRegularizacao,
+} from "@/lib/sessao";
 
+/**
+ * A LEITURA usa a variante de regularização (A8): o proxy lista GET
+ * /api/documentos no conjunto do bloqueado de propósito — é por esta lista
+ * que o painel de /documentos acha o documento bloqueante para ler e dar
+ * ciência (B4). A chave continua a mesma (documento.ver); só a tranca do
+ * `ciencia_pendente` fica de fora. O ENVIO (POST) herda a tranca normalmente.
+ */
 export async function GET(request: NextRequest) {
   try {
-    const sessao = await exigirPermissao("documento.ver");
+    const sessao = await exigirPermissaoParaRegularizacao("documento.ver");
     const incluirSensiveis =
       request.nextUrl.searchParams.get("sensivel") === "true";
     const documentos = await listarDocumentos(sessao, incluirSensiveis);
@@ -51,6 +61,11 @@ export async function POST(request: Request) {
         titulo: formulario.get("titulo"),
         sensivel: formulario.get("sensivel") ?? "false",
         colaborador_id: formulario.get("colaborador_id") || undefined,
+        exige_ciencia: formulario.get("exige_ciencia") ?? "false",
+        bloqueante: formulario.get("bloqueante") ?? "false",
+        prazo_ciencia_dias: formulario.get("prazo_ciencia_dias") || undefined,
+        substitui_documento_id:
+          formulario.get("substitui_documento_id") || undefined,
       });
       if (!analise.success) {
         return Response.json(
@@ -65,6 +80,11 @@ export async function POST(request: Request) {
           titulo: analise.data.titulo,
           sensivel: analise.data.sensivel,
           colaborador_id: analise.data.colaborador_id ?? null,
+          exige_ciencia: analise.data.exige_ciencia,
+          bloqueante: analise.data.bloqueante,
+          prazo_ciencia_dias: analise.data.prazo_ciencia_dias ?? null,
+          substitui_documento_id:
+            analise.data.substitui_documento_id ?? null,
         },
         {
           nome: arquivo.name || "documento",
@@ -90,6 +110,10 @@ export async function POST(request: Request) {
         titulo: analise.data.titulo,
         sensivel: analise.data.sensivel,
         colaborador_id: analise.data.colaborador_id ?? null,
+        exige_ciencia: analise.data.exige_ciencia,
+        bloqueante: analise.data.bloqueante,
+        prazo_ciencia_dias: analise.data.prazo_ciencia_dias ?? null,
+        substitui_documento_id: analise.data.substitui_documento_id ?? null,
       },
       {
         nome: analise.data.nome_arquivo,

@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { esquemaData } from "../../lib/data-civil";
 import { cpfValido, TIPOS_VINCULO } from "../colaboradores/esquemas";
+import {
+  MIMES_PERMITIDOS,
+  ROTULOS_MIME,
+  TAMANHO_MAXIMO_BYTES,
+} from "../documentos/esquemas";
 
 // ------------------------------------------------------------------ requisição de vaga
 
@@ -124,6 +129,64 @@ export const ROTULOS_RECOMENDACAO: Record<RecomendacaoParecer, string> = {
   duvida: "Em dúvida",
 };
 
+// ------------------------------------------------------------------ pesquisa social (#13c, G3:a)
+
+export const RESULTADOS_PESQUISA_SOCIAL = ["aprovado", "reprovado"] as const;
+
+export type ResultadoPesquisaSocial =
+  (typeof RESULTADOS_PESQUISA_SOCIAL)[number];
+
+export const ROTULOS_RESULTADO_PESQUISA_SOCIAL: Record<
+  ResultadoPesquisaSocial,
+  string
+> = {
+  aprovado: "Pesquisa social aprovada",
+  reprovado: "Pesquisa social reprovada",
+};
+
+/**
+ * Retenção do desfecho + anexo (G3:a, N respondido pelo dono = 6): expurga-se
+ * junto do descarte da candidatura recusada após 6 meses. Mesmo molde do
+ * MESES_CONSENTIMENTO_PADRAO acima — prazo de política de dados, não parâmetro
+ * operacional de tela.
+ */
+export const MESES_RETENCAO_PESQUISA_SOCIAL = 6;
+
+/**
+ * Data-limite do expurgo: candidatura descartada ATÉ esta data (inclusive) já
+ * completou a janela de retenção. Aritmética de calendário em UTC, o mesmo
+ * comportamento de somarMeses do consentimento (31/xx transborda para o mês
+ * seguinte — aceito, igual lá).
+ */
+export function dataCorteExpurgo(
+  hojeIso: string,
+  meses: number = MESES_RETENCAO_PESQUISA_SOCIAL
+): string {
+  const [ano, mes, dia] = hojeIso.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1 - meses, dia))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * A regra pura do GATE de avanço na etapa de pesquisa social: dela só se sai
+ * para a frente com desfecho APROVADO. Sem desfecho, a etapa ainda não
+ * aconteceu; REPROVADO não avança (decisão #13c) — o caminho é reprovar a
+ * candidatura com motivo do catálogo (Lei 9.029) ou registrar a desistência.
+ * Devolve a mensagem do bloqueio, ou null quando o avanço está livre.
+ */
+export function bloqueioDeAvancoPesquisaSocial(
+  etapaTipo: string,
+  resultado: ResultadoPesquisaSocial | null
+): string | null {
+  if (etapaTipo !== "pesquisa_social") return null;
+  if (resultado === "aprovado") return null;
+  if (resultado === "reprovado") {
+    return "Pesquisa social reprovada não avança — reprove a candidatura com motivo do catálogo (ou registre a desistência).";
+  }
+  return "Registre o desfecho da pesquisa social antes de avançar o candidato.";
+}
+
 // ------------------------------------------------------------------ oferta
 
 export const STATUS_OFERTA = ["enviada", "aceita", "recusada"] as const;
@@ -174,9 +237,94 @@ export const esquemaCriacaoVaga = z.object({
   requisicao_id: z.number().int().positive(),
   titulo: z.string().trim().min(1, "Informe o título da vaga").max(200),
   prazo_alvo: esquemaData,
+  /** Modelo de processo a congelar. Omitido: a vaga usa o GERAL (padrão). */
+  modelo_versao_id: z.number().int().positive().optional(),
 });
 
 export type CriacaoVaga = z.infer<typeof esquemaCriacaoVaga>;
+
+export const esquemaCriacaoModelo = z.object({
+  nome: z.string().trim().min(1, "Informe o nome do modelo").max(120),
+  etapa_ids: z
+    .array(z.number().int().positive())
+    .min(1, "Escolha ao menos uma etapa para o modelo"),
+});
+
+export type CriacaoModelo = z.infer<typeof esquemaCriacaoModelo>;
+
+// ------------------------------------------------------------------ desenho do modelo de processo
+
+export interface EtapaCatalogoSelecao {
+  id: number;
+  tipo: string;
+  nome: string;
+}
+
+export type SequenciaValidada =
+  | { ok: true; etapas: EtapaCatalogoSelecao[] }
+  | { ok: false; status: 400 | 409; mensagem: string };
+
+/**
+ * A regra de desenho de um modelo de processo, pura (criar E reformular
+ * passam por aqui): etapas do catálogo vigente, sem repetição, e a OFERTA
+ * como ÚLTIMA etapa — o kanban trata a oferta como o fim do processo (esconde
+ * "Avançar" na última etapa e só oferece "Registrar oferta" numa etapa tipo
+ * oferta). Uma etapa DEPOIS da oferta deixaria a candidatura num beco: sem
+ * avançar, sem ofertar e sem como recriá-la (UNIQUE vaga+candidato). Como o
+ * catálogo tem no máximo uma etapa de oferta ativa, exigir que a última seja
+ * de oferta já garante presença + terminalidade. O serviço traduz o resultado
+ * em erro HTTP; aqui é só a regra, sem dependência de infraestrutura.
+ */
+export function validarSequenciaDeEtapas(
+  catalogo: EtapaCatalogoSelecao[],
+  etapaIds: number[]
+): SequenciaValidada {
+  const porId = new Map(catalogo.map((etapa) => [etapa.id, etapa]));
+  const vistos = new Set<number>();
+  const escolhidas: EtapaCatalogoSelecao[] = [];
+  for (const id of etapaIds) {
+    if (vistos.has(id)) {
+      return {
+        ok: false,
+        status: 400,
+        mensagem: "A mesma etapa aparece duas vezes no modelo.",
+      };
+    }
+    const etapa = porId.get(id);
+    if (!etapa) {
+      return {
+        ok: false,
+        status: 409,
+        mensagem: "Uma das etapas escolhidas não existe ou não está ativa.",
+      };
+    }
+    vistos.add(id);
+    escolhidas.push(etapa);
+  }
+  if (
+    escolhidas.length === 0 ||
+    escolhidas[escolhidas.length - 1].tipo !== "oferta"
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      mensagem:
+        "A etapa de oferta tem que ser a última do modelo — é onde a proposta é registrada e o processo termina; nada pode vir depois dela.",
+    };
+  }
+  return { ok: true, etapas: escolhidas };
+}
+
+/**
+ * Troca do modelo congelado de uma vaga ABERTA e SEM candidatura (decisão G1:
+ * reformular um modelo NÃO migra vaga aberta — quem quiser a versão nova troca
+ * manualmente por aqui, enquanto ninguém entrou no pipeline).
+ */
+export const esquemaTrocaModeloVaga = z.object({
+  modelo_versao_id: z.number().int().positive(),
+});
+
+export type TrocaModeloVaga = z.infer<typeof esquemaTrocaModeloVaga>;
 
 export const esquemaCriacaoCandidato = z.object({
   nome: z.string().trim().min(3, "Informe o nome do candidato").max(200),
@@ -229,6 +377,46 @@ export const esquemaParecer = z.object({
 });
 
 export type CriacaoParecer = z.infer<typeof esquemaParecer>;
+
+/**
+ * Desfecho da pesquisa social + anexo OPCIONAL, no caminho JSON base64 do GED
+ * (molde esquemaEnvioBase64 de api/documentos POST). O anexo vai para
+ * rh.documento (categoria própria e oculta 'pesquisa_social', sensível — A2)
+ * pelo armazenamento do GED; o vínculo fica em rh.pesquisa_social.
+ */
+export const esquemaPesquisaSocial = z.object({
+  resultado: z.enum(RESULTADOS_PESQUISA_SOCIAL),
+  anexo: z
+    .object({
+      nome_arquivo: z
+        .string()
+        .trim()
+        .min(1, "Informe o nome do arquivo")
+        .max(255),
+      mime: z
+        .string()
+        .trim()
+        .max(100)
+        .refine(
+          (valor) => (MIMES_PERMITIDOS as readonly string[]).includes(valor),
+          `Tipo de arquivo não aceito. Aceitos: ${MIMES_PERMITIDOS.map(
+            (mime) => ROTULOS_MIME[mime]
+          ).join(", ")}.`
+        ),
+      conteudo_base64: z
+        .string()
+        .min(1, "Conteúdo do arquivo ausente")
+        // 10 MB em base64 ocupam ~13,4 MB de texto — rejeita antes de decodificar
+        .max(
+          Math.ceil((TAMANHO_MAXIMO_BYTES * 4) / 3) + 4,
+          "Arquivo excede o limite de 10 MB"
+        )
+        .regex(/^[A-Za-z0-9+/]+={0,2}$/, "Conteúdo base64 inválido"),
+    })
+    .optional(),
+});
+
+export type RegistroPesquisaSocial = z.infer<typeof esquemaPesquisaSocial>;
 
 export const esquemaCriacaoOferta = z.object({
   valor: z

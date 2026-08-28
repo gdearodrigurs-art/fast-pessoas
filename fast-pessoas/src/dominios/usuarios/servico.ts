@@ -5,6 +5,7 @@ import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp } from "../../lib/sessao";
 import { PAPEIS, Papel, PayloadSessao } from "../identidade/esquemas";
+import { limparBloqueioTotp } from "../identidade/repositorio";
 import {
   AtualizacaoUsuario,
   CHAVES_INDISPENSAVEIS_ADMIN,
@@ -146,6 +147,9 @@ export async function atualizarUsuario(
     }
 
     await atualizar(cliente, id, campos);
+    // Reativar devolve as 5 tentativas de TOTP inteiras: limpa o bloqueio
+    // temporário e o contador de falhas (regra 0087 — C1 modificada).
+    if (campos.ativo === true) await limparBloqueioTotp(cliente, id);
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
       papel: sessao.papel,

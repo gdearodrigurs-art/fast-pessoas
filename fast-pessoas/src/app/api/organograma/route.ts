@@ -1,12 +1,9 @@
 import { type NextRequest } from "next/server";
 import { lerFiltroEstrutura } from "@/dominios/estrutura/esquemas";
 import { esquemaConsultaOrganograma } from "@/dominios/organograma/esquemas";
-import {
-  exigirSessaoCompleta,
-  montarOrganograma,
-} from "@/dominios/organograma/servico";
+import { montarOrganograma } from "@/dominios/organograma/servico";
 import { responderErro } from "@/lib/http";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessao } from "@/lib/sessao";
 
 /**
  * Organograma — leitura de ESTRUTURA, com escopo por sessão.
@@ -23,10 +20,14 @@ import { lerSessao } from "@/lib/sessao";
  *
  * Nenhum dado sensível trafega aqui: sem salário, sem faixa da vaga, sem saúde.
  * Por isso também não há registro em audit.leitura_sensivel.
+ *
+ * A guarda é exigirSessao (A6): além de sessão + 2FA, ela RECONFERE
+ * usuario.ativo no banco — sem isso, um desativado seguia lendo a hierarquia
+ * inteira pelo JWT de até 8h ("revogou, acabou").
  */
 export async function GET(request: NextRequest) {
   try {
-    const sessao = exigirSessaoCompleta(await lerSessao());
+    const sessao = await exigirSessao();
     const parametros = request.nextUrl.searchParams;
     const analise = esquemaConsultaOrganograma.safeParse({
       cargo_id: parametros.get("cargo_id") || undefined,

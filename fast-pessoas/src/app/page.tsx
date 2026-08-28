@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { Cabecalho } from "./cabecalho";
 import estilos from "./page.module.css";
 
@@ -10,9 +9,14 @@ interface Permissoes extends Record<string, unknown> {
   ferias_programar: boolean;
   afastamento_ver: boolean;
   admissao_ver: boolean;
+  admissao_modelo_administrar: boolean;
   desligamento_ver: boolean;
   beneficios_acessar: boolean;
   avaliacao_acessar: boolean;
+  autoavaliacao_pendente: boolean;
+  avaliacao_par_pendente: boolean;
+  meu_pdi_acessar: boolean;
+  pdi_acessar: boolean;
   recrutamento_acessar: boolean;
   ponto_proprio: boolean;
   ponto_administrar: boolean;
@@ -43,10 +47,7 @@ interface Cartao {
 }
 
 export default async function PaginaInicial() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
 
   // Flags só de NAVEGAÇÃO (quais cards aparecem): cada página e cada API
   // reconferem a permissão por conta própria em toda chamada.
@@ -56,6 +57,7 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'ferias.programar')               AS ferias_programar,
        sistema.tem_permissao($1, 'afastamento.ver')                AS afastamento_ver,
        sistema.tem_permissao($1, 'admissao.ver')                   AS admissao_ver,
+       sistema.tem_permissao($1, 'admissao.modelo.administrar')    AS admissao_modelo_administrar,
        sistema.tem_permissao($1, 'desligamento.ver')               AS desligamento_ver,
        (sistema.tem_permissao($1, 'adesao.solicitar')
         OR sistema.tem_permissao($1, 'adesao.gerir')
@@ -65,6 +67,9 @@ export default async function PaginaInicial() {
         OR sistema.tem_permissao($1, 'avaliacao.configurar')
         OR sistema.tem_permissao($1, 'avaliacao.decidir')
         OR sistema.tem_permissao($1, 'avaliacao.resultado.ver'))   AS avaliacao_acessar,
+       (sistema.tem_permissao($1, 'pdi.ver')
+        OR sistema.tem_permissao($1, 'pdi.gerar')
+        OR sistema.tem_permissao($1, 'pdi.homologar'))             AS pdi_acessar,
        (sistema.tem_permissao($1, 'rs.ver')
         OR sistema.tem_permissao($1, 'rs.requisicao.criar'))       AS recrutamento_acessar,
        -- Espelho do PRÓPRIO ponto é direito do trabalhador (Portaria 671
@@ -100,9 +105,9 @@ export default async function PaginaInicial() {
        sistema.tem_permissao($1, 'painel.executivo.ver')            AS painel_executivo_ver,
        sistema.tem_permissao($1, 'usuario.administrar')            AS usuario_administrar,
        sistema.tem_permissao($1, 'perfil.administrar')             AS perfil_administrar,
-       -- Não é permissão: é FATO de estrutura. Mesmo fragmento de vigência do
-       -- alcance em todo o sistema (rh.relacao_gestor com fim_vigencia NULL e
-       -- início já começado) — ver EQUIPE_VIGENTE em dominios/portais.
+       -- Não é permissão: é FATO de estrutura. Ter liderado DIRETO equivale a
+       -- ter sub-árvore (A2:a) — quem lidera alguém tem equipe; o portal é que
+       -- caminha a sub-árvore inteira (dominios/portais).
        EXISTS (
          SELECT 1
            FROM rh.relacao_gestor rg
@@ -110,7 +115,37 @@ export default async function PaginaInicial() {
           WHERE g.usuario_id = $1
             AND rg.fim_vigencia IS NULL
             AND rg.inicio_vigencia <= (now() AT TIME ZONE 'America/Sao_Paulo')::date
-       )                                                           AS lidera_alguem`,
+       )                                                           AS lidera_alguem,
+       -- Autoavaliação PENDENTE é FATO, não permissão (a chave autoavaliar está
+       -- em todo papel): o card só aparece se há uma a fazer — senão vira ruído
+       -- para quem não tem ciclo de desempenho aberto.
+       EXISTS (
+         SELECT 1
+           FROM rh.avaliacao a
+           JOIN rh.ciclo_avaliacao ca ON ca.id = a.ciclo_id
+           JOIN rh.colaborador c ON c.id = ca.colaborador_id
+          WHERE a.papel = 'auto' AND c.usuario_id = $1
+            AND ca.status IN ('aberto','em_avaliacao')
+            AND a.estado <> 'enviada'
+       )                                                           AS autoavaliacao_pendente,
+       -- Avaliação de par PENDENTE (alguém me pediu para avaliar um colega e
+       -- ainda não enviei). Mesmo raciocínio de FATO do card da autoavaliação.
+       EXISTS (
+         SELECT 1
+           FROM rh.avaliacao a
+           JOIN rh.colaborador p ON p.id = a.avaliador_colaborador_id
+           JOIN rh.ciclo_avaliacao ca ON ca.id = a.ciclo_id
+          WHERE a.papel = 'par' AND p.usuario_id = $1
+            AND ca.status IN ('aberto','em_avaliacao','consolidado')
+            AND a.estado <> 'enviada'
+       )                                                           AS avaliacao_par_pendente,
+       -- Meu PDI: o card aparece se a PESSOA tem um plano homologado (aceitar e
+       -- acompanhar). Escopo pela pessoa — o PDI segue a pessoa, não o vínculo.
+       EXISTS (
+         SELECT 1 FROM rh.pdi p
+          WHERE p.status = 'homologado'
+            AND p.pessoa_id = (SELECT pessoa_id FROM sistema.usuario WHERE id = $1)
+       )                                                           AS meu_pdi_acessar`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -139,6 +174,27 @@ export default async function PaginaInicial() {
           // Sem chave: toda sessão autenticada tem direito ao PRÓPRIO portal,
           // como já tem direito à própria ficha. A tela e a API resolvem o resto.
           mostrar: true,
+        },
+        {
+          href: "/autoavaliacao",
+          titulo: "Minha autoavaliação",
+          descricao:
+            "Sua visão sobre o próprio trabalho, no modelo do ciclo — cega à avaliação do líder. Só aparece quando há uma pendente.",
+          mostrar: pode?.autoavaliacao_pendente ?? false,
+        },
+        {
+          href: "/avaliacao-par",
+          titulo: "Avaliar um colega (360)",
+          descricao:
+            "Um gestor pediu a sua visão sobre um colega. Resposta anônima e agregada. Só aparece quando há uma pendente.",
+          mostrar: pode?.avaliacao_par_pendente ?? false,
+        },
+        {
+          href: "/meu-pdi",
+          titulo: "Meu PDI",
+          descricao:
+            "Seu plano de desenvolvimento: aceite o que foi combinado e registre como cada passo evolui. Só aparece quando há um plano homologado.",
+          mostrar: pode?.meu_pdi_acessar ?? false,
         },
         {
           href: "/demandas",
@@ -237,6 +293,13 @@ export default async function PaginaInicial() {
             "Ciclos de experiência (45/90) e desempenho, líder→liderado.",
           mostrar: pode?.avaliacao_acessar ?? false,
         },
+        {
+          href: "/pdi",
+          titulo: "PDI",
+          descricao:
+            "Plano de desenvolvimento montado por IA a partir da avaliação; o gestor ajusta e o RH homologa.",
+          mostrar: pode?.pdi_acessar ?? false,
+        },
       ],
     },
     {
@@ -253,6 +316,13 @@ export default async function PaginaInicial() {
           titulo: "Admissões",
           descricao: "Processos de admissão com checklist até o primeiro dia.",
           mostrar: pode?.admissao_ver ?? false,
+        },
+        {
+          href: "/admissoes/modelos",
+          titulo: "Modelos de admissão",
+          descricao:
+            "Checklist de admissão por tipo de vínculo (CLT, estágio, aprendiz, PJ).",
+          mostrar: pode?.admissao_modelo_administrar ?? false,
         },
         {
           href: "/desligamentos",

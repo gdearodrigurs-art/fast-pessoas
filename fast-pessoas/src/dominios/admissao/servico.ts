@@ -9,11 +9,15 @@ import {
   AberturaProcesso,
   calcularPrazosExperiencia,
   EstadoProcesso,
+  familiaDoModelo,
   ItemAvulso,
+  ModeloAdmissaoEntrada,
   percentualConclusao,
   ROTULOS_ESTADO_PROCESSO,
+  ROTULOS_FAMILIA_MODELO,
   ROTULOS_STATUS_ITEM,
   StatusItem,
+  TipoVinculoModelo,
 } from "./esquemas";
 import {
   atualizarEstadoProcesso,
@@ -27,20 +31,27 @@ import {
   contarObrigatoriosPendentes,
   criarProcesso,
   ehGestorDoColaborador,
+  encerrarModeloAtivoDaFamilia,
   inserirItemAvulso,
   inserirItens,
+  inserirModeloAtivo,
+  ItemChecklistTemplate,
   ItemProcesso,
   listarCandidatos,
   listarItens,
+  listarModelosAdmissao,
   listarProcessos,
   listarProcessosDosLiderados,
+  ModeloAdmissao,
   ProcessoParaMutacao,
   ProcessoResumo,
+  proximaVersaoDaFamilia,
   valorIndicadorAdmissoesNoPrazo as indicadorNoPrazo,
 } from "./repositorio";
 
 const TABELA_PROCESSO = "rh.processo_admissao";
 const TABELA_ITEM = "rh.item_admissao";
+const TABELA_MODELO = "rh.checklist_admissao_versao";
 
 export interface PermissoesAdmissao {
   gerir: boolean;
@@ -107,6 +118,154 @@ export async function montarPainel(
     candidatos,
     indicador_no_prazo: indicador,
   };
+}
+
+// ------------------------------------------------------------------ administração dos modelos (por vínculo)
+
+async function podeAdministrarModelo(usuarioId: number): Promise<boolean> {
+  const linhas = await consultar<{ autorizado: boolean }>(
+    "SELECT sistema.tem_permissao($1, $2) AS autorizado",
+    [usuarioId, "admissao.modelo.administrar"]
+  );
+  return Boolean(linhas[0]?.autorizado);
+}
+
+export interface ModeloVersaoView {
+  id: number;
+  versao: number;
+  status: string;
+  inicio_vigencia: string;
+  fim_vigencia: string | null;
+  itens: ItemChecklistTemplate[];
+  quantidade_itens: number;
+  obrigatorios: number;
+}
+
+export interface FamiliaModeloView {
+  tipo_vinculo: TipoVinculoModelo | null;
+  familia: TipoVinculoModelo | "geral";
+  rotulo: string;
+  ativa: ModeloVersaoView | null;
+  historico: ModeloVersaoView[];
+}
+
+export interface PainelModelos {
+  pode: boolean;
+  familias: FamiliaModeloView[];
+}
+
+// A ordem fixa das famílias no painel: o geral primeiro (é o fallback), depois
+// os vínculos. Mostra todas — inclusive as que ainda não têm modelo — para o DP
+// poder criar o que falta.
+const FAMILIAS_NA_ORDEM: (TipoVinculoModelo | null)[] = [
+  null,
+  "clt",
+  "estagiario",
+  "aprendiz",
+  "pj",
+];
+
+function paraVersaoView(modelo: ModeloAdmissao): ModeloVersaoView {
+  return {
+    id: modelo.id,
+    versao: modelo.versao,
+    status: modelo.status,
+    inicio_vigencia: modelo.inicio_vigencia,
+    fim_vigencia: modelo.fim_vigencia,
+    itens: modelo.itens,
+    quantidade_itens: modelo.itens.length,
+    obrigatorios: modelo.itens.filter((item) => item.obrigatorio).length,
+  };
+}
+
+/**
+ * Painel de administração dos modelos: uma linha por família (geral + os quatro
+ * vínculos), com a versão ativa (ou nada, se a família ainda não tem modelo) e o
+ * histórico das encerradas.
+ */
+export async function montarPainelModelos(
+  sessao: PayloadSessao
+): Promise<PainelModelos> {
+  const pode = await podeAdministrarModelo(sessao.usuario_id);
+  const todas = await listarModelosAdmissao();
+  const familias = FAMILIAS_NA_ORDEM.map((tipoVinculo) => {
+    const daFamilia = todas.filter(
+      (modelo) => modelo.tipo_vinculo === tipoVinculo
+    );
+    const ativa = daFamilia.find((modelo) => modelo.status === "ativa") ?? null;
+    const historico = daFamilia.filter((modelo) => modelo.status !== "ativa");
+    return {
+      tipo_vinculo: tipoVinculo,
+      familia: familiaDoModelo(tipoVinculo),
+      rotulo: ROTULOS_FAMILIA_MODELO[familiaDoModelo(tipoVinculo)],
+      ativa: ativa ? paraVersaoView(ativa) : null,
+      historico: historico.map(paraVersaoView),
+    };
+  });
+  return { pode, familias };
+}
+
+/**
+ * Salva um modelo: grava uma nova versão ATIVA para a família e encerra a
+ * anterior no MESMO ato (transação). Numeração e encerramento escopados por
+ * família — nunca tocam outra. A corrida de dois salvamentos simultâneos da
+ * mesma família é barrada pelos índices únicos (uma_ativa / família_versão) e
+ * vira 409.
+ */
+export async function salvarModeloAdmissao(
+  sessao: PayloadSessao,
+  dados: ModeloAdmissaoEntrada
+): Promise<{ id: number; versao: number }> {
+  try {
+    return await comTransacao(sessao.usuario_id, async (cliente) => {
+      const versao = await proximaVersaoDaFamilia(cliente, dados.tipo_vinculo);
+      const itens: ItemChecklistTemplate[] = dados.itens.map((item, indice) => ({
+        ordem: indice + 1,
+        descricao: item.descricao,
+        obrigatorio: item.obrigatorio,
+      }));
+      const encerradoId = await encerrarModeloAtivoDaFamilia(
+        cliente,
+        dados.tipo_vinculo
+      );
+      const criado = await inserirModeloAtivo(cliente, {
+        tipoVinculo: dados.tipo_vinculo,
+        versao,
+        itens,
+      });
+      const obrigatorios = itens.filter((item) => item.obrigatorio).length;
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_MODELO,
+        registroId: String(criado.id),
+        diff: {
+          Modelo: {
+            de: null,
+            para: ROTULOS_FAMILIA_MODELO[familiaDoModelo(dados.tipo_vinculo)],
+          },
+          Versão: {
+            de: encerradoId ? `#${encerradoId} encerrada` : "nenhuma (primeira)",
+            para: `v${criado.versao} (ativa)`,
+          },
+          Itens: {
+            de: null,
+            para: `${itens.length} (${obrigatorios} obrigatório(s))`,
+          },
+        },
+      });
+      return criado;
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro)) {
+      throw new ErroHttp(
+        409,
+        "Outra alteração deste modelo acabou de acontecer — recarregue e refaça."
+      );
+    }
+    throw erro;
+  }
 }
 
 export async function abrirProcesso(

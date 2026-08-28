@@ -54,9 +54,14 @@ if (!['dev', 'start'].includes(modo)) {
 const alvo = new URL(process.env.DATABASE_URL.replace(/^postgres(ql)?:/, 'http:'));
 console.log(`servidor ${modo} na porta ${porta} · banco ${alvo.pathname.slice(1)}@${alvo.hostname}`);
 
+// --use-system-ca: sob o Next (Turbopack) o cliente HTTP do runtime não herda o
+// bundle de CAs padrão do Node, e a chamada HTTPS do SDK da Anthropic falha na
+// verificação do certificado (UNABLE_TO_VERIFY_LEAF_SIGNATURE). Usar o repositório
+// de certificados do sistema operacional (que tem as raízes públicas) resolve —
+// vale para dev e para produção, onde a IA também precisa alcançar a API.
 const filho = spawn(
   process.execPath,
-  [path.join(RAIZ, 'node_modules', 'next', 'dist', 'bin', 'next'), modo, '--port', porta],
+  ['--use-system-ca', path.join(RAIZ, 'node_modules', 'next', 'dist', 'bin', 'next'), modo, '--port', porta],
   { cwd: RAIZ, stdio: 'inherit', env: process.env }
 );
 filho.on('exit', (codigo) => process.exit(codigo ?? 0));

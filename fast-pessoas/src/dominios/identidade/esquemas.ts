@@ -62,6 +62,12 @@ export const esquemaSessao = z.object({
   // "pendente" e só alcança o fluxo de configuração. Ausente = false
   // (sessões antigas continuam válidas).
   pendente_2fa: z.boolean().optional(),
+  // Gate do Código de Conduta (decisões B1/B4 de docs/20): havia pendência de
+  // ciência BLOQUEANTE no momento do login. O proxy restringe a sessão ao
+  // conjunto de regularização decidindo só pelo claim (o edge não tem banco);
+  // a regularização (ciência/liberação) reemite a sessão sem ele. Ausente =
+  // false (sessões antigas continuam válidas).
+  ciencia_pendente: z.boolean().optional(),
 });
 
 export type PayloadSessao = z.infer<typeof esquemaSessao>;

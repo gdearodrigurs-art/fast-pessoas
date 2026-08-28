@@ -1,0 +1,101 @@
+/* Bloco de upload da carga inicial — usado nas telas de estrutura e de cargos.
+   Mesma linguagem visual dos cartões das duas telas (page.module.css) e do
+   bloco de importação do ponto (relatório com fundo neutro e rejeições em
+   vermelho, uma por linha). */
+
+.cartao {
+  background: #fff;
+  border: 1px solid #e3e0dc;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.nota {
+  background: #f0eeeb;
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #6b6763;
+  margin-bottom: 14px;
+}
+
+.formulario {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.campoGrupo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 200px;
+}
+
+.campoGrupoCurto {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 1 160px;
+}
+
+.rotulo {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.campo {
+  font-size: 0.95rem;
+  padding: 9px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.botao {
+  padding: 10px 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: #d21217;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.botao:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.erro {
+  font-size: 0.85rem;
+  color: #d21217;
+  margin-top: 10px;
+}
+
+.blocoRelatorio {
+  border: 1px dashed #e3e0dc;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  background: #faf9f7;
+  font-size: 0.9rem;
+}
+
+.rejeicoes {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  color: #8f0e11;
+}
+
+.rejeicoes li {
+  margin-bottom: 2px;
+}

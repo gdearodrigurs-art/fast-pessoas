@@ -143,13 +143,21 @@ export async function listarPeriodos(
   return linhas.map(paraPeriodo);
 }
 
-/** Pares (colaborador, início) já persistidos — base do gerador lazy. */
-export async function listarIniciosExistentes(): Promise<
-  { colaborador_id: number; inicio: string }[]
-> {
+/**
+ * Pares (colaborador, início) já persistidos — base do gerador lazy. Escopado aos
+ * colaboradores que o lazy vai processar: sem o WHERE, isto varria a tabela
+ * inteira num Set a cada abertura de /ferias do admin. Resultado idêntico, só
+ * lendo as linhas que importam.
+ */
+export async function listarIniciosExistentes(
+  colaboradorIds: number[]
+): Promise<{ colaborador_id: number; inicio: string }[]> {
+  if (colaboradorIds.length === 0) return [];
   const linhas = await consultar<{ colaborador_id: string; inicio: string }>(
     `SELECT colaborador_id, inicio::text AS inicio
-       FROM rh.periodo_aquisitivo`
+       FROM rh.periodo_aquisitivo
+      WHERE colaborador_id = ANY($1)`,
+    [colaboradorIds]
   );
   return linhas.map((linha) => ({
     colaborador_id: Number(linha.colaborador_id),
@@ -157,32 +165,62 @@ export async function listarIniciosExistentes(): Promise<
   }));
 }
 
-/** Idempotente sob corrida: o UNIQUE (colaborador_id, inicio) segura duplicata. */
-export async function inserirPeriodoSeFaltar(
+export interface PeriodoInserido {
+  id: number;
+  colaborador_id: number;
+  inicio: string;
+  fim: string;
+  limite_concessivo: string;
+  status: StatusPeriodo;
+}
+
+/**
+ * Materializa em UM só INSERT os períodos que faltam. Idempotente sob corrida: o
+ * UNIQUE (colaborador_id, inicio) + ON CONFLICT DO NOTHING seguram duplicata, e o
+ * RETURNING devolve SÓ as linhas de fato criadas (as em conflito — outra sessão
+ * criou no meio — não voltam), para o serviço auditar cada geração real.
+ * `status` é coluna TEXT (CHECK), então o unnest com text[] basta, sem cast de enum.
+ */
+export async function inserirPeriodosEmLote(
   cliente: PoolClient,
-  dados: {
+  periodos: {
     colaborador_id: number;
     inicio: string;
     fim: string;
     limite_concessivo: string;
     status: StatusPeriodo;
-  }
-): Promise<number | null> {
-  const { rows } = await cliente.query<{ id: string }>(
+  }[]
+): Promise<PeriodoInserido[]> {
+  if (periodos.length === 0) return [];
+  const { rows } = await cliente.query<{
+    id: string;
+    colaborador_id: string;
+    inicio: string;
+    fim: string;
+    limite_concessivo: string;
+    status: StatusPeriodo;
+  }>(
     `INSERT INTO rh.periodo_aquisitivo
        (colaborador_id, inicio, fim, limite_concessivo, status)
-     VALUES ($1, $2, $3, $4, $5)
+     SELECT * FROM unnest(
+       $1::bigint[], $2::date[], $3::date[], $4::date[], $5::text[]
+     )
      ON CONFLICT (colaborador_id, inicio) DO NOTHING
-     RETURNING id`,
+     RETURNING id, colaborador_id, inicio::text AS inicio, fim::text AS fim,
+               limite_concessivo::text AS limite_concessivo, status`,
     [
-      dados.colaborador_id,
-      dados.inicio,
-      dados.fim,
-      dados.limite_concessivo,
-      dados.status,
+      periodos.map((periodo) => periodo.colaborador_id),
+      periodos.map((periodo) => periodo.inicio),
+      periodos.map((periodo) => periodo.fim),
+      periodos.map((periodo) => periodo.limite_concessivo),
+      periodos.map((periodo) => periodo.status),
     ]
   );
-  return rows.length > 0 ? Number(rows[0].id) : null;
+  return rows.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    colaborador_id: Number(linha.colaborador_id),
+  }));
 }
 
 /** Há período aberto com limite concessivo estourado? (gate barato do lazy) */
@@ -215,10 +253,15 @@ export async function marcarPeriodosVencidos(
   { id: number; colaborador_id: number; status_antigo: StatusPeriodo }[]
 > {
   const parametros: unknown[] = [];
-  let filtro = "";
+  let filtroInterno = "";
   if (colaboradorId !== null) {
     parametros.push(colaboradorId);
-    filtro = "AND p.colaborador_id = $1";
+    // O filtro tem que morar DENTRO da subconsulta que trava (FOR UPDATE). Fora
+    // dela, o FOR UPDATE travava TODOS os períodos vencidos da empresa a cada
+    // pessoa que abria /ferias — duas pessoas carregando a página ao mesmo
+    // tempo (ou o lote noturno) se serializavam por uma linha de outro alguém,
+    // podendo até dar deadlock. Escopado, só as linhas do alvo são travadas.
+    filtroInterno = "AND colaborador_id = $1";
   }
   const { rows } = await cliente.query<{
     id: string;
@@ -230,9 +273,9 @@ export async function marcarPeriodosVencidos(
        FROM (SELECT id, status FROM rh.periodo_aquisitivo
               WHERE status IN ('em_aberto','programado_parcial')
                 AND limite_concessivo < ${HOJE_SP}
+                ${filtroInterno}
               FOR UPDATE) antigo
       WHERE p.id = antigo.id
-        ${filtro}
       RETURNING p.id, p.colaborador_id, antigo.status AS status_antigo`,
     parametros
   );
@@ -546,6 +589,25 @@ export async function diasSolicitadosNoPeriodo(
     [periodoId]
   );
   return Number(rows[0].total);
+}
+
+/**
+ * Trava as programações de férias de UM colaborador na transação (advisory
+ * lock). Serializa criações concorrentes do mesmo colaborador para que a
+ * checagem de sobreposição enxergue a programação que a transação irmã ainda
+ * não commitou — sem isto, duas criações em períodos DIFERENTES travavam linhas
+ * diferentes (só o período escolhido) e nenhuma via a pendência da outra.
+ */
+export async function travarProgramacoesDoColaborador(
+  cliente: PoolClient,
+  colaboradorId: number
+): Promise<void> {
+  await cliente.query(
+    `SELECT pg_advisory_xact_lock(
+              hashtext('rh.programacao_ferias'),
+              hashtext($1::text))`,
+    [colaboradorId]
+  );
 }
 
 /** Sobreposição de datas com outra programação ativa do mesmo colaborador. */

@@ -20,6 +20,7 @@ import {
   TipoCalculo,
   TipoTabelaLegal,
 } from "./esquemas";
+import { chaveTravaImportacaoOlac } from "./olac";
 
 // Dinheiro: NUMERIC no banco ↔ CENTAVOS INTEIROS no motor. A conversão mora
 // SÓ aqui, na borda — nada de float de reais circulando pelo serviço.
@@ -449,8 +450,15 @@ export async function listarColaboradoresParaCalculo(
     carga_semanal_minutos: number | null;
   }>(
     `SELECT c.id, c.nome_completo, c.matricula, p.salario::text AS salario,
+            -- Só dependente ELEGÍVEL abate no IRRF (pendência #9, migration 0061):
+            -- deduz_irrf é ato do DP (conferência); o autoatendimento nasce false.
             (SELECT COUNT(*) FROM rh.dependente d
               WHERE d.colaborador_id = c.id
+                AND d.deduz_irrf = true
+                -- ...e conta por NASCIMENTO na data da competência, não por data
+                -- de cadastro: filho que nasce DEPOIS da competência não entra no
+                -- recálculo dela. Elegibilidade (deduz_irrf) e vigência (nascimento)
+                -- são ORTOGONAIS — o #9 trocou uma pela outra; aqui somam. (rev.)
                 AND (d.nascimento IS NULL OR d.nascimento <= $1)) AS dependentes,
             j.carga_semanal_minutos
        FROM rh.colaborador c
@@ -1755,6 +1763,128 @@ export async function listarFolhasDaCompetencia(
   }));
 }
 
+// ------------------------------------------------------------------ conferência: as outras duas visões
+
+export interface TotalPorRubrica {
+  rubrica_id: number;
+  codigo: string;
+  nome: string;
+  natureza: NaturezaRubrica;
+  /** Quantas pessoas têm essa rubrica no recorte. */
+  pessoas: number;
+  total_centavos: number;
+}
+
+/**
+ * A folha SOMADA por rubrica (o corte do contador): quanto de salário, de INSS,
+ * de VT no total da competência. Mesma tabela de itens da visão por pessoa,
+ * agregada; sob o MESMO recorte, para o total bater com a lista filtrada.
+ */
+export async function totaisPorRubrica(
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
+): Promise<TotalPorRubrica[]> {
+  const parametros: unknown[] = [competenciaId];
+  const recorte = existeApropriacao(filtro, parametros, "f");
+  const linhas = await consultar<{
+    rubrica_id: string;
+    codigo: string;
+    nome: string;
+    natureza: NaturezaRubrica;
+    pessoas: number;
+    total: string;
+  }>(
+    `SELECT r.id AS rubrica_id, r.codigo, r.nome, r.natureza,
+            count(DISTINCT i.folha_colaborador_id)::int AS pessoas,
+            sum(i.valor)::text AS total
+       FROM rh_folha.item_calculo i
+       JOIN rh_folha.folha_colaborador f ON f.id = i.folha_colaborador_id
+       JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
+       JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id
+      WHERE f.competencia_id = $1${recorte}
+      GROUP BY r.id, r.codigo, r.nome, r.natureza
+      ORDER BY r.natureza, r.codigo`,
+    parametros
+  );
+  return linhas.map((linha) => ({
+    rubrica_id: Number(linha.rubrica_id),
+    codigo: linha.codigo,
+    nome: linha.nome,
+    natureza: linha.natureza,
+    pessoas: Number(linha.pessoas),
+    total_centavos: paraCentavos(linha.total),
+  }));
+}
+
+export interface TotalPorCentroCusto {
+  empresa_id: number | null;
+  centro_custo_id: number | null;
+  centro_custo_codigo: string | null;
+  centro_custo_nome: string | null;
+  empresa_nome: string | null;
+  pessoas: number;
+  proventos_centavos: number;
+  descontos_centavos: number;
+  liquido_centavos: number;
+}
+
+/**
+ * A folha SOMADA por centro de custo (o rateio contábil): quanto cada CC carrega
+ * de proventos, descontos e líquido. Apropriação CONGELADA na data da competência
+ * (0047) — trocar o CC de alguém hoje não move o custo do mês passado. Linhas sem
+ * apropriação caem num balde de CC nulo (visível, não some). Mesmo recorte.
+ */
+export async function totaisPorCentroCusto(
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
+): Promise<TotalPorCentroCusto[]> {
+  const parametros: unknown[] = [competenciaId];
+  const recorte = condicaoApropriacao(filtro, parametros, "ap");
+  const linhas = await consultar<{
+    empresa_id: string | null;
+    centro_custo_id: string | null;
+    centro_custo_codigo: string | null;
+    centro_custo_nome: string | null;
+    empresa_nome: string | null;
+    pessoas: number;
+    proventos: string;
+    descontos: string;
+    liquido: string;
+  }>(
+    // Agrupa pela IDENTIDADE (empresa_id, centro_custo_id) — eixo 2, nunca por
+    // nome. O mesmo centro pode receber custo de empresas distintas (rateio
+    // intercompany): cada par (empresa, centro) vira uma linha. Código e nome
+    // são rótulos do grupo (max sobre um valor estável por id).
+    `SELECT ap.empresa_id, ap.centro_custo_id,
+            max(ap.centro_custo_codigo) AS centro_custo_codigo,
+            max(ap.centro_custo_nome)   AS centro_custo_nome,
+            max(ap.empresa_nome)        AS empresa_nome,
+            count(*)::int AS pessoas,
+            sum(f.total_proventos)::text AS proventos,
+            sum(f.total_descontos)::text AS descontos,
+            sum(f.liquido)::text AS liquido
+       FROM rh_folha.folha_colaborador f
+       LEFT JOIN rh_folha.apropriacao_competencia ap
+              ON ap.folha_colaborador_id = f.id
+      WHERE f.competencia_id = $1${recorte}
+      GROUP BY ap.empresa_id, ap.centro_custo_id
+      ORDER BY max(ap.empresa_nome) NULLS LAST, max(ap.centro_custo_codigo) NULLS LAST`,
+    parametros
+  );
+  return linhas.map((linha) => ({
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
+    centro_custo_id:
+      linha.centro_custo_id === null ? null : Number(linha.centro_custo_id),
+    centro_custo_codigo: linha.centro_custo_codigo,
+    centro_custo_nome: linha.centro_custo_nome,
+    empresa_nome: linha.empresa_nome,
+    pessoas: Number(linha.pessoas),
+    proventos_centavos: paraCentavos(linha.proventos),
+    descontos_centavos: paraCentavos(linha.descontos),
+    liquido_centavos: paraCentavos(linha.liquido),
+  }));
+}
+
 /**
  * O que oferecer nos três seletores e quantas linhas a competência tem no
  * total. Sai SEMPRE da competência inteira, sem recorte: se as opções viessem
@@ -1913,12 +2043,304 @@ export async function listarCasosTesteAtivos(): Promise<CasoTeste[]> {
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
 }
 
+// ------------------------------------------------------------------ prévia de férias (frente 1.6)
+
+/**
+ * A programação de férias como o MOTOR DE FÉRIAS a lê: dias de gozo, abono e a
+ * data de início (que resolve as vigências da prévia). Leitura NOVA aqui — e
+ * não em ferias/repositorio.ts — porque a frente da folha é dona só dos seus
+ * arquivos nesta onda; os dados são os mesmos de rh.programacao_ferias.
+ */
+export interface ProgramacaoParaPrevia {
+  id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  periodo_aquisitivo_id: number;
+  periodo_inicio: string;
+  periodo_fim: string;
+  inicio_gozo: string;
+  fim_gozo: string;
+  dias_gozo: number;
+  dias_abono: number;
+  status: string;
+}
+
+export async function buscarProgramacaoParaPrevia(
+  id: number
+): Promise<ProgramacaoParaPrevia | null> {
+  const linhas = await consultar<{
+    id: string;
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    periodo_aquisitivo_id: string;
+    periodo_inicio: string;
+    periodo_fim: string;
+    inicio_gozo: string;
+    fim_gozo: string;
+    dias_gozo: number;
+    dias_abono: number;
+    status: string;
+  }>(
+    `SELECT pr.id, pr.colaborador_id, c.nome_completo AS colaborador_nome,
+            c.matricula, pr.periodo_aquisitivo_id,
+            p.inicio::text AS periodo_inicio, p.fim::text AS periodo_fim,
+            pr.inicio::text AS inicio_gozo,
+            (pr.inicio + pr.dias - 1)::text AS fim_gozo,
+            pr.dias AS dias_gozo, pr.abono_dias AS dias_abono, pr.status
+       FROM rh.programacao_ferias pr
+       JOIN rh.colaborador c ON c.id = pr.colaborador_id
+       JOIN rh.periodo_aquisitivo p ON p.id = pr.periodo_aquisitivo_id
+      WHERE pr.id = $1`,
+    [id]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    ...linha,
+    id: Number(linha.id),
+    colaborador_id: Number(linha.colaborador_id),
+    periodo_aquisitivo_id: Number(linha.periodo_aquisitivo_id),
+    dias_gozo: Number(linha.dias_gozo),
+    dias_abono: Number(linha.dias_abono),
+  };
+}
+
+export interface ColaboradorParaFerias {
+  salario_centavos: number;
+  dependentes_irrf: number;
+}
+
+/**
+ * Salário e dependentes COMO ESTAVAM na data de referência da prévia — a mesma
+ * mecânica de `listarColaboradoresParaCalculo` (LATERAL com LIMIT 1 pela
+ * vigência mais recente; dependente conta por NASCIMENTO e só o ELEGÍVEL,
+ * deduz_irrf = true), para UMA pessoa. Null quando não há posição com salário
+ * vigente na data — a prévia não tem o que pagar e o serviço explica isso em
+ * vez de chutar o salário de hoje.
+ */
+export async function buscarColaboradorParaFerias(
+  colaboradorId: number,
+  dataRef: string
+): Promise<ColaboradorParaFerias | null> {
+  const linhas = await consultar<{ salario: string; dependentes: string }>(
+    `SELECT p.salario::text AS salario,
+            -- Só dependente ELEGÍVEL abate no IRRF (pendência #9, migration
+            -- 0061) — a MESMA regra do motor mensal em
+            -- listarColaboradoresParaCalculo: a prévia não pode deduzir o que
+            -- a folha vai recusar. Elegibilidade (deduz_irrf) e vigência
+            -- (nascimento) são ORTOGONAIS; aqui somam.
+            (SELECT COUNT(*) FROM rh.dependente d
+              WHERE d.colaborador_id = c.id
+                AND d.deduz_irrf = true
+                AND (d.nascimento IS NULL OR d.nascimento <= $2)) AS dependentes
+       FROM rh.colaborador c
+       JOIN LATERAL (
+              SELECT p.salario
+                FROM rh.posicao_colaborador p
+               WHERE p.colaborador_id = c.id AND ${vigenteEm("p", "$2")}
+               ORDER BY p.inicio_vigencia DESC, p.id DESC
+               LIMIT 1) p ON TRUE
+      WHERE c.id = $1`,
+    [colaboradorId, dataRef]
+  );
+  if (linhas.length === 0) return null;
+  return {
+    salario_centavos: paraCentavos(linhas[0].salario),
+    dependentes_irrf: Number(linhas[0].dependentes),
+  };
+}
+
+// ------------------------------------------------------------------ prévia de 13º (onda 2)
+
+export interface ColaboradorParaDecimo {
+  colaborador_id: number;
+  nome_completo: string;
+  matricula: string;
+  data_admissao: string;
+  data_desligamento: string | null;
+  /** Null quando não há posição com salário vigente na data de referência. */
+  salario_centavos: number | null;
+  dependentes_irrf: number;
+}
+
+/**
+ * O colaborador como o MOTOR DE 13º (calculo-13.ts) o lê: admissão (que dá os
+ * avos), desligamento (que o serviço usa para RECUSAR — 13º de quem desliga é
+ * do motor de rescisão) e salário + dependentes COMO ESTAVAM na data da
+ * PARCELA — a mesma mecânica de `buscarColaboradorParaFerias` (LATERAL com
+ * LIMIT 1 pela vigência mais recente; dependente conta por NASCIMENTO e só o
+ * ELEGÍVEL, deduz_irrf = true, pendência #9 / migration 0061).
+ *
+ * O LATERAL é LEFT de propósito: colaborador sem posição vigente na data volta
+ * com salário NULL — o serviço distingue "não existe" (404) de "existe mas não
+ * tem remuneração de referência" (409 explicável), em vez de chutar o salário
+ * de hoje.
+ */
+export async function buscarColaboradorParaDecimo(
+  colaboradorId: number,
+  dataRef: string
+): Promise<ColaboradorParaDecimo | null> {
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    matricula: string;
+    data_admissao: string;
+    data_desligamento: string | null;
+    salario: string | null;
+    dependentes: string;
+  }>(
+    `SELECT c.id, c.nome_completo, c.matricula,
+            c.data_admissao::text AS data_admissao,
+            c.data_desligamento::text AS data_desligamento,
+            p.salario::text AS salario,
+            (SELECT COUNT(*) FROM rh.dependente d
+              WHERE d.colaborador_id = c.id
+                AND d.deduz_irrf = true
+                AND (d.nascimento IS NULL OR d.nascimento <= $2)) AS dependentes
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+              SELECT p.salario
+                FROM rh.posicao_colaborador p
+               WHERE p.colaborador_id = c.id AND ${vigenteEm("p", "$2")}
+               ORDER BY p.inicio_vigencia DESC, p.id DESC
+               LIMIT 1) p ON TRUE
+      WHERE c.id = $1`,
+    [colaboradorId, dataRef]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    colaborador_id: Number(linha.id),
+    nome_completo: linha.nome_completo,
+    matricula: linha.matricula,
+    data_admissao: linha.data_admissao,
+    data_desligamento: linha.data_desligamento,
+    salario_centavos: linha.salario === null ? null : paraCentavos(linha.salario),
+    dependentes_irrf: Number(linha.dependentes),
+  };
+}
+
+// ------------------------------------------------------------------ prévia de rescisão (onda 3)
+
+export interface DesligamentoParaRescisao {
+  processo_id: number;
+  colaborador_id: number;
+  colaborador_nome: string;
+  matricula: string;
+  data_admissao: string;
+  /** Valor real de rh.tipo_desligamento_versao.tipo, congelado no processo. */
+  tipo: string;
+  tipo_nome: string;
+  iniciativa: string;
+  modalidade_aviso: string;
+  estado: string;
+  data_comunicacao: string;
+  data_projetada_termino: string;
+  data_termino_efetiva: string | null;
+}
+
+/**
+ * O processo de desligamento como o MOTOR DE RESCISÃO (calculo-rescisao.ts) o
+ * lê: tipo congelado na abertura (é ele que decide QUAIS verbas entram),
+ * iniciativa e modalidade do aviso, as três datas e a admissão do colaborador.
+ * LEITURA APENAS do domínio desligamento — nenhum campo restrito (motivo,
+ * entrevista) sai por aqui; quem lê motivo é o próprio módulo, com a chave dele.
+ */
+export async function buscarDesligamentoParaRescisao(
+  processoId: number
+): Promise<DesligamentoParaRescisao | null> {
+  const linhas = await consultar<{
+    processo_id: string;
+    colaborador_id: string;
+    colaborador_nome: string;
+    matricula: string;
+    data_admissao: string;
+    tipo: string;
+    tipo_nome: string;
+    iniciativa: string;
+    modalidade_aviso: string;
+    estado: string;
+    data_comunicacao: string;
+    data_projetada_termino: string;
+    data_termino_efetiva: string | null;
+  }>(
+    `SELECT p.id AS processo_id, p.colaborador_id,
+            c.nome_completo AS colaborador_nome, c.matricula,
+            c.data_admissao::text AS data_admissao,
+            t.tipo, t.nome AS tipo_nome,
+            p.iniciativa, p.modalidade_aviso, p.estado,
+            p.data_comunicacao::text AS data_comunicacao,
+            p.data_projetada_termino::text AS data_projetada_termino,
+            p.data_termino_efetiva::text AS data_termino_efetiva
+       FROM rh.processo_desligamento p
+       JOIN rh.colaborador c ON c.id = p.colaborador_id
+       JOIN rh.tipo_desligamento_versao t ON t.id = p.tipo_desligamento_versao_id
+      WHERE p.id = $1`,
+    [processoId]
+  );
+  if (linhas.length === 0) return null;
+  const linha = linhas[0];
+  return {
+    ...linha,
+    processo_id: Number(linha.processo_id),
+    colaborador_id: Number(linha.colaborador_id),
+  };
+}
+
+export interface PeriodoAquisitivoParaRescisao {
+  id: number;
+  inicio: string;
+  fim: string;
+  /** Dias ainda não gozados (NUMERIC(4,1) — meio dia existe). */
+  saldo_dias: number;
+  status: string;
+  limite_concessivo: string;
+}
+
+/**
+ * TODOS os períodos aquisitivos do colaborador, do mais antigo ao mais novo —
+ * quem separa VENCIDOS (fim <= término, saldo > 0 → indenizados na rescisão)
+ * do período EM CURSO (dá os avos das proporcionais) é o serviço, que conhece
+ * a data do término. saldo_dias já desconta o gozado/abonado (o módulo de
+ * férias mantém a linha); status não filtra aqui de propósito: até um período
+ * 'vencido' (passou do concessivo) continua sendo dívida na rescisão.
+ */
+export async function listarPeriodosAquisitivosParaRescisao(
+  colaboradorId: number
+): Promise<PeriodoAquisitivoParaRescisao[]> {
+  const linhas = await consultar<{
+    id: string;
+    inicio: string;
+    fim: string;
+    saldo_dias: string;
+    status: string;
+    limite_concessivo: string;
+  }>(
+    `SELECT p.id, p.inicio::text AS inicio, p.fim::text AS fim,
+            p.saldo_dias::text AS saldo_dias, p.status,
+            p.limite_concessivo::text AS limite_concessivo
+       FROM rh.periodo_aquisitivo p
+      WHERE p.colaborador_id = $1
+      ORDER BY p.inicio, p.id`,
+    [colaboradorId]
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    saldo_dias: Number(linha.saldo_dias),
+  }));
+}
+
 // ------------------------------------------------------------------ indicador
 
 /**
- * % de competências mensais dos últimos 12 meses fechadas até o dia 5 do mês
- * seguinte (America/Sao_Paulo). Denominador: competências cujo prazo já venceu
- * OU que já fecharam; null se não houver nenhuma.
+ * % de competências mensais dos últimos 12 meses fechadas até o 5º DIA ÚTIL do
+ * mês seguinte (art. 459 §1º da CLT; sábado conta, domingo e feriado nacional
+ * não — regra em rh.enesimo_dia_util_folha, que lê o calendário administrável
+ * rh.feriado). Denominador: competências cujo prazo já venceu OU que já
+ * fecharam; null se não houver nenhuma.
  */
 export async function indicadorFolhaNoPrazo(): Promise<{
   no_prazo: number;
@@ -1927,7 +2349,8 @@ export async function indicadorFolhaNoPrazo(): Promise<{
   const linhas = await consultar<{ no_prazo: string; total: string }>(
     `WITH base AS (
        SELECT c.estado,
-              (make_date(c.ano, c.mes, 1) + INTERVAL '1 month' + INTERVAL '4 days')::date AS prazo,
+              rh.enesimo_dia_util_folha(
+                (make_date(c.ano, c.mes, 1) + INTERVAL '1 month')::date, 5) AS prazo,
               (c.fechada_em AT TIME ZONE 'America/Sao_Paulo')::date AS fechada_dia,
               (now() AT TIME ZONE 'America/Sao_Paulo')::date AS hoje
          FROM rh_folha.competencia_folha c
@@ -1947,4 +2370,544 @@ export async function indicadorFolhaNoPrazo(): Promise<{
   const total = Number(linhas[0]?.total ?? 0);
   if (total === 0) return null;
   return { no_prazo: Number(linhas[0].no_prazo), total };
+}
+
+// ------------------------------------------------------------------ suspensão disciplinar (0100, D2:a)
+
+export interface SuspensaoParaCalculo {
+  medida_id: number;
+  colaborador_id: number;
+  inicio: string;
+  fim: string | null;
+}
+
+/**
+ * As suspensões disciplinares com efeito na competência: medidas de tipo COM
+ * PERÍODO (rh.tipo_medida_disciplinar.com_periodo — atributo do catálogo,
+ * nunca lista de chaves chumbada) cuja janela intersecta a competência
+ * ESTENDIDA 6 dias para trás — uma suspensão que terminou no fim do mês
+ * anterior ainda derruba o DSR do primeiro domingo deste mês (suspensao.ts).
+ *
+ * EIXO 8 (rastro): esta é a primeira leitura de rh.medida_disciplinar fora do
+ * módulo disciplinar — a 0080 a deixou explicitamente para esta integração.
+ * É leitura AGREGADA PELO MOTOR, dentro do cálculo (não há tela listando
+ * medidas aqui): o rastro do dado na folha é a memória do item 1203 (que
+ * carrega o id da medida, não a descrição) e o diff do cálculo com a CONTAGEM;
+ * quem abre o painel da competência já deixa audit.leitura_sensivel da folha.
+ * O conteúdo disciplinar (descrição, impacto) continua atrás de
+ * rh.disciplinar.ver — a folha não o carrega.
+ */
+export async function listarSuspensoesParaCalculo(
+  cliente: PoolClient,
+  inicioBusca: string,
+  dataRef: string
+): Promise<SuspensaoParaCalculo[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    colaborador_id: string;
+    inicio: string;
+    fim: string | null;
+  }>(
+    `SELECT m.id, m.colaborador_id, m.inicio::text AS inicio, m.fim::text AS fim
+       FROM rh.medida_disciplinar m
+       JOIN rh.tipo_medida_disciplinar t ON t.chave = m.tipo_chave
+      WHERE t.com_periodo
+        AND m.inicio IS NOT NULL
+        AND m.inicio <= $2
+        AND (m.fim IS NULL OR m.fim >= $1)
+      ORDER BY m.colaborador_id, m.inicio, m.id`,
+    [inicioBusca, dataRef]
+  );
+  return rows.map((linha) => ({
+    medida_id: Number(linha.id),
+    colaborador_id: Number(linha.colaborador_id),
+    inicio: linha.inicio,
+    fim: linha.fim,
+  }));
+}
+
+// ------------------------------------------------------------------ OLAC (migração 0099)
+
+/**
+ * As linhas da EXPORTAÇÃO: uma por colaborador × rubrica, dos itens calculados
+ * da competência. A empresa vem da apropriação DA COMPETÊNCIA (0047) — a mesma
+ * régua das três visões da conferência —, e a conta contábil do de-para
+ * VIGENTE NA DATA DE REFERÊNCIA da competência (E3:a), nunca do de-para de
+ * hoje: reexportar a mesma competência depois de mudar o de-para atual não
+ * pode reescrever o arquivo de um mês antigo.
+ */
+export interface LinhaExportacaoOlac {
+  empresa_cnpj: string | null;
+  matricula: string;
+  colaborador_nome: string;
+  codigo_rubrica: string;
+  rubrica_nome: string;
+  natureza: NaturezaRubrica;
+  conta_contabil: string | null;
+  valor_centavos: number;
+}
+
+export async function listarLinhasParaExportarOlac(
+  competenciaId: number,
+  dataRef: string
+): Promise<LinhaExportacaoOlac[]> {
+  const linhas = await consultar<{
+    empresa_cnpj: string | null;
+    matricula: string;
+    colaborador_nome: string;
+    codigo: string;
+    rubrica_nome: string;
+    natureza: NaturezaRubrica;
+    conta_contabil: string | null;
+    valor: string;
+  }>(
+    // Agrega por colaborador × rubrica: o motor grava um item por rubrica, mas
+    // "uma linha por colaborador×rubrica" é promessa do LAYOUT, não do motor —
+    // a soma segura a promessa mesmo se o motor um dia gravar dois itens.
+    `SELECT ap.empresa_cnpj, c.matricula, c.nome_completo AS colaborador_nome,
+            r.codigo, r.nome AS rubrica_nome, r.natureza,
+            cc.conta_contabil, sum(i.valor)::text AS valor
+       FROM rh_folha.item_calculo i
+       JOIN rh_folha.folha_colaborador f ON f.id = i.folha_colaborador_id
+       JOIN rh.colaborador c ON c.id = f.colaborador_id
+       JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
+       JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id
+       LEFT JOIN rh_folha.apropriacao_competencia ap
+              ON ap.folha_colaborador_id = f.id
+       LEFT JOIN LATERAL (
+              SELECT v.conta_contabil
+                FROM rh_folha.conta_contabil_rubrica v
+               WHERE v.rubrica_id = r.id AND ${vigenteEm("v", "$2")}
+               ORDER BY v.inicio_vigencia DESC, v.id DESC
+               LIMIT 1) cc ON TRUE
+      WHERE f.competencia_id = $1
+      GROUP BY ap.empresa_cnpj, c.matricula, c.nome_completo,
+               r.codigo, r.nome, r.natureza, cc.conta_contabil
+      ORDER BY c.matricula, r.codigo`,
+    [competenciaId, dataRef]
+  );
+  return linhas.map((linha) => ({
+    empresa_cnpj: linha.empresa_cnpj,
+    matricula: linha.matricula,
+    colaborador_nome: linha.colaborador_nome,
+    codigo_rubrica: linha.codigo,
+    rubrica_nome: linha.rubrica_nome,
+    natureza: linha.natureza,
+    conta_contabil: linha.conta_contabil,
+    valor_centavos: paraCentavos(linha.valor),
+  }));
+}
+
+/** matrícula → colaborador_id, para o casamento da volta (matrícula é UNIQUE). */
+export async function mapaColaboradorPorMatricula(
+  cliente: PoolClient
+): Promise<Map<string, number>> {
+  const { rows } = await cliente.query<{ id: string; matricula: string }>(
+    `SELECT id, matricula FROM rh.colaborador`
+  );
+  return new Map(rows.map((linha) => [linha.matricula, Number(linha.id)]));
+}
+
+/** empresa: cnpj → id, para casar a coluna empresa_cnpj do arquivo. */
+export async function mapaEmpresaPorCnpj(
+  cliente: PoolClient
+): Promise<Map<string, number>> {
+  const { rows } = await cliente.query<{ id: string; cnpj: string }>(
+    `SELECT id, cnpj FROM rh.empresa_grupo WHERE cnpj IS NOT NULL`
+  );
+  return new Map(rows.map((linha) => [linha.cnpj, Number(linha.id)]));
+}
+
+/**
+ * SERIALIZA a importação da competência: advisory lock transacional (solta no
+ * COMMIT/ROLLBACK) sobre a chave canônica de olac.ts. Sem ela, dois POSTs
+ * simultâneos duplicam o espelho — o DELETE de substituição roda em READ
+ * COMMITTED e não enxerga os INSERTs da transação concorrente. Chamar como
+ * PRIMEIRO passo da transação do importarOlac: quem chega segundo espera e,
+ * ao acordar, já enxerga (e substitui) o lote de quem chegou primeiro.
+ */
+export async function travarImportacaoOlac(
+  cliente: PoolClient,
+  competenciaAno: number,
+  competenciaMes: number
+): Promise<void> {
+  await cliente.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+    chaveTravaImportacaoOlac(competenciaAno, competenciaMes),
+  ]);
+}
+
+export async function inserirLoteOlac(
+  cliente: PoolClient,
+  dados: {
+    direcao: "exportacao" | "importacao";
+    arquivo: string;
+    competencia_ano: number;
+    competencia_mes: number;
+    empresa_id: number | null;
+    linhas_lidas: number;
+    linhas_aceitas: number;
+    linhas_rejeitadas: number;
+    relatorio: Record<string, unknown>;
+    gerado_por: number;
+  }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh_folha.lote_olac
+       (direcao, arquivo, competencia_ano, competencia_mes, empresa_id,
+        linhas_lidas, linhas_aceitas, linhas_rejeitadas, relatorio, gerado_por)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id`,
+    [
+      dados.direcao,
+      dados.arquivo,
+      dados.competencia_ano,
+      dados.competencia_mes,
+      dados.empresa_id,
+      dados.linhas_lidas,
+      dados.linhas_aceitas,
+      dados.linhas_rejeitadas,
+      JSON.stringify(dados.relatorio),
+      dados.gerado_por,
+    ]
+  );
+  return Number(rows[0].id);
+}
+
+export async function inserirEspelhoOlac(
+  cliente: PoolClient,
+  dados: {
+    lote_id: number;
+    competencia_ano: number;
+    competencia_mes: number;
+    empresa_id: number | null;
+    empresa_cnpj: string | null;
+    matricula: string;
+    colaborador_id: number | null;
+    codigo_rubrica_externo: string;
+    codigo_rubrica_interno: string | null;
+    conta_contabil: string | null;
+    valor_centavos: number;
+    situacao: string;
+  }
+): Promise<void> {
+  await cliente.query(
+    `INSERT INTO rh_folha.espelho_olac
+       (lote_id, competencia_ano, competencia_mes, empresa_id, empresa_cnpj,
+        matricula, colaborador_id, codigo_rubrica_externo,
+        codigo_rubrica_interno, conta_contabil, valor_centavos, situacao)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      dados.lote_id,
+      dados.competencia_ano,
+      dados.competencia_mes,
+      dados.empresa_id,
+      dados.empresa_cnpj,
+      dados.matricula,
+      dados.colaborador_id,
+      dados.codigo_rubrica_externo,
+      dados.codigo_rubrica_interno,
+      dados.conta_contabil,
+      dados.valor_centavos,
+      dados.situacao,
+    ]
+  );
+}
+
+/**
+ * SUBSTITUIÇÃO na reimportação (E1:a, padrão dos lotes por origem): apaga o
+ * espelho anterior da MESMA competência+empresa vindo de IMPORTAÇÃO, antes de
+ * gravar o novo. `empresa_id` null casa com null (IS NOT DISTINCT FROM) — o
+ * balde sem apropriação também é substituível. Lotes de exportação nunca
+ * gravam espelho, então a direção do filtro é cinto e suspensório.
+ */
+export async function apagarEspelhoOlacAnterior(
+  cliente: PoolClient,
+  competenciaAno: number,
+  competenciaMes: number,
+  empresaId: number | null
+): Promise<number> {
+  const { rowCount } = await cliente.query(
+    `DELETE FROM rh_folha.espelho_olac e
+      USING rh_folha.lote_olac l
+      WHERE l.id = e.lote_id
+        AND l.direcao = 'importacao'
+        AND e.competencia_ano = $1
+        AND e.competencia_mes = $2
+        AND e.empresa_id IS NOT DISTINCT FROM $3`,
+    [competenciaAno, competenciaMes, empresaId]
+  );
+  return rowCount ?? 0;
+}
+
+export interface TotalEspelhoOlac {
+  situacao: string;
+  empresa_id: number | null;
+  empresa_nome: string | null;
+  linhas: number;
+  valor_centavos: number;
+}
+
+/** O quadro do espelho: totais por situação × empresa (a tela soma o resto). */
+export async function totaisEspelhoOlac(
+  ano: number,
+  mes: number
+): Promise<TotalEspelhoOlac[]> {
+  const linhas = await consultar<{
+    situacao: string;
+    empresa_id: string | null;
+    empresa_nome: string | null;
+    linhas: string;
+    valor: string;
+  }>(
+    `SELECT e.situacao, e.empresa_id, max(v.nome_fantasia) AS empresa_nome,
+            count(*)::text AS linhas, sum(e.valor_centavos)::text AS valor
+       FROM rh_folha.espelho_olac e
+       LEFT JOIN LATERAL (
+              SELECT ev.nome_fantasia
+                FROM rh.empresa_grupo_versao ev
+               WHERE ev.empresa_id = e.empresa_id AND ev.status = 'ativa'
+               ORDER BY ev.inicio_vigencia DESC, ev.id DESC
+               LIMIT 1) v ON TRUE
+      WHERE e.competencia_ano = $1 AND e.competencia_mes = $2
+      GROUP BY e.situacao, e.empresa_id
+      ORDER BY e.empresa_id NULLS LAST, e.situacao`,
+    [ano, mes]
+  );
+  return linhas.map((linha) => ({
+    situacao: linha.situacao,
+    empresa_id: linha.empresa_id === null ? null : Number(linha.empresa_id),
+    empresa_nome: linha.empresa_nome,
+    linhas: Number(linha.linhas),
+    valor_centavos: Number(linha.valor),
+  }));
+}
+
+export interface EspelhoNaoCasado {
+  id: number;
+  empresa_cnpj: string | null;
+  matricula: string;
+  codigo_rubrica_externo: string;
+  valor_centavos: number;
+  situacao: string;
+}
+
+/** O NÃO-casado em destaque: o que a conciliação não conseguiu resolver. */
+export async function listarEspelhoNaoCasado(
+  ano: number,
+  mes: number
+): Promise<EspelhoNaoCasado[]> {
+  const linhas = await consultar<{
+    id: string;
+    empresa_cnpj: string | null;
+    matricula: string;
+    codigo_rubrica_externo: string;
+    valor_centavos: string;
+    situacao: string;
+  }>(
+    `SELECT id, empresa_cnpj, matricula, codigo_rubrica_externo,
+            valor_centavos::text AS valor_centavos, situacao
+       FROM rh_folha.espelho_olac
+      WHERE competencia_ano = $1 AND competencia_mes = $2
+        AND situacao <> 'casada'
+      ORDER BY situacao, matricula, codigo_rubrica_externo`,
+    [ano, mes]
+  );
+  return linhas.map((linha) => ({
+    id: Number(linha.id),
+    empresa_cnpj: linha.empresa_cnpj,
+    matricula: linha.matricula,
+    codigo_rubrica_externo: linha.codigo_rubrica_externo,
+    valor_centavos: Number(linha.valor_centavos),
+    situacao: linha.situacao,
+  }));
+}
+
+export interface LoteOlacResumo {
+  id: number;
+  direcao: string;
+  arquivo: string;
+  linhas_lidas: number;
+  linhas_aceitas: number;
+  linhas_rejeitadas: number;
+  gerado_em: string;
+}
+
+/** Último lote de cada direção — o "quando foi a última troca" da tela. */
+export async function ultimosLotesOlac(
+  ano: number,
+  mes: number
+): Promise<LoteOlacResumo[]> {
+  const linhas = await consultar<{
+    id: string;
+    direcao: string;
+    arquivo: string;
+    linhas_lidas: number;
+    linhas_aceitas: number;
+    linhas_rejeitadas: number;
+    gerado_em: string;
+  }>(
+    `SELECT DISTINCT ON (direcao)
+            id, direcao, arquivo, linhas_lidas, linhas_aceitas,
+            linhas_rejeitadas, gerado_em::text AS gerado_em
+       FROM rh_folha.lote_olac
+      WHERE competencia_ano = $1 AND competencia_mes = $2
+      ORDER BY direcao, gerado_em DESC, id DESC`,
+    [ano, mes]
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    linhas_lidas: Number(linha.linhas_lidas),
+    linhas_aceitas: Number(linha.linhas_aceitas),
+    linhas_rejeitadas: Number(linha.linhas_rejeitadas),
+  }));
+}
+
+// ------------------------------------------------------------------ de-para conta contábil (E3:a)
+
+export interface ContaContabilRubrica {
+  id: number;
+  rubrica_id: number;
+  codigo: string;
+  rubrica_nome: string;
+  conta_contabil: string;
+  status: string;
+  inicio_vigencia: string;
+  fim_vigencia: string | null;
+}
+
+export async function listarCatalogoContaContabil(): Promise<
+  ContaContabilRubrica[]
+> {
+  const linhas = await consultar<{
+    id: string;
+    rubrica_id: string;
+    codigo: string;
+    rubrica_nome: string;
+    conta_contabil: string;
+    status: string;
+    inicio_vigencia: string;
+    fim_vigencia: string | null;
+  }>(
+    `SELECT v.id, v.rubrica_id, r.codigo, r.nome AS rubrica_nome,
+            v.conta_contabil, v.status,
+            v.inicio_vigencia::text AS inicio_vigencia,
+            v.fim_vigencia::text AS fim_vigencia
+       FROM rh_folha.conta_contabil_rubrica v
+       JOIN rh_folha.rubrica r ON r.id = v.rubrica_id
+      ORDER BY r.codigo, v.inicio_vigencia DESC, v.id DESC`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    rubrica_id: Number(linha.rubrica_id),
+  }));
+}
+
+/**
+ * TODAS as vigências do de-para da rubrica — encerradas incluídas — travadas
+ * (FOR UPDATE) para a criação validar interseção contra o histórico inteiro:
+ * retro-datada não pode sobrepor janela que já valeu. Ordem cronológica, para
+ * a mensagem de conflito apontar a primeira janela alcançada.
+ */
+export async function listarVigenciasContaContabilParaAtualizar(
+  cliente: PoolClient,
+  rubricaId: number
+): Promise<
+  {
+    id: number;
+    conta_contabil: string;
+    status: string;
+    inicio_vigencia: string;
+    fim_vigencia: string | null;
+  }[]
+> {
+  const { rows } = await cliente.query<{
+    id: string;
+    conta_contabil: string;
+    status: string;
+    inicio_vigencia: string;
+    fim_vigencia: string | null;
+  }>(
+    `SELECT id, conta_contabil, status,
+            inicio_vigencia::text AS inicio_vigencia,
+            fim_vigencia::text AS fim_vigencia
+       FROM rh_folha.conta_contabil_rubrica
+      WHERE rubrica_id = $1
+      ORDER BY inicio_vigencia, id
+      FOR UPDATE`,
+    [rubricaId]
+  );
+  return rows.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+export async function buscarContaContabilParaAtualizar(
+  cliente: PoolClient,
+  id: number
+): Promise<{
+  id: number;
+  rubrica_id: number;
+  codigo: string;
+  rubrica_nome: string;
+  conta_contabil: string;
+  status: string;
+  inicio_vigencia: string;
+} | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    rubrica_id: string;
+    codigo: string;
+    rubrica_nome: string;
+    conta_contabil: string;
+    status: string;
+    inicio_vigencia: string;
+  }>(
+    `SELECT v.id, v.rubrica_id, r.codigo, r.nome AS rubrica_nome,
+            v.conta_contabil, v.status,
+            v.inicio_vigencia::text AS inicio_vigencia
+       FROM rh_folha.conta_contabil_rubrica v
+       JOIN rh_folha.rubrica r ON r.id = v.rubrica_id
+      WHERE v.id = $1
+      FOR UPDATE OF v`,
+    [id]
+  );
+  if (rows.length === 0) return null;
+  return {
+    ...rows[0],
+    id: Number(rows[0].id),
+    rubrica_id: Number(rows[0].rubrica_id),
+  };
+}
+
+export async function inserirContaContabil(
+  cliente: PoolClient,
+  dados: {
+    rubrica_id: number;
+    conta_contabil: string;
+    inicio_vigencia: string;
+    criado_por: number;
+  }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh_folha.conta_contabil_rubrica
+       (rubrica_id, conta_contabil, status, inicio_vigencia, criado_por)
+     VALUES ($1, $2, 'ativa', $3, $4)
+     RETURNING id`,
+    [dados.rubrica_id, dados.conta_contabil, dados.inicio_vigencia, dados.criado_por]
+  );
+  return Number(rows[0].id);
+}
+
+/** Encerra a vigência (status + fim) — o trigger congela a linha dali em diante. */
+export async function encerrarContaContabilNoBanco(
+  cliente: PoolClient,
+  id: number,
+  fimVigencia: string
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh_folha.conta_contabil_rubrica
+        SET status = 'encerrada', fim_vigencia = $2
+      WHERE id = $1`,
+    [id, fimVigencia]
+  );
 }

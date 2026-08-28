@@ -154,6 +154,17 @@ export const ROTULOS_TIPO_MOVIMENTACAO: Record<TipoMovimentacao, string> = {
   transferencia_empresa: "Transferência entre empresas do grupo",
 };
 
+// Modo da transferência entre empresas (0065). A raiz do CNPJ decide qual cabe;
+// a régua vive no serviço (rh.mesma_raiz_cnpj), não na tela.
+export const MODOS_TRANSFERENCIA = ["continuidade", "rescisao"] as const;
+
+export type ModoTransferencia = (typeof MODOS_TRANSFERENCIA)[number];
+
+export const ROTULOS_MODO_TRANSFERENCIA: Record<ModoTransferencia, string> = {
+  continuidade: "Continuidade (mesmo empregador — o contrato segue)",
+  rescisao: "Rescisão (empregador diferente — encerra e reabre)",
+};
+
 export const NIVEIS_APROVACAO = ["lider", "diretoria"] as const;
 
 export type NivelAprovacao = (typeof NIVEIS_APROVACAO)[number];
@@ -192,6 +203,11 @@ export const esquemaCriacaoMovimentacao = z
     // "ninguém ainda" — o vínculo novo nasce sem líder e o DP designa. O que
     // NÃO é opção é herdar o líder de origem, que está em outro CNPJ.
     gestor_destino_colaborador_id: z.number().int().positive().optional(),
+    // Modo da transferência entre empresas (0065). Continuidade (matriz↔filial,
+    // mesma raiz de CNPJ): o contrato segue, mantém matrícula/gestor/tipo de
+    // vínculo. Rescisão (raiz distinta): encerra e reabre. A raiz é reconferida
+    // no serviço — o schema só garante a forma.
+    modo_transferencia: z.enum(MODOS_TRANSFERENCIA).optional(),
     // Remuneração é opcional: promoção sem mudança de salário existe.
     salario_proposto: z.number().nonnegative().max(9_999_999.99).optional(),
     justificativa_excecao: z.string().trim().min(1).max(2000).optional(),
@@ -245,10 +261,37 @@ export const esquemaCriacaoMovimentacao = z
   .refine(
     (dados) =>
       dados.tipo !== "transferencia_empresa" ||
+      dados.modo_transferencia !== undefined,
+    {
+      message: "Escolha o modo: continuidade ou rescisão",
+      path: ["modo_transferencia"],
+    }
+  )
+  // Matrícula na empresa destino só existe na RESCISÃO — é o contrato novo. Na
+  // continuidade a matrícula é a mesma, então não vem no pedido.
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.modo_transferencia !== "rescisao" ||
       dados.matricula_destino !== undefined,
     {
       message: "Informe a matrícula na empresa destino",
       path: ["matricula_destino"],
+    }
+  )
+  // Continuidade mantém matrícula, gestor e tipo de vínculo do vínculo de origem:
+  // esses campos não podem vir preenchidos (o CHECK do banco também barra).
+  .refine(
+    (dados) =>
+      dados.tipo !== "transferencia_empresa" ||
+      dados.modo_transferencia !== "continuidade" ||
+      (dados.matricula_destino === undefined &&
+        dados.gestor_destino_colaborador_id === undefined &&
+        dados.tipo_vinculo_destino === undefined),
+    {
+      message:
+        "Na continuidade a matrícula, o gestor e o tipo de vínculo são mantidos — não os informe",
+      path: ["modo_transferencia"],
     }
   );
 

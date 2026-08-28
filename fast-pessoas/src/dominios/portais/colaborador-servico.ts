@@ -98,13 +98,20 @@ import {
   MeusDados,
   PARENTESCOS_POSSIVEIS,
   PortalColaborador,
+  RegistrarAndamento,
   ROTULOS_STATUS_PDI,
   tempoDeCasa,
 } from "./colaborador-esquemas";
 import {
+  aceitarPdi,
+  buscarAcaoDaPessoa,
+  buscarMeuPdi,
   chavesConcedidas,
   listarCiclosDoAvaliado,
   listarPdiDoColaborador,
+  MeuPdi,
+  pessoaIdDoUsuario,
+  registrarAndamentoAcao,
 } from "./colaborador-repositorio";
 
 const CHAVE_FERIAS = "ferias.programar";
@@ -116,6 +123,8 @@ const CHAVE_CHECKIN = "clima.responder";
 const CHAVE_DEPENDENTES = "dependente.proprio.manter";
 /** O mesmo nome que o DP grava em audit.alteracao: uma tabela, uma trilha. */
 const TABELA_DEPENDENTE = "rh.dependente";
+const TABELA_PDI = "rh.pdi";
+const TABELA_ANDAMENTO = "rh.acao_andamento";
 /** Quem pode abrir o RCF imprimível em /cargos/[id]/rcf (guarda daquela tela). */
 const CHAVES_RCF_IMPRIMIVEL = [
   "rh.cargo.administrar",
@@ -544,6 +553,105 @@ export async function removerMeuDependente(id: number): Promise<void> {
         Nome: { de: atual.nome, para: null },
         Nascimento: { de: atual.nascimento, para: null },
         Parentesco: { de: ROTULOS_PARENTESCO[atual.parentesco], para: null },
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ Meu PDI (aceite + andamento)
+// Self-service: aceitar o plano homologado e reportar o andamento das próprias
+// ações. Sem chave especial — a guarda é sessão + 2FA, e o alvo (pdi/ação) é
+// escopado pelo vínculo DA SESSÃO, nunca por id da requisição.
+
+async function exigirTitularPdi(): Promise<{
+  sessao: PayloadSessao;
+  pessoaId: number;
+}> {
+  const sessao = await exigirSessaoDoPortal();
+  // A PESSOA, não o vínculo atual: o PDI segue a pessoa mesmo depois de uma
+  // transferência (eixo 1). Ver buscarMeuPdi/aceitarPdi/buscarAcaoDaPessoa.
+  const pessoaId = await pessoaIdDoUsuario(sessao.usuario_id);
+  if (pessoaId === null) {
+    throw new ErroHttp(409, await mensagemSemFicha(sessao.usuario_id));
+  }
+  return { sessao, pessoaId };
+}
+
+/** O PDI homologado da pessoa (aceite + ações + log de andamento), ou null. */
+export async function montarMeuPdi(): Promise<MeuPdi | null> {
+  const { pessoaId } = await exigirTitularPdi();
+  return buscarMeuPdi(pessoaId);
+}
+
+/** O colaborador registra o "de acordo" com o plano homologado (mão dupla). */
+export async function aceitarMeuPdi(pdiId: number): Promise<void> {
+  const { sessao, pessoaId } = await exigirTitularPdi();
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const linhas = await aceitarPdi(
+      cliente,
+      pdiId,
+      pessoaId,
+      sessao.usuario_id
+    );
+    if (linhas === 0) {
+      // 404 = não é dela / não homologado / já aceito — a tela recarrega e
+      // mostra o estado real. Mesma porta do id que não existe (defesa IDOR).
+      throw new ErroHttp(404, "PDI não encontrado, não homologado ou já aceito.");
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_PDI,
+      registroId: String(pdiId),
+      diff: {
+        Origem: { de: null, para: "portal do colaborador (o próprio)" },
+        "Aceite do colaborador": { de: null, para: "de acordo com o plano" },
+      },
+    });
+  });
+}
+
+/**
+ * O colaborador acrescenta um registro no log de andamento da PRÓPRIA ação e —
+ * se mandar `status_novo` — move o estado (pendente/em andamento/concluída). O
+ * log é append-only; cancelar é ato do gestor/RH, não entra por aqui.
+ */
+export async function registrarAndamentoMeuPdi(
+  acaoId: number,
+  dados: RegistrarAndamento
+): Promise<void> {
+  const { sessao, pessoaId } = await exigirTitularPdi();
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const acao = await buscarAcaoDaPessoa(cliente, acaoId, pessoaId);
+    if (!acao) {
+      throw new ErroHttp(404, "Ação do plano não encontrada.");
+    }
+    if (acao.status === "cancelada") {
+      throw new ErroHttp(
+        409,
+        "Esta ação foi cancelada e não recebe mais andamento."
+      );
+    }
+    const statusNovo = dados.status_novo ?? null;
+    await registrarAndamentoAcao(cliente, {
+      acaoId,
+      autorUsuarioId: sessao.usuario_id,
+      texto: dados.texto,
+      statusNovo,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_ANDAMENTO,
+      registroId: String(acaoId),
+      diff: {
+        Origem: { de: null, para: "portal do colaborador (o próprio)" },
+        Registro: { de: null, para: dados.texto },
+        ...(statusNovo
+          ? { Andamento: { de: acao.status, para: statusNovo } }
+          : {}),
       },
     });
   });

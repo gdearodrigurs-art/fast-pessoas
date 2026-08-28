@@ -68,7 +68,12 @@ interface Resultado {
     fim: string;
     participacoes: number;
   };
-  adesao: { participacoes: number; ativos: number; percentual: number | null };
+  adesao: {
+    participacoes: number | null;
+    ativos: number;
+    percentual: number | null;
+    amostra_suficiente: boolean;
+  };
   enps: {
     valor: number | null;
     respostas: number | null;
@@ -283,8 +288,9 @@ export function PainelResultado({
                 </span>
                 <span className={estilos.resumoRotulo}>Adesão</span>
                 <span className={estilos.resumoDetalhe}>
-                  {resultado.adesao.participacoes} de {resultado.adesao.ativos}{" "}
-                  colaboradores ativos
+                  {resultado.adesao.participacoes === null
+                    ? `menos de ${resultado.minimo_amostra} participantes — ocultado para não identificar o público-alvo`
+                    : `${resultado.adesao.participacoes} de ${resultado.adesao.ativos} colaboradores`}
                 </span>
               </div>
 

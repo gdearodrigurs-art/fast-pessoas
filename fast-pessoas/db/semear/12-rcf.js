@@ -455,6 +455,23 @@ async function semear(cliente) {
     atualizadas.push({ cargo: item.cargo, atividades: item.atividades.length });
   }
 
+  // ------------------------------------------------- nível hierárquico (0085 / A6:a)
+  // Classifica as versões ATIVAS ainda sem nível pelo nome do cargo, usando o
+  // catálogo que a própria 0085 semeia. Só a versão ativa é editável (o
+  // congelamento barra a encerrada) e o `IS NULL` dá a idempotência: quem o
+  // dono classificar pela tela não é reclassificado aqui.
+  const niveis = await cliente.query(
+    `UPDATE rh.cargo_versao cv
+        SET nivel_hierarquico_id = n.id
+       FROM rh.nivel_hierarquico n
+      WHERE cv.status = 'ativa' AND cv.nivel_hierarquico_id IS NULL
+        AND n.nome = CASE
+          WHEN cv.nome ILIKE '%diretor%' THEN 'Diretoria'
+          WHEN cv.nome ILIKE '%gerente%' OR cv.nome ILIKE '%gestor%' THEN 'Gerência'
+          WHEN cv.nome ILIKE '%coordenador%' OR cv.nome ILIKE '%supervisor%' OR cv.nome ILIKE '%lider%' OR cv.nome ILIKE '%líder%' THEN 'Coordenação/Supervisão'
+          ELSE 'Operacional' END`
+  );
+
   // ---------------------------------------------------------- conferências duras
   const conferir = async (rotulo, sql, esperado) => {
     const { rows: linhas } = await cliente.query(sql);
@@ -496,12 +513,20 @@ async function semear(cliente) {
     0
   );
 
+  await conferir(
+    'versão ativa de cargo sem nível hierárquico',
+    `SELECT count(*)::int AS total FROM rh.cargo_versao
+      WHERE status = 'ativa' AND nivel_hierarquico_id IS NULL`,
+    0
+  );
+
   const totalAtividades = atualizadas.reduce((soma, item) => soma + item.atividades, 0);
   log(
     `12-rcf: RCF completo em ${atualizadas.length} cargos ` +
       `(${totalAtividades} atividades, média ${(totalAtividades / atualizadas.length).toFixed(1)} por cargo).`
   );
   log('12-rcf: setores — ' + [...new Set(RCF.map((item) => item.setor))].join(' · '));
+  log(`12-rcf: nível hierárquico classificado em ${niveis.rowCount} versão(ões) ativa(s) de cargo.`);
 
   return { rcfCargos: atualizadas.length };
 }

@@ -3,6 +3,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ROTULOS_VINCULO, TIPOS_VINCULO, TipoVinculo } from "@/dominios/colaboradores/esquemas";
 import {
+  MODOS_TRANSFERENCIA,
+  ModoTransferencia,
+  ROTULOS_MODO_TRANSFERENCIA,
   ROTULOS_TIPO_MOVIMENTACAO,
   TIPOS_MOVIMENTACAO,
   TipoMovimentacao,
@@ -42,6 +45,9 @@ export function FormularioMovimentacao({
   // novo nasce sem líder e o DP designa. O que não existe mais é herdar o
   // líder de origem, que fica em outro CNPJ.
   const [gestorDestino, setGestorDestino] = useState("");
+  // Modo da transferência entre empresas (0065). Continuidade é o padrão quando a
+  // raiz do CNPJ bate; o modoEfetivo abaixo força rescisão quando não bate.
+  const [modo, setModo] = useState<ModoTransferencia>("continuidade");
   const [salario, setSalario] = useState("");
   const [justificativaExcecao, setJustificativaExcecao] = useState("");
   const [dataPretendida, setDataPretendida] = useState("");
@@ -117,6 +123,19 @@ export function FormularioMovimentacao({
 
   const alvo = opcoes?.alvos.find((item) => String(item.id) === colaboradorId);
 
+  // Continuidade × rescisão (0065): a raiz do CNPJ (8 primeiros dígitos) decide.
+  // A tela compara o CNPJ atual do alvo com o da empresa destino; a régua é
+  // reconferida no servidor. Sem CNPJ num dos lados, não se prova a raiz.
+  const empresaDestinoObj = opcoes?.empresas.find(
+    (e) => String(e.id) === empresaDestino
+  );
+  const raizAtual = alvo?.cnpj_atual?.slice(0, 8) ?? null;
+  const raizDestino = empresaDestinoObj?.cnpj?.slice(0, 8) ?? null;
+  const mesmaRaiz =
+    raizAtual !== null && raizDestino !== null && raizAtual === raizDestino;
+  // Raiz diferente ⇒ rescisão, escolha o usuário o que escolher no seletor.
+  const modoEfetivo: ModoTransferencia = mesmaRaiz ? modo : "rescisao";
+
   // A transferência entre empresas do grupo só aparece para quem tem a chave
   // `movimentacao.transferir_empresa` — e a lista de empresas vem vazia da API
   // para quem não tem, então o servidor manda e a tela obedece.
@@ -156,10 +175,16 @@ export function FormularioMovimentacao({
         corpo.empresa_destino_id = Number(empresaDestino);
         corpo.estabelecimento_destino_id = Number(unidadeDestino);
         corpo.centro_custo_destino_id = Number(centroCusto);
-        corpo.matricula_destino = matriculaDestino.trim();
-        if (vinculoDestino) corpo.tipo_vinculo_destino = vinculoDestino;
-        if (gestorDestino) {
-          corpo.gestor_destino_colaborador_id = Number(gestorDestino);
+        corpo.modo_transferencia = modoEfetivo;
+        // Matrícula, gestor e tipo de vínculo só existem na RESCISÃO — na
+        // continuidade são mantidos do vínculo de origem (o servidor recusa se
+        // vierem).
+        if (modoEfetivo === "rescisao") {
+          corpo.matricula_destino = matriculaDestino.trim();
+          if (vinculoDestino) corpo.tipo_vinculo_destino = vinculoDestino;
+          if (gestorDestino) {
+            corpo.gestor_destino_colaborador_id = Number(gestorDestino);
+          }
         }
       } else {
         corpo.estabelecimento_destino_id = Number(unidadeDestino);
@@ -307,14 +332,6 @@ export function FormularioMovimentacao({
             </>
           ) : tipo === "transferencia_empresa" ? (
             <>
-              <div className={comum.avisoFaixa}>
-                Este pedido <b>encerra o vínculo na empresa atual e abre outro</b>{" "}
-                na empresa destino, na data de vigência. A <b>pessoa é a mesma</b>:
-                mesmo CPF, mesma conta de acesso e a linha do tempo atravessa os
-                dois contratos. Cargo e salário são mantidos; o período aquisitivo
-                de férias recomeça e o banco de horas é acertado na saída.
-              </div>
-
               <label className={comum.rotuloCampo} htmlFor="mov-empresa">
                 Empresa destino (registro)
               </label>
@@ -323,7 +340,10 @@ export function FormularioMovimentacao({
                 id="mov-empresa"
                 required
                 value={empresaDestino}
-                onChange={(e) => setEmpresaDestino(e.target.value)}
+                onChange={(e) => {
+                  setEmpresaDestino(e.target.value);
+                  setModo("continuidade");
+                }}
               >
                 <option value="">selecione…</option>
                 {opcoes?.empresas.map((empresa) => (
@@ -334,6 +354,60 @@ export function FormularioMovimentacao({
                 ))}
               </select>
 
+              {empresaDestino !== "" &&
+                (mesmaRaiz ? (
+                  <>
+                    <label className={comum.rotuloCampo} htmlFor="mov-modo">
+                      Modo da transferência
+                    </label>
+                    <select
+                      className={comum.campo}
+                      id="mov-modo"
+                      value={modo}
+                      onChange={(e) =>
+                        setModo(e.target.value as ModoTransferencia)
+                      }
+                    >
+                      {MODOS_TRANSFERENCIA.map((m) => (
+                        <option key={m} value={m}>
+                          {ROTULOS_MODO_TRANSFERENCIA[m]}
+                        </option>
+                      ))}
+                    </select>
+                    <p className={comum.dicaSla}>
+                      Mesma raiz de CNPJ (matriz↔filial): o padrão é a
+                      continuidade — o contrato segue no mesmo vínculo.
+                    </p>
+                  </>
+                ) : (
+                  <p className={comum.dicaSla}>
+                    Empregador diferente (raiz de CNPJ distinta, ou CNPJ ausente
+                    num dos lados): só cabe <b>rescisão</b>.
+                  </p>
+                ))}
+
+              {empresaDestino !== "" &&
+                (modoEfetivo === "continuidade" ? (
+                  <div className={comum.avisoFaixa}>
+                    <b>Continuidade</b>: mesmo empregador, o contrato SEGUE no
+                    mesmo vínculo. Muda só o registro/lotação — matrícula, cargo,
+                    salário, gestor, férias e banco de horas são mantidos. Sem
+                    rescisão e sem novo vínculo.
+                  </div>
+                ) : (
+                  <div className={comum.avisoFaixa}>
+                    Este pedido{" "}
+                    <b>encerra o vínculo na empresa atual e abre outro</b> na
+                    empresa destino, na data de vigência. A{" "}
+                    <b>pessoa é a mesma</b>: mesmo CPF, mesma conta de acesso e a
+                    linha do tempo atravessa os dois contratos. Cargo e salário
+                    são mantidos; o período aquisitivo de férias recomeça e o
+                    banco de horas é acertado na saída.
+                  </div>
+                ))}
+
+              {modoEfetivo === "rescisao" && (
+                <>
               <label className={comum.rotuloCampo} htmlFor="mov-gestor-destino">
                 Líder na empresa destino
               </label>
@@ -365,6 +439,8 @@ export function FormularioMovimentacao({
                 aprovação, e ele fica em outro CNPJ. Sem escolha aqui, o vínculo
                 novo nasce sem líder e o DP designa.
               </p>
+                </>
+              )}
 
               <label className={comum.rotuloCampo} htmlFor="mov-empresa-unidade">
                 Lotação destino (local de trabalho)
@@ -403,6 +479,8 @@ export function FormularioMovimentacao({
                 ))}
               </select>
 
+              {modoEfetivo === "rescisao" && (
+                <>
               <label className={comum.rotuloCampo} htmlFor="mov-matricula">
                 Matrícula na empresa destino
               </label>
@@ -438,6 +516,8 @@ export function FormularioMovimentacao({
                   </option>
                 ))}
               </select>
+                </>
+              )}
             </>
           ) : (
             <>

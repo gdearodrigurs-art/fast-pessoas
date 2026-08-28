@@ -2,7 +2,7 @@ import QRCode from "qrcode";
 import { iniciarConfiguracao2fa } from "@/dominios/identidade/servico";
 import { assinarSecretPendente } from "@/dominios/identidade/token-2fa";
 import { responderErro } from "@/lib/http";
-import { ErroHttp, lerSessao } from "@/lib/sessao";
+import { ErroHttp, garantirUsuarioAtivo, lerSessao } from "@/lib/sessao";
 import { gravarCookiePendente } from "../cookie-pendente";
 
 export async function POST() {
@@ -11,6 +11,9 @@ export async function POST() {
     if (!sessao) {
       throw new ErroHttp(401, "Não autenticado");
     }
+    // A7: mesma reconferência de trocar-senha — a rota aceita a sessão
+    // pendente_2fa (é o fluxo de configuração), mas não a de conta desativada.
+    await garantirUsuarioAtivo(sessao.usuario_id);
 
     const inicio = await iniciarConfiguracao2fa(sessao);
 

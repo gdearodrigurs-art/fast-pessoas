@@ -13,6 +13,14 @@ import {
   listarMovimentacoesDoLider,
 } from "../demandas/repositorio";
 import { nivelAlerta, NivelAlerta } from "../ferias/esquemas";
+// A2:a (docs/20) — a equipe do portal é a SUB-ÁRVORE (diretos e indiretos).
+// O quadro sai UMA vez por request e a caminhada pura (visitados + teto;
+// nunca WITH RECURSIVE) resolve cada equipe consultada nesta tela.
+import {
+  lideradosDaSubArvore,
+  type LinhaSubArvore,
+} from "../organograma/esquemas";
+import { listarPessoasDoQuadro } from "../organograma/repositorio";
 import {
   ANTECEDENCIA_ASO_DIAS,
   ANTECEDENCIA_EXPERIENCIA_DIAS,
@@ -268,14 +276,21 @@ export async function montarPortalGestor(
   // portal. O alcance é a CHAVE, não o nome do papel — ver migration 0039.
   const escolherGestor = chaves.has("rh.colaborador.ver.todos");
   const meuColaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
-  const opcoes = escolherGestor ? await listarGestoresComEquipe() : null;
+  // O QUADRO sai uma vez por request; cada "equipe" daqui para baixo é a
+  // sub-árvore caminhada neste retrato — nunca a relação direta (A2:a).
+  const quadro = await listarPessoasDoQuadro();
+  const subArvoreDe = (id: number | null): number[] =>
+    id === null ? [] : lideradosDaSubArvore(id, quadro);
+  const opcoes = escolherGestor
+    ? opcoesComContagemDaSubArvore(await listarGestoresComEquipe(), quadro)
+    : null;
 
   const gestorId = escolherGestor
     ? (consulta.gestor_id ??
       // DP/RH/diretoria em geral não lideram ninguém: abrir o portal deles
       // vazio não ajuda. Sem escolha explícita, cai no primeiro gestor com
       // equipe (a menos que o próprio leitor tenha equipe).
-      (await temEquipe(meuColaboradorId)
+      (subArvoreDe(meuColaboradorId).length > 0
         ? meuColaboradorId
         : (opcoes?.[0]?.colaborador_id ?? meuColaboradorId)))
     : meuColaboradorId;
@@ -293,14 +308,17 @@ export async function montarPortalGestor(
   const proprio = gestor.colaborador_id === meuColaboradorId;
   const pode = montarPermissoes(chaves, escolherGestor, proprio);
 
-  const equipe = await listarEquipe(gestor.colaborador_id);
+  const equipeIds = subArvoreDe(gestor.colaborador_id);
+  const equipe = await listarEquipe(equipeIds);
 
   const [ferias, avaliacoes, pendencias, turnover, alertas] = await Promise.all([
-    pode.ver_ferias ? montarFerias(gestor.colaborador_id) : null,
+    pode.ver_ferias ? montarFerias(equipeIds) : null,
     pode.ver_avaliacoes ? montarAvaliacoes(gestor.usuario_id) : null,
     pode.ver_pendencias ? montarPendencias(gestor.usuario_id) : null,
+    // Turnover é o ÚNICO bloco na relação direta: conta histórica por data —
+    // a sub-árvore de hoje não tem os desligados (ver apurarTurnover).
     pode.ver_turnover ? montarTurnover(gestor.colaborador_id) : null,
-    montarAlertas(gestor.colaborador_id, equipe, pode),
+    montarAlertas(equipeIds, equipe, pode),
   ]);
 
   return {
@@ -321,10 +339,19 @@ export async function montarPortalGestor(
   };
 }
 
-async function temEquipe(colaboradorId: number | null): Promise<boolean> {
-  if (colaboradorId === null) return false;
-  const gestor = await buscarGestor(colaboradorId);
-  return (gestor?.liderados_vigentes ?? 0) > 0;
+/**
+ * O número do seletor tem que bater com a tela: cada opção mostra o tamanho da
+ * SUB-ÁRVORE do gestor (diretos e indiretos), não a contagem de diretos que a
+ * consulta do seletor devolve. Exportada pura para o teste fixar a semântica.
+ */
+export function opcoesComContagemDaSubArvore(
+  opcoes: OpcaoGestor[],
+  quadro: LinhaSubArvore[]
+): OpcaoGestor[] {
+  return opcoes.map((opcao) => ({
+    ...opcao,
+    liderados: lideradosDaSubArvore(opcao.colaborador_id, quadro).length,
+  }));
 }
 
 function montarPermissoes(
@@ -351,8 +378,8 @@ function montarPermissoes(
     // `admissao.ver` deixava sem alerta justamente quem tem o prazo correndo —
     // inclusive a diretora de pessoas, avaliadora de ciclos de experiência
     // abertos. `proprio` significa "é o gestor desta equipe" e
-    // listarMarcosExperiencia já é escopada por EQUIPE_VIGENTE: nome e data do
-    // marco da própria equipe, nada de terceiro.
+    // listarMarcosExperiencia já é escopada pela sub-árvore do gestor: nome e
+    // data do marco da própria equipe, nada de terceiro.
     ver_experiencia: chaves.has("admissao.ver") || proprio,
     escolher_gestor: escolherGestor,
   };
@@ -390,15 +417,15 @@ function montarEquipe(
 
 // ------------------------------------------------------------------ bloco 2
 
-async function montarFerias(gestorColaboradorId: number): Promise<BlocoFerias> {
+async function montarFerias(equipeIds: number[]): Promise<BlocoFerias> {
   // Sequencial de propósito: o pool é compartilhado por toda a aplicação e o
   // portal já dispara um bloco por chave em paralelo.
   const programadas = await listarProgramacoesAprovadas(
-    gestorColaboradorId,
+    equipeIds,
     JANELA_FERIAS_DIAS
   );
   const periodos = await listarPeriodosEmRisco(
-    gestorColaboradorId,
+    equipeIds,
     JANELA_FERIAS_DIAS
   );
   return {
@@ -543,19 +570,19 @@ function formatarData(dataIso: string): string {
 // ------------------------------------------------------------------ bloco 6
 
 async function montarAlertas(
-  gestorColaboradorId: number,
+  equipeIds: number[],
   equipe: LinhaEquipe[],
   pode: PermissoesPortal
 ): Promise<BlocoAlertas> {
   const experiencia = pode.ver_experiencia
     ? await listarMarcosExperiencia(
-        gestorColaboradorId,
+        equipeIds,
         ANTECEDENCIA_EXPERIENCIA_DIAS,
         ATRASO_EXPERIENCIA_DIAS
       )
     : null;
   const aso = pode.ver_aso
-    ? await listarVencimentosAso(gestorColaboradorId, ANTECEDENCIA_ASO_DIAS)
+    ? await listarVencimentosAso(equipeIds, ANTECEDENCIA_ASO_DIAS)
     : null;
   return {
     cadencia_dias: CADENCIA_FEEDBACK_DIAS,

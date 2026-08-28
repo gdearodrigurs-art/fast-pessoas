@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelGestor } from "./painel-gestor";
 
 /**
@@ -10,10 +10,7 @@ import { PainelGestor } from "./painel-gestor";
  * chamada, e cada bloco só vem no payload se a chave do módulo autorizar.
  */
 export default async function PaginaPortalGestor() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{ pode_ver: boolean }>(
     "SELECT sistema.tem_permissao($1, 'rh.colaborador.ver') AS pode_ver",
     [sessao.usuario_id]

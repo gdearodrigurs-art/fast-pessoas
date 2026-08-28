@@ -60,9 +60,15 @@ export interface RespostaIndividual {
 
 export async function listarPerguntasAtivas(): Promise<PerguntaAtiva[]> {
   const linhas = await consultar<{ id: string; texto: string; ordem: number }>(
+    // Janela civil, não só o status: o CHECK da 0004 permite uma linha 'ativa'
+    // com início futuro ou fim já preenchido, então programar entrada/saída sem
+    // passar por 'encerrada' deixava a pergunta ser servida fora da vigência. É
+    // o anti-padrão do eixo 10 (janela lida por status). rh.hoje() = São Paulo.
     `SELECT id, texto, ordem
        FROM rh_clima.pergunta_versao
       WHERE status = 'ativa'
+        AND inicio_vigencia <= rh.hoje()
+        AND (fim_vigencia IS NULL OR fim_vigencia >= rh.hoje())
       ORDER BY ordem`
   );
   return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
@@ -135,7 +141,8 @@ export async function inserirResposta(
 
 export async function agregadoPorDia(
   inicio: string,
-  fim: string
+  fim: string,
+  minimoRespondentes: number
 ): Promise<AgregadoDia[]> {
   return consultar<AgregadoDia & Record<string, unknown>>(
     `SELECT data_referencia::text AS data,
@@ -144,14 +151,21 @@ export async function agregadoPorDia(
        FROM rh_clima.checkin_resposta
       WHERE data_referencia BETWEEN $1 AND $2
       GROUP BY data_referencia
+     -- PISO DE ANONIMATO por PESSOA (mesma régua do agregado por unidade):
+     -- num dia de baixa adesão, sem piso, dava para publicar "respostas: 1,
+     -- média: <nota exata da pessoa>". Abaixo do mínimo, o ponto do dia é
+     -- OMITIDO. Por pessoa, não por contrato: transferido de CNPJ na janela
+     -- tem dois colaborador_id e contaria em dobro.
+     HAVING COUNT(DISTINCT pessoa_id) >= $3::int
       ORDER BY data_referencia`,
-    [inicio, fim]
+    [inicio, fim, minimoRespondentes]
   );
 }
 
 export async function agregadoPorPergunta(
   inicio: string,
-  fim: string
+  fim: string,
+  minimoRespondentes: number
 ): Promise<AgregadoPergunta[]> {
   const linhas = await consultar<{
     pergunta_versao_id: string;
@@ -167,8 +181,12 @@ export async function agregadoPorPergunta(
        JOIN rh_clima.pergunta_versao pv ON pv.id = r.pergunta_versao_id
       WHERE r.data_referencia BETWEEN $1 AND $2
       GROUP BY pv.id
+     -- Mesmo PISO DE ANONIMATO por pessoa: pergunta com pouca resposta na
+     -- janela revelaria a nota exata de quem respondeu. Abaixo do mínimo, a
+     -- pergunta é OMITIDA do recorte.
+     HAVING COUNT(DISTINCT r.pessoa_id) >= $3::int
       ORDER BY pv.ordem, pv.id`,
-    [inicio, fim]
+    [inicio, fim, minimoRespondentes]
   );
   return linhas.map((linha) => ({
     ...linha,
@@ -176,19 +194,41 @@ export async function agregadoPorPergunta(
   }));
 }
 
+/**
+ * PISO DE ANONIMATO no agregado geral: abaixo do mínimo de respondentes, a
+ * média revelaria a nota exata de pouca gente (com 1 respondente, média = a
+ * nota da pessoa). Suprime a MÉDIA — as contagens ficam, porque são rede
+ * inteira e não identificam ninguém, e ainda mostram a adesão baixa que
+ * motivou a supressão. Puro de propósito: a suíte prova sem abrir banco.
+ */
+export function aplicarPisoAgregadoGeral(
+  agregado: AgregadoGeral,
+  minimoRespondentes: number
+): AgregadoGeral {
+  if (agregado.respondentes < minimoRespondentes) {
+    return { ...agregado, media: null };
+  }
+  return agregado;
+}
+
 export async function agregadoGeral(
   inicio: string,
-  fim: string
+  fim: string,
+  minimoRespondentes: number
 ): Promise<AgregadoGeral> {
   const linhas = await consultar<AgregadoGeral & Record<string, unknown>>(
+    // Conta PESSOA (pessoa_id, NOT NULL desde a 0052), não contrato: quem foi
+    // transferido entre CNPJs do grupo na janela responde por dois vínculos e
+    // contaria em dobro num COUNT por colaborador_id.
     `SELECT AVG(nota)::float8 AS media,
             COUNT(*)::int AS respostas,
-            COUNT(DISTINCT colaborador_id)::int AS respondentes
+            COUNT(DISTINCT pessoa_id)::int AS respondentes
        FROM rh_clima.checkin_resposta
       WHERE data_referencia BETWEEN $1 AND $2`,
     [inicio, fim]
   );
-  return linhas[0] ?? { media: null, respostas: 0, respondentes: 0 };
+  const agregado = linhas[0] ?? { media: null, respostas: 0, respondentes: 0 };
+  return aplicarPisoAgregadoGeral(agregado, minimoRespondentes);
 }
 
 /**
@@ -241,14 +281,23 @@ export async function agregadoPorUnidade(
   return consultar<AgregadoUnidade & Record<string, unknown>>(
     `SELECT ev.unidade,
             AVG(r.nota)::float8 AS media,
-            AVG(r.nota) FILTER (
-              WHERE r.data_referencia > $2::date - $3::int
-            )::float8 AS media_recente,
-            AVG(r.nota) FILTER (
-              WHERE r.data_referencia <= $2::date - $3::int
-            )::float8 AS media_anterior,
+            -- Piso k também POR SUBJANELA: a média recente/anterior só sai se a
+            -- própria subjanela tiver >= minimoRespondentes pessoas distintas.
+            -- Sem isto, uma unidade com k no mês mas 1 respondente na última
+            -- semana publicaria a nota exata dessa pessoa (identificação por
+            -- dedução — o achado B2 da revisão das correções).
+            CASE WHEN COUNT(DISTINCT r.pessoa_id) FILTER (
+                        WHERE r.data_referencia > $2::date - $3::int
+                      ) >= $4
+                 THEN AVG(r.nota) FILTER (WHERE r.data_referencia > $2::date - $3::int)
+            END::float8 AS media_recente,
+            CASE WHEN COUNT(DISTINCT r.pessoa_id) FILTER (
+                        WHERE r.data_referencia <= $2::date - $3::int
+                      ) >= $4
+                 THEN AVG(r.nota) FILTER (WHERE r.data_referencia <= $2::date - $3::int)
+            END::float8 AS media_anterior,
             COUNT(*)::int AS respostas,
-            COUNT(DISTINCT r.colaborador_id)::int AS respondentes
+            COUNT(DISTINCT r.pessoa_id)::int AS respondentes
        FROM rh_clima.checkin_resposta r
        JOIN LATERAL rh.estrutura_em(r.colaborador_id, r.data_referencia) est
          ON TRUE
@@ -256,7 +305,10 @@ export async function agregadoPorUnidade(
          ON ev.id = rh.estabelecimento_versao_em(est.estabelecimento_id, $2::date)
       WHERE r.data_referencia BETWEEN $1 AND $2
       GROUP BY est.estabelecimento_id, ev.unidade
-     HAVING COUNT(DISTINCT r.colaborador_id) >= $4::int
+     -- PISO DE ANONIMATO por PESSOA, não por contrato: quem foi transferido de
+     -- CNPJ na janela tem dois colaborador_id no mesmo estabelecimento; contar
+     -- vínculo deixava a unidade cruzar o k com menos gente real do que o piso.
+     HAVING COUNT(DISTINCT r.pessoa_id) >= $4::int
       ORDER BY ev.unidade`,
     [inicio, fim, diasRecentes, minimoRespondentes]
   );
@@ -277,14 +329,17 @@ export async function adesaoCheckinPorDia(
 ): Promise<{ respondentes_por_dia: number[]; ativos: number }> {
   const [dias, ativos] = await Promise.all([
     consultar<{ respondentes: number }>(
-      `SELECT COUNT(DISTINCT colaborador_id)::int AS respondentes
+      // Numerador por PESSOA (pessoa_id): o denominador também é por pessoa, e
+      // adesão é gente que respondeu ÷ gente ativa, não contrato ÷ contrato.
+      `SELECT COUNT(DISTINCT pessoa_id)::int AS respondentes
          FROM rh_clima.checkin_resposta
         WHERE data_referencia BETWEEN $1 AND $2
         GROUP BY data_referencia`,
       [inicio, fim]
     ),
     consultar<{ total: number }>(
-      `SELECT COUNT(*)::int AS total FROM rh.colaborador WHERE status = 'ativo'`
+      // Denominador por PESSOA: quem tem dois vínculos ativos é uma pessoa só.
+      `SELECT COUNT(DISTINCT pessoa_id)::int AS total FROM rh.colaborador WHERE status = 'ativo'`
     ),
   ]);
   return {
@@ -353,5 +408,134 @@ export async function registrarLeituraSensivel(
     `INSERT INTO audit.leitura_sensivel (usuario_id, chave_permissao, recurso, registro_id)
      VALUES ($1, $2, $3, $4)`,
     [entrada.usuarioId, entrada.chavePermissao, entrada.recurso, entrada.registroId]
+  );
+}
+
+// ------------------------------------------------------------------ administração das perguntas (0075)
+
+export interface PerguntaAdmin {
+  id: number;
+  texto: string;
+  ordem: number;
+  status: "rascunho" | "ativa" | "encerrada";
+  inicio_vigencia: string | null;
+  fim_vigencia: string | null;
+  /** Versão anterior que esta reformula (a série); null = pergunta nova. */
+  continua_de: number | null;
+  /** Quantas respostas já apontam para esta versão (0 = texto ainda editável). */
+  respostas: number;
+}
+
+export async function listarPerguntasAdmin(): Promise<PerguntaAdmin[]> {
+  const linhas = await consultar<{
+    id: string;
+    texto: string;
+    ordem: number;
+    status: "rascunho" | "ativa" | "encerrada";
+    inicio_vigencia: string | null;
+    fim_vigencia: string | null;
+    continua_de: string | null;
+    respostas: number;
+  }>(
+    `SELECT pv.id, pv.texto, pv.ordem, pv.status,
+            pv.inicio_vigencia::text AS inicio_vigencia,
+            pv.fim_vigencia::text AS fim_vigencia,
+            pv.continua_de,
+            (SELECT COUNT(*) FROM rh_clima.checkin_resposta r
+              WHERE r.pergunta_versao_id = pv.id)::int AS respostas
+       FROM rh_clima.pergunta_versao pv
+      ORDER BY pv.ordem, pv.id`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    id: Number(linha.id),
+    continua_de: linha.continua_de === null ? null : Number(linha.continua_de),
+  }));
+}
+
+export interface PerguntaParaMutacao {
+  id: number;
+  texto: string;
+  ordem: number;
+  status: "rascunho" | "ativa" | "encerrada";
+}
+
+export async function buscarPerguntaParaMutacao(
+  cliente: PoolClient,
+  id: number
+): Promise<PerguntaParaMutacao | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    texto: string;
+    ordem: number;
+    status: "rascunho" | "ativa" | "encerrada";
+  }>(
+    `SELECT id, texto, ordem, status
+       FROM rh_clima.pergunta_versao
+      WHERE id = $1
+      FOR UPDATE`,
+    [id]
+  );
+  return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+/** Próxima ordem livre entre as perguntas ATIVAS (o índice é único só nelas). */
+export async function proximaOrdemAtiva(cliente: PoolClient): Promise<number> {
+  const { rows } = await cliente.query<{ proxima: number }>(
+    `SELECT COALESCE(MAX(ordem), 0) + 1 AS proxima
+       FROM rh_clima.pergunta_versao WHERE status = 'ativa'`
+  );
+  return rows[0].proxima;
+}
+
+export async function contarRespostasDaPergunta(
+  cliente: PoolClient,
+  id: number
+): Promise<number> {
+  const { rows } = await cliente.query<{ total: number }>(
+    `SELECT COUNT(*)::int AS total FROM rh_clima.checkin_resposta
+      WHERE pergunta_versao_id = $1`,
+    [id]
+  );
+  return rows[0].total;
+}
+
+/** Cria uma pergunta já ATIVA — o check-in não tem etapa de rascunho. */
+export async function criarPerguntaAtiva(
+  cliente: PoolClient,
+  dados: { texto: string; ordem: number; continua_de: number | null }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh_clima.pergunta_versao (texto, ordem, status, inicio_vigencia, continua_de)
+     VALUES ($1, $2, 'ativa', rh.hoje(), $3)
+     RETURNING id`,
+    [dados.texto, dados.ordem, dados.continua_de]
+  );
+  return Number(rows[0].id);
+}
+
+export async function atualizarTextoPergunta(
+  cliente: PoolClient,
+  id: number,
+  texto: string
+): Promise<void> {
+  // O trigger pergunta_versao_proteger (0075) barra se já houver resposta.
+  await cliente.query(
+    `UPDATE rh_clima.pergunta_versao SET texto = $2 WHERE id = $1`,
+    [id, texto]
+  );
+}
+
+/** Encerra uma pergunta ATIVA. GREATEST protege o CHECK fim >= início. */
+export async function encerrarPergunta(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh_clima.pergunta_versao
+        SET status = 'encerrada',
+            fim_vigencia = GREATEST(inicio_vigencia, rh.hoje())
+      WHERE id = $1 AND status = 'ativa'`,
+    [id]
   );
 }

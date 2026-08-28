@@ -22,7 +22,40 @@ import {
 } from "../estrutura/esquemas";
 import { PayloadSessao } from "../identidade/esquemas";
 import { validarTotpDoUsuario } from "../identidade/servico";
-import { calcularFolha, EntradaMotor, ErroMotor, VariavelMotor } from "./calculo";
+import {
+  calcularFolha,
+  EntradaMotor,
+  ErroMotor,
+  SuspensaoMotor,
+  VariavelMotor,
+} from "./calculo";
+import {
+  apurarSuspensaoNaCompetencia,
+  inicioBuscaSuspensao,
+} from "./suspensao";
+import { vigenciaContaConflitante } from "./conta-contabil";
+import { calcularFerias, ResultadoMotorFerias } from "./calculo-ferias";
+import {
+  calcularDecimo,
+  ParcelaDecimo,
+  ResultadoMotorDecimo,
+} from "./calculo-13";
+import {
+  avisoSuspensaoNoMesDoTermino,
+  calcularRescisao,
+  ResultadoMotorRescisao,
+} from "./calculo-rescisao";
+import {
+  analisarLinhaOlac,
+  casarLinhaOlac,
+  ehCabecalhoOlac,
+  gerarArquivoOlac,
+  LinhaOlac,
+  nomeArquivoOlac,
+  SEPARADOR_OLAC,
+  SituacaoEspelho,
+} from "./olac";
+import { dividirLinhas } from "../estrutura/importacao-analise";
 import {
   AbrirCompetencia,
   CODIGO_ADICIONAL_NOTURNO,
@@ -36,6 +69,8 @@ import {
   competenciaEhRetroativa,
   dataReferenciaCompetencia,
   EncerramentoRubrica,
+  EncerrarContaContabil,
+  NovaContaContabil,
   esquemaEntradaCasoTeste,
   esquemaSaidaCasoTeste,
   EstadoCompetencia,
@@ -53,9 +88,35 @@ import {
   TipoTabelaLegal,
 } from "./esquemas";
 import {
+  apagarEspelhoOlacAnterior,
   apagarFolhasDaCompetencia,
+  buscarColaboradorParaDecimo,
+  listarVigenciasContaContabilParaAtualizar,
+  buscarContaContabilParaAtualizar,
+  ContaContabilRubrica,
+  encerrarContaContabilNoBanco,
+  EspelhoNaoCasado,
+  inserirContaContabil,
+  inserirEspelhoOlac,
+  inserirLoteOlac,
+  listarCatalogoContaContabil,
+  listarEspelhoNaoCasado,
+  listarLinhasParaExportarOlac,
+  listarSuspensoesParaCalculo,
+  LoteOlacResumo,
+  mapaColaboradorPorMatricula,
+  mapaEmpresaPorCnpj,
+  TotalEspelhoOlac,
+  totaisEspelhoOlac,
+  travarImportacaoOlac,
+  ultimosLotesOlac,
+  buscarColaboradorParaFerias,
+  buscarDesligamentoParaRescisao,
+  DesligamentoParaRescisao,
+  listarPeriodosAquisitivosParaRescisao,
   buscarCompetencia,
   buscarCompetenciaParaAtualizar,
+  buscarProgramacaoParaPrevia,
   buscarRubricaParaAtualizar,
   buscarVariavelParaAtualizar,
   buscarVersaoAtivaRubricaParaAtualizar,
@@ -108,12 +169,17 @@ import {
   listarVersoesParametros,
   marcarVersaoConferida,
   mudarEstado,
+  ProgramacaoParaPrevia,
   resumoEstruturaDaCompetencia,
   RubricaVigente,
   SituacaoConferencia,
   situacaoConferenciaTabelas,
   tabelasVigentes,
   TabelasVigentesMotor,
+  totaisPorCentroCusto,
+  totaisPorRubrica,
+  TotalPorCentroCusto,
+  TotalPorRubrica,
   VariavelResumo,
   VersaoParametros,
   VersaoTabelaInss,
@@ -280,6 +346,12 @@ export interface VisaoCompetencia {
   folhas: FolhaComItens[];
   /** Quantas linhas a competência tem SEM recorte — o "de N" do cabeçalho. */
   folhas_na_competencia: number;
+  /**
+   * Os outros dois cortes da conferência, sob o MESMO recorte que `folhas`:
+   * a folha somada por rubrica (provento/desconto) e por centro de custo.
+   */
+  por_rubrica: TotalPorRubrica[];
+  por_centro_custo: TotalPorCentroCusto[];
   /** Sempre da competência inteira: filtrar não pode apagar os seletores. */
   opcoes_estrutura: OpcoesFiltroEstrutura;
   /** Os totais são DO RECORTE — soma exatamente as linhas devolvidas acima. */
@@ -287,6 +359,17 @@ export interface VisaoCompetencia {
     total_proventos_centavos: number;
     total_descontos_centavos: number;
     liquido_centavos: number;
+  };
+  /**
+   * OLAC (E1:a/E2:a): o espelho de conciliação da folha externa, LADO A LADO
+   * com a folha interna — nunca somado a ela. Sempre da competência inteira
+   * (conciliação não tem recorte): totais por situação × empresa, o não-casado
+   * em destaque e a última troca de arquivo em cada direção.
+   */
+  olac: {
+    totais: TotalEspelhoOlac[];
+    nao_casadas: EspelhoNaoCasado[];
+    lotes: LoteOlacResumo[];
   };
 }
 
@@ -346,6 +429,11 @@ export async function montarVisaoCompetencia(
     folhas,
     itens,
     estrutura,
+    porRubrica,
+    porCentro,
+    olacTotais,
+    olacNaoCasadas,
+    olacLotes,
   ] = await Promise.all([
     permissoesFolha(sessao.usuario_id),
     listarImpedidos(dataRef),
@@ -357,15 +445,34 @@ export async function montarVisaoCompetencia(
     listarFolhasDaCompetencia(competenciaId, filtro),
     listarItensDaCompetencia(competenciaId, filtro),
     resumoEstruturaDaCompetencia(competenciaId),
+    totaisPorRubrica(competenciaId, filtro),
+    totaisPorCentroCusto(competenciaId, filtro),
+    totaisEspelhoOlac(competencia.ano, competencia.mes),
+    listarEspelhoNaoCasado(competencia.ano, competencia.mes),
+    ultimosLotesOlac(competencia.ano, competencia.mes),
   ]);
 
-  if (folhas.length > 0) {
+  if (folhas.length > 0 || variaveis.length > 0) {
     // Salário e resultado de folha são o dado mais sensível do sistema:
-    // toda leitura autorizada deixa trilha.
+    // toda leitura autorizada deixa trilha. As VARIÁVEIS (lançamentos manuais e
+    // benefícios) também carregam valor por pessoa nominada, e aparecem antes de
+    // qualquer folha ser calculada (competência ainda 'aberta') — ler esses
+    // valores sem trilha era o furo: a trilha se prende ao dado devolvido.
     await registrarLeituraSensivel({
       usuarioId: sessao.usuario_id,
       chavePermissao: "folha.ver",
       recurso: "rh_folha.folha_colaborador",
+      registroId: String(competenciaId),
+    });
+  }
+  if (olacTotais.length > 0) {
+    // O espelho da contabilidade também carrega valor por pessoa nominada
+    // (matrícula + valor nas linhas não casadas): leitura própria na trilha,
+    // com o recurso certo — é outro dado, de outra origem, na mesma tela.
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "folha.ver",
+      recurso: "rh_folha.espelho_olac",
       registroId: String(competenciaId),
     });
   }
@@ -408,8 +515,15 @@ export async function montarVisaoCompetencia(
       itens: itensPorFolha.get(folha.id) ?? [],
     })),
     folhas_na_competencia: estrutura.total_folhas,
+    por_rubrica: porRubrica,
+    por_centro_custo: porCentro,
     opcoes_estrutura: estrutura.opcoes,
     totais,
+    olac: {
+      totais: olacTotais,
+      nao_casadas: olacNaoCasadas,
+      lotes: olacLotes,
+    },
   };
 }
 
@@ -968,12 +1082,49 @@ export async function calcularCompetencia(
           .join(", ")} — cadastre em Parâmetros antes de calcular.`
       );
     }
-    const [rubricas, colaboradores, variaveis, impedidos] = await Promise.all([
-      listarRubricasVigentes(dataRef, cliente),
-      listarColaboradoresParaCalculo(cliente, dataRef),
-      listarVariaveis(competenciaId, cliente),
-      listarImpedidos(dataRef, cliente),
-    ]);
+    const [rubricas, colaboradores, variaveis, impedidos, suspensoes] =
+      await Promise.all([
+        listarRubricasVigentes(dataRef, cliente),
+        listarColaboradoresParaCalculo(cliente, dataRef),
+        listarVariaveis(competenciaId, cliente),
+        listarImpedidos(dataRef, cliente),
+        // Suspensão → folha (D2:a, 0100): a janela intersectando a competência
+        // ESTENDIDA 6 dias para trás — o DSR do primeiro domingo pode cair por
+        // suspensão que acabou no mês anterior (ver suspensao.ts).
+        listarSuspensoesParaCalculo(
+          cliente,
+          inicioBuscaSuspensao(competencia.ano, competencia.mes),
+          dataRef
+        ),
+      ]);
+
+    // Recorte de cada janela pelo mês (puro): dias corridos DESTA competência
+    // + domingos de DSR perdidos. Medida sem efeito aqui (dias 0 e nenhum
+    // domingo) fica de fora — não polui a memória do item.
+    const suspensoesPorColaborador = new Map<number, SuspensaoMotor[]>();
+    let suspensoesAplicadas = 0;
+    for (const medida of suspensoes) {
+      const recorte = apurarSuspensaoNaCompetencia(
+        competencia.ano,
+        competencia.mes,
+        medida.inicio,
+        medida.fim
+      );
+      if (recorte.dias.length === 0 && recorte.domingos_dsr.length === 0)
+        continue;
+      const lista = suspensoesPorColaborador.get(medida.colaborador_id) ?? [];
+      lista.push({
+        medida_id: medida.medida_id,
+        inicio: medida.inicio,
+        fim: medida.fim,
+        // DATAS, não contagem: o motor funde as medidas por UNIÃO (Set) antes
+        // de contar — sobreposição não desconta o mesmo dia/DSR duas vezes.
+        dias_na_competencia: recorte.dias,
+        domingos_dsr: recorte.domingos_dsr,
+      });
+      suspensoesPorColaborador.set(medida.colaborador_id, lista);
+      suspensoesAplicadas += 1;
+    }
 
     const variaveisPorColaborador = new Map<number, VariavelMotor[]>();
     let variaveisIgnoradas = 0;
@@ -1004,6 +1155,8 @@ export async function calcularCompetencia(
         dependentes_irrf: colaborador.dependentes_irrf,
         carga_semanal_minutos: colaborador.carga_semanal_minutos,
         variaveis: variaveisPorColaborador.get(colaborador.colaborador_id) ?? [],
+        suspensoes:
+          suspensoesPorColaborador.get(colaborador.colaborador_id) ?? [],
         rubricas,
         tabela_inss: tabelas.inss,
         tabela_irrf: tabelas.irrf,
@@ -1059,6 +1212,12 @@ export async function calcularCompetencia(
         "Folhas calculadas": { de: null, para: String(colaboradores.length) },
         Impedidos: { de: null, para: String(impedidos.length) },
         "Variáveis ignoradas": { de: null, para: String(variaveisIgnoradas) },
+        // Eixo 8: só a CONTAGEM — a medida em si (id) fica na memória do item
+        // 1203, atrás do mesmo gate (folha.ver, com trilha) dos outros itens.
+        "Suspensões disciplinares descontadas": {
+          de: null,
+          para: String(suspensoesAplicadas),
+        },
       },
     });
     return {
@@ -1349,20 +1508,31 @@ export interface VisaoParametros {
   irrf: VersaoTabelaIrrf[];
   gerais: VersaoParametros[];
   conferencia: SituacaoConferencia[];
+  /** De-para rubrica → conta contábil da OLAC (E3:a), com todas as vigências. */
+  contas_contabeis: ContaContabilRubrica[];
 }
 
 export async function montarVisaoParametros(): Promise<VisaoParametros> {
   // Tela de catálogo: mostra o que vale HOJE, e não fala de competência. O gate
   // da aprovação é que confere na data da competência (aprovarCompetencia).
   const hoje = await hojeParaFolha();
-  const [rubricas, inss, irrf, gerais, conferencia] = await Promise.all([
-    listarCatalogoRubricas(),
-    listarVersoesInss(),
-    listarVersoesIrrf(),
-    listarVersoesParametros(),
-    situacaoConferenciaTabelas(hoje),
-  ]);
-  return { rubricas, inss, irrf, gerais, conferencia };
+  const [rubricas, inss, irrf, gerais, conferencia, contasContabeis] =
+    await Promise.all([
+      listarCatalogoRubricas(),
+      listarVersoesInss(),
+      listarVersoesIrrf(),
+      listarVersoesParametros(),
+      situacaoConferenciaTabelas(hoje),
+      listarCatalogoContaContabil(),
+    ]);
+  return {
+    rubricas,
+    inss,
+    irrf,
+    gerais,
+    conferencia,
+    contas_contabeis: contasContabeis,
+  };
 }
 
 /**
@@ -1721,12 +1891,883 @@ export async function conferirTabelaLegal(
 // ------------------------------------------------------------------ indicador
 
 /**
- * % das competências mensais dos últimos 12 meses fechadas até o dia 5 do mês
- * seguinte (America/Sao_Paulo). Null quando nenhuma competência venceu o prazo.
+ * % das competências mensais dos últimos 12 meses fechadas até o 5º dia útil do
+ * mês seguinte (art. 459 §1º; sábado conta, domingo e feriado nacional não;
+ * America/Sao_Paulo). Null quando nenhuma competência venceu o prazo.
  * Agregado sem valores — seguro para o painel de indicadores.
  */
 export async function valorIndicadorFolhaNoPrazo(): Promise<number | null> {
   const dados = await indicadorFolhaNoPrazo();
   if (!dados) return null;
   return Math.round((dados.no_prazo / dados.total) * 1000) / 10;
+}
+
+// ------------------------------------------------------------------ prévia de férias (frente 1.6)
+
+export interface PreviaFerias {
+  programacao: ProgramacaoParaPrevia;
+  /** A data que resolveu TODAS as vigências da prévia (ver o comentário). */
+  data_referencia: string;
+  dependentes_irrf: number;
+  resultado: ResultadoMotorFerias;
+}
+
+/**
+ * Prévia de valores de uma programação de férias — SÓ LEITURA: nada é gravado
+ * em folha nenhuma; o resultado sai com a memória de cálculo de cada item.
+ *
+ * A DATA DE REFERÊNCIA é o INÍCIO DO GOZO: o art. 142 da CLT manda pagar as
+ * férias com a "remuneração que for devida na data da sua concessão", então é
+ * nela que se resolvem salário, dependentes, versão de rubrica e as tabelas
+ * legais — a mesma mecânica de vigência do cálculo mensal
+ * (dataReferenciaCompetencia), com a data que a lei dá a esta conta. Programar
+ * dezembro em agosto calcula com o que valerá em dezembro segundo o cadastro
+ * de hoje; se o salário mudar antes do gozo, a prévia muda junto — é prévia.
+ *
+ * TRIBUTAÇÃO: a prévia de programação é sempre de férias GOZADAS (quem gozará
+ * é quem programou); o motor aplica INSS/IRRF pelas incidências vigentes de
+ * 0136/0137. Férias INDENIZADAS (rescisão) usarão o mesmo motor com
+ * modalidade própria — sem incidência, verba indenizatória.
+ */
+export async function calcularPreviaFerias(
+  sessao: PayloadSessao,
+  programacaoId: number
+): Promise<PreviaFerias> {
+  const programacao = await buscarProgramacaoParaPrevia(programacaoId);
+  if (!programacao) {
+    throw new ErroHttp(404, "Programação de férias não encontrada.");
+  }
+  if (programacao.status === "recusada" || programacao.status === "cancelada") {
+    throw new ErroHttp(
+      409,
+      `Prévia indisponível: a programação está "${programacao.status}" — férias que não vão acontecer não têm valor a prever.`
+    );
+  }
+
+  const dataRef = programacao.inicio_gozo;
+  const [colaborador, { tabelas, faltantes }, rubricas] = await Promise.all([
+    buscarColaboradorParaFerias(programacao.colaborador_id, dataRef),
+    tabelasVigentes(dataRef),
+    listarRubricasVigentes(dataRef),
+  ]);
+  if (!colaborador) {
+    throw new ErroHttp(
+      409,
+      `Sem posição com salário vigente em ${dataRef} para ${programacao.colaborador_nome} (${programacao.matricula}) — a prévia não tem remuneração de referência.`
+    );
+  }
+  if (!tabelas) {
+    throw new ErroHttp(
+      409,
+      `Sem tabela legal vigente em ${dataRef}: ${faltantes
+        .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
+        .join(", ")} — cadastre em Parâmetros antes da prévia.`
+    );
+  }
+
+  let resultado: ResultadoMotorFerias;
+  try {
+    resultado = calcularFerias({
+      modalidade: "gozadas",
+      salario_base_centavos: colaborador.salario_centavos,
+      dependentes_irrf: colaborador.dependentes_irrf,
+      dias_gozo: programacao.dias_gozo,
+      dias_abono: programacao.dias_abono,
+      // Importadores de variáveis ainda não existem — o motor avisa na memória.
+      media_variaveis_centavos: null,
+      rubricas,
+      tabela_inss: tabelas.inss,
+      tabela_irrf: tabelas.irrf,
+      parametros: tabelas.parametros,
+    });
+  } catch (erro) {
+    if (erro instanceof ErroMotor) {
+      throw new ErroHttp(
+        409,
+        `Prévia de férias de ${programacao.colaborador_nome} (${programacao.matricula}): ${erro.message}.`
+      );
+    }
+    throw erro;
+  }
+
+  // Valor de férias deriva do salário — dado mais sensível do sistema: toda
+  // leitura autorizada deixa trilha, com a chave que DE FATO autorizou.
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.ver",
+    recurso: "rh.programacao_ferias",
+    registroId: String(programacaoId),
+  });
+
+  return {
+    programacao,
+    data_referencia: dataRef,
+    dependentes_irrf: colaborador.dependentes_irrf,
+    resultado,
+  };
+}
+
+// ------------------------------------------------------------------ prévia de 13º (onda 2)
+
+export interface PreviaDecimo {
+  colaborador: {
+    id: number;
+    nome_completo: string;
+    matricula: string;
+    data_admissao: string;
+  };
+  ano: number;
+  parcela: ParcelaDecimo;
+  /** A data que resolveu TODAS as vigências da prévia (ver o comentário). */
+  data_referencia: string;
+  dependentes_irrf: number;
+  resultado: ResultadoMotorDecimo;
+}
+
+/**
+ * A data legal de cada parcela é a data de referência das vigências: a 1ª
+ * parcela vence em 30/11 (Lei 4.749/65, art. 2º) e a 2ª em 20/12 (art. 1º) —
+ * salário, dependentes, versão de rubrica e tabelas legais se resolvem na data
+ * da PARCELA calculada, a mesma mecânica de vigência do cálculo mensal
+ * (dataReferenciaCompetencia) e da prévia de férias (art. 142).
+ */
+export function dataReferenciaDecimo(
+  ano: number,
+  parcela: ParcelaDecimo
+): string {
+  return parcela === 1 ? `${ano}-11-30` : `${ano}-12-20`;
+}
+
+/**
+ * Prévia de UMA parcela do 13º de um colaborador — SÓ LEITURA: nada é gravado
+ * em folha nenhuma; o resultado sai com a memória de cálculo de cada item.
+ *
+ * DESLIGADO NÃO PASSA: o 13º proporcional de quem desliga é verba rescisória e
+ * pertence ao motor de rescisão (estágio 3) — calcular aqui projetaria avos
+ * até 31/12 para um vínculo que não chega lá. A recusa é explicável, não um
+ * resultado errado.
+ *
+ * MÉDIAS e AFASTAMENTOS entram como "não disponíveis" (os importadores de
+ * variáveis e a leitura de afastamento sem remuneração ainda não existem) — o
+ * motor aplica os defaults conservadores e os AVISOS ficam na saída.
+ */
+export async function calcularPreviaDecimo(
+  sessao: PayloadSessao,
+  colaboradorId: number,
+  ano: number,
+  parcela: ParcelaDecimo
+): Promise<PreviaDecimo> {
+  const dataRef = dataReferenciaDecimo(ano, parcela);
+  const [colaborador, { tabelas, faltantes }, rubricas] = await Promise.all([
+    buscarColaboradorParaDecimo(colaboradorId, dataRef),
+    tabelasVigentes(dataRef),
+    listarRubricasVigentes(dataRef),
+  ]);
+  if (!colaborador) {
+    throw new ErroHttp(404, "Colaborador não encontrado.");
+  }
+  if (
+    colaborador.data_desligamento !== null &&
+    colaborador.data_desligamento <= `${ano}-12-31`
+  ) {
+    throw new ErroHttp(
+      409,
+      `${colaborador.nome_completo} (${colaborador.matricula}) tem desligamento em ${colaborador.data_desligamento}: o 13º proporcional de quem desliga é verba rescisória — motor de rescisão (estágio 3), não esta prévia.`
+    );
+  }
+  if (colaborador.salario_centavos === null) {
+    throw new ErroHttp(
+      409,
+      `Sem posição com salário vigente em ${dataRef} para ${colaborador.nome_completo} (${colaborador.matricula}) — a prévia não tem remuneração de referência.`
+    );
+  }
+  if (!tabelas) {
+    throw new ErroHttp(
+      409,
+      `Sem tabela legal vigente em ${dataRef}: ${faltantes
+        .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
+        .join(", ")} — cadastre em Parâmetros antes da prévia.`
+    );
+  }
+
+  let resultado: ResultadoMotorDecimo;
+  try {
+    resultado = calcularDecimo({
+      ano,
+      parcela,
+      data_admissao: colaborador.data_admissao,
+      salario_base_centavos: colaborador.salario_centavos,
+      dependentes_irrf: colaborador.dependentes_irrf,
+      // Importadores de variáveis e leitura de afastamento sem remuneração
+      // ainda não existem — o motor avisa na saída (defaults conservadores).
+      media_variaveis_centavos: null,
+      avos_afastamento: null,
+      adiantamento_pago_centavos: null,
+      rubricas,
+      tabela_inss: tabelas.inss,
+      tabela_irrf: tabelas.irrf,
+    });
+  } catch (erro) {
+    if (erro instanceof ErroMotor) {
+      throw new ErroHttp(
+        409,
+        `Prévia de 13º de ${colaborador.nome_completo} (${colaborador.matricula}): ${erro.message}.`
+      );
+    }
+    throw erro;
+  }
+
+  // Valor de 13º deriva do salário — dado mais sensível do sistema: toda
+  // leitura autorizada deixa trilha, com a chave que DE FATO autorizou.
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.ver",
+    recurso: "rh.colaborador",
+    registroId: String(colaboradorId),
+  });
+
+  return {
+    colaborador: {
+      id: colaborador.colaborador_id,
+      nome_completo: colaborador.nome_completo,
+      matricula: colaborador.matricula,
+      data_admissao: colaborador.data_admissao,
+    },
+    ano,
+    parcela,
+    data_referencia: dataRef,
+    dependentes_irrf: colaborador.dependentes_irrf,
+    resultado,
+  };
+}
+
+// ------------------------------------------------------------------ prévia de rescisão (onda 3)
+
+export interface PreviaRescisao {
+  processo: DesligamentoParaRescisao;
+  /** A data que resolveu TODAS as vigências da prévia (ver o comentário). */
+  data_referencia: string;
+  dependentes_irrf: number;
+  resultado: ResultadoMotorRescisao;
+}
+
+/**
+ * Prévia de valores da rescisão de UM processo de desligamento — SÓ LEITURA:
+ * nada é gravado em folha nenhuma; o resultado sai com a memória de cálculo de
+ * cada item. O motor consome os motores de férias (modalidade indenizadas) e
+ * de 13º (avos até a data) — ver calculo-rescisao.ts.
+ *
+ * A DATA DE REFERÊNCIA é o TÉRMINO do contrato: efetivo quando o processo já
+ * encerrou, projetado enquanto está em andamento (é a data que o acerto do
+ * art. 477 usa). É nela que se resolvem salário, dependentes, versões de
+ * rubrica e tabelas legais — a mesma mecânica de vigência do cálculo mensal
+ * (dataReferenciaCompetencia), da prévia de férias (art. 142) e da de 13º.
+ *
+ * Processo CANCELADO não tem prévia (409 explicável): rescisão que não vai
+ * acontecer não tem valor a prever. Em andamento ou encerrado, tem.
+ *
+ * O SALDO DO FGTS é dado EXTERNO (extrato da Caixa) — vem do chamador quando
+ * houver; sem ele a multa sai SÓ sobre os depósitos da própria rescisão, com
+ * AVISO (decisão registrada no motor — Lei 8.036/90, art. 18, §1º).
+ */
+export async function calcularPreviaRescisao(
+  sessao: PayloadSessao,
+  processoId: number,
+  saldoFgtsCentavos: number | null = null
+): Promise<PreviaRescisao> {
+  const processo = await buscarDesligamentoParaRescisao(processoId);
+  if (!processo) {
+    throw new ErroHttp(404, "Processo de desligamento não encontrado.");
+  }
+  if (processo.estado === "cancelado") {
+    throw new ErroHttp(
+      409,
+      "Prévia indisponível: o processo de desligamento foi cancelado — rescisão que não vai acontecer não tem valor a prever."
+    );
+  }
+
+  const dataRef =
+    processo.data_termino_efetiva ?? processo.data_projetada_termino;
+  const [colaborador, periodos, { tabelas, faltantes }, rubricas] =
+    await Promise.all([
+      buscarColaboradorParaDecimo(processo.colaborador_id, dataRef),
+      listarPeriodosAquisitivosParaRescisao(processo.colaborador_id),
+      tabelasVigentes(dataRef),
+      listarRubricasVigentes(dataRef),
+    ]);
+  if (!colaborador || colaborador.salario_centavos === null) {
+    throw new ErroHttp(
+      409,
+      `Sem posição com salário vigente em ${dataRef} para ${processo.colaborador_nome} (${processo.matricula}) — a prévia não tem remuneração de referência.`
+    );
+  }
+  if (!tabelas) {
+    throw new ErroHttp(
+      409,
+      `Sem tabela legal vigente em ${dataRef}: ${faltantes
+        .map((tipo) => ROTULOS_TABELA_LEGAL[tipo])
+        .join(", ")} — cadastre em Parâmetros antes da prévia.`
+    );
+  }
+
+  // Quem separa vencidos de em-curso é o serviço, que conhece o término:
+  // período COMPLETO até o término com saldo → indenizado; o período que o
+  // término corta ao meio → dá os avos das proporcionais.
+  const feriasVencidas = periodos
+    .filter((periodo) => periodo.fim <= dataRef && periodo.saldo_dias > 0)
+    .map((periodo) => ({
+      periodo_inicio: periodo.inicio,
+      periodo_fim: periodo.fim,
+      saldo_dias: periodo.saldo_dias,
+      limite_concessivo: periodo.limite_concessivo,
+    }));
+  const emCurso = periodos.filter(
+    (periodo) => periodo.inicio <= dataRef && periodo.fim > dataRef
+  );
+  const periodoEmCursoInicio =
+    emCurso.length > 0 ? emCurso[emCurso.length - 1].inicio : null;
+
+  let resultado: ResultadoMotorRescisao;
+  try {
+    resultado = calcularRescisao({
+      tipo_desligamento: processo.tipo,
+      iniciativa: processo.iniciativa,
+      modalidade_aviso: processo.modalidade_aviso,
+      data_admissao: processo.data_admissao,
+      data_comunicacao: processo.data_comunicacao,
+      data_termino: dataRef,
+      salario_base_centavos: colaborador.salario_centavos,
+      dependentes_irrf: colaborador.dependentes_irrf,
+      // Importadores de variáveis, extrato do FGTS, 1ª parcela de 13º gravada
+      // e afastamento sem remuneração ainda não alimentam o motor — os
+      // defaults conservadores avisam na saída (molde pendências #17/#19).
+      media_variaveis_centavos: null,
+      ferias_vencidas: feriasVencidas,
+      periodo_aquisitivo_em_curso_inicio: periodoEmCursoInicio,
+      saldo_fgts_centavos: saldoFgtsCentavos,
+      adiantamento_decimo_pago_centavos: null,
+      avos_afastamento_13: null,
+      rubricas,
+      tabela_inss: tabelas.inss,
+      tabela_irrf: tabelas.irrf,
+      parametros: tabelas.parametros,
+    });
+  } catch (erro) {
+    if (erro instanceof ErroMotor) {
+      throw new ErroHttp(
+        409,
+        `Prévia de rescisão de ${processo.colaborador_nome} (${processo.matricula}): ${erro.message}.`
+      );
+    }
+    throw erro;
+  }
+
+  // D3 (costura rescisão × disciplinar): esta prévia NÃO desconta a suspensão
+  // disciplinar do mês do término, e o cálculo MENSAL exclui o desligado —
+  // sem aviso, o desconto D2:a simplesmente nunca aconteceria. A busca é a
+  // MESMA do cálculo mensal (janela intersectando a competência do término,
+  // estendida 6 dias para trás pelo DSR — suspensao.ts); o recorte pelo mês e
+  // o cap no término são do helper puro. O desconto em si é desenho do ACERTO
+  // (integração futura) — aqui só o aviso explícito, com os ids das medidas.
+  const anoTermino = Number(dataRef.slice(0, 4));
+  const mesTermino = Number(dataRef.slice(5, 7));
+  const suspensoesDoMesDoTermino = await comTransacao(
+    sessao.usuario_id,
+    (cliente) =>
+      listarSuspensoesParaCalculo(
+        cliente,
+        inicioBuscaSuspensao(anoTermino, mesTermino),
+        dataRef
+      )
+  );
+  const avisoSuspensao = avisoSuspensaoNoMesDoTermino(
+    dataRef,
+    suspensoesDoMesDoTermino.filter(
+      (medida) => medida.colaborador_id === processo.colaborador_id
+    )
+  );
+  if (avisoSuspensao !== null) {
+    resultado.avisos.push(avisoSuspensao);
+  }
+
+  // Valor de rescisão deriva do salário — dado mais sensível do sistema: toda
+  // leitura autorizada deixa trilha, com a chave que DE FATO autorizou.
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.ver",
+    recurso: "rh.processo_desligamento",
+    registroId: String(processoId),
+  });
+
+  return {
+    processo,
+    data_referencia: dataRef,
+    dependentes_irrf: colaborador.dependentes_irrf,
+    resultado,
+  };
+}
+
+// ------------------------------------------------------------------ OLAC (frente 3.2 — E1–E4)
+
+const TABELA_LOTE_OLAC = "rh_folha.lote_olac";
+const TABELA_CONTA_CONTABIL = "rh_folha.conta_contabil_rubrica";
+
+export interface ArquivoOlacGerado {
+  nome_arquivo: string;
+  conteudo: string;
+  linhas: number;
+  colaboradores: number;
+  /** Linhas cuja rubrica não tem de-para vigente — saem com a conta vazia. */
+  linhas_sem_de_para: number;
+}
+
+/**
+ * EXPORTAÇÃO (a ida): gera o arquivo do layout NOSSO (E4) a partir dos itens
+ * calculados da competência — uma linha por colaborador × rubrica, com a conta
+ * contábil do de-para vigente NA DATA DE REFERÊNCIA da competência (E3:a).
+ * Registra o lote (direção 'exportacao') e a leitura sensível: o arquivo leva
+ * valor por pessoa para fora do sistema — é a leitura mais literal que existe.
+ *
+ * Rubrica sem de-para NÃO bloqueia: a coluna sai vazia e a contagem volta na
+ * resposta — quem decide se o arquivo serve assim é o DP, não o código.
+ */
+export async function exportarOlac(
+  sessao: PayloadSessao,
+  competenciaId: number
+): Promise<ArquivoOlacGerado> {
+  const competencia = await buscarCompetencia(competenciaId);
+  if (!competencia) {
+    throw new ErroHttp(404, "Competência não encontrada.");
+  }
+  const dataRef = dataReferenciaCompetencia(competencia.ano, competencia.mes);
+  const linhasExportacao = await listarLinhasParaExportarOlac(
+    competenciaId,
+    dataRef
+  );
+  if (linhasExportacao.length === 0) {
+    throw new ErroHttp(
+      409,
+      `A competência ${formatarCompetencia(competencia.ano, competencia.mes)} não tem folha calculada — calcule antes de exportar o arquivo OLAC.`
+    );
+  }
+  const linhas: LinhaOlac[] = linhasExportacao.map((linha) => ({
+    competencia_ano: competencia.ano,
+    competencia_mes: competencia.mes,
+    empresa_cnpj: linha.empresa_cnpj,
+    matricula: linha.matricula,
+    colaborador_nome: linha.colaborador_nome,
+    codigo_rubrica: linha.codigo_rubrica,
+    rubrica_nome: linha.rubrica_nome,
+    natureza: linha.natureza,
+    conta_contabil: linha.conta_contabil,
+    valor_centavos: linha.valor_centavos,
+  }));
+  const nomeArquivo = nomeArquivoOlac(competencia.ano, competencia.mes);
+  const conteudo = gerarArquivoOlac(linhas);
+  const colaboradores = new Set(linhas.map((linha) => linha.matricula)).size;
+  const semDePara = linhas.filter(
+    (linha) => linha.conta_contabil === null
+  ).length;
+
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const loteId = await inserirLoteOlac(cliente, {
+      direcao: "exportacao",
+      arquivo: nomeArquivo,
+      competencia_ano: competencia.ano,
+      competencia_mes: competencia.mes,
+      empresa_id: null, // a ida cobre o grupo inteiro; a empresa vai por linha
+      linhas_lidas: linhas.length,
+      linhas_aceitas: linhas.length,
+      linhas_rejeitadas: 0,
+      relatorio: {
+        colaboradores,
+        linhas_sem_de_para: semDePara,
+      },
+      gerado_por: sessao.usuario_id,
+    });
+    // Sem valores no diff — só contagens (folha é o dado mais sensível).
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "exportacao_olac",
+      tabela: TABELA_LOTE_OLAC,
+      registroId: String(loteId),
+      diff: {
+        Competência: {
+          de: null,
+          para: formatarCompetencia(competencia.ano, competencia.mes),
+        },
+        Arquivo: { de: null, para: nomeArquivo },
+        Linhas: { de: null, para: String(linhas.length) },
+        Colaboradores: { de: null, para: String(colaboradores) },
+        "Linhas sem de-para de conta contábil": {
+          de: null,
+          para: String(semDePara),
+        },
+      },
+    });
+  });
+  // O arquivo carrega salário e descontos por pessoa nominada: trilha com a
+  // chave que DE FATO autorizou a rota (eixo 8).
+  await registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "folha.operar",
+    recurso: "rh_folha.item_calculo",
+    registroId: `competencia:${competenciaId}`,
+  });
+  return {
+    nome_arquivo: nomeArquivo,
+    conteudo,
+    linhas: linhas.length,
+    colaboradores,
+    linhas_sem_de_para: semDePara,
+  };
+}
+
+export interface ResultadoImportacaoOlac {
+  lote_id: number;
+  linhas_lidas: number;
+  linhas_aceitas: number;
+  linhas_rejeitadas: number;
+  situacoes: Record<SituacaoEspelho, number>;
+  /** Linhas do espelho anterior substituídas (mesma competência+empresa). */
+  substituidas: number;
+  rejeicoes: { linha: number; motivo: string; conteudo: string }[];
+}
+
+/**
+ * IMPORTAÇÃO (a volta): lê o MESMO layout da exportação (E4), casa matrícula e
+ * rubrica com o cadastro e grava o ESPELHO de conciliação (E1:a/E2:a) com a
+ * situação linha a linha — linha ruim vira rejeição com motivo e NUNCA aborta
+ * o lote (regra de ouro dos importadores da casa).
+ *
+ * REIMPORTAR SUBSTITUI: antes de gravar, o espelho anterior da MESMA
+ * competência+empresa (vindo de importação) é apagado — o padrão dos lotes por
+ * origem da folha (importarDescontosBeneficios / importarVariaveisDoPonto).
+ *
+ * SEM trava de estado da competência, de propósito: conciliação contábil
+ * acontece depois do fechamento, e o espelho não toca a folha calculada (E2:a
+ * — somente-leitura, tabela paralela).
+ *
+ * O que rejeita (a linha, nunca o lote): análise de formato; competência da
+ * linha diferente da competência da rota (arquivo trocado); CNPJ que não é de
+ * nenhuma empresa do grupo (sem empresa não há par empresa+competência para o
+ * espelho conciliar).
+ */
+export async function importarOlac(
+  sessao: PayloadSessao,
+  competenciaId: number,
+  dados: { arquivo: string; conteudo: string }
+): Promise<ResultadoImportacaoOlac> {
+  const competencia = await buscarCompetencia(competenciaId);
+  if (!competencia) {
+    throw new ErroHttp(404, "Competência não encontrada.");
+  }
+  const linhasArquivo = dividirLinhas(dados.conteudo).filter(
+    (item, indice) => !(indice === 0 && ehCabecalhoOlac(item.bruta))
+  );
+  if (linhasArquivo.length === 0) {
+    throw new ErroHttpCampo(
+      400,
+      "O arquivo está vazio — nenhuma linha além do cabeçalho.",
+      "conteudo"
+    );
+  }
+  const dataRef = dataReferenciaCompetencia(competencia.ano, competencia.mes);
+  const rotuloCompetencia = formatarCompetencia(
+    competencia.ano,
+    competencia.mes
+  );
+
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    // PRIMEIRO passo da transação: serializa a importação desta competência
+    // (advisory lock transacional). Duplo POST não duplica mais o espelho —
+    // o DELETE de substituição em READ COMMITTED não enxerga INSERTs
+    // concorrentes; com a trava, o segundo lote espera e SUBSTITUI o primeiro.
+    await travarImportacaoOlac(cliente, competencia.ano, competencia.mes);
+    const [colaboradorPorMatricula, empresaPorCnpj, rubricas] =
+      await Promise.all([
+        mapaColaboradorPorMatricula(cliente),
+        mapaEmpresaPorCnpj(cliente),
+        // As rubricas VIGENTES NA COMPETÊNCIA — a mesma régua do cálculo: o
+        // arquivo devolvido referencia os códigos que exportamos para aquele
+        // mês, não o catálogo de hoje.
+        listarRubricasVigentes(dataRef, cliente),
+      ]);
+    const rubricasPorCodigo = new Set(rubricas.map((item) => item.codigo));
+
+    const rejeicoes: { linha: number; motivo: string; conteudo: string }[] = [];
+    const aceitas: {
+      linha: LinhaOlac;
+      empresa_id: number | null;
+      colaborador_id: number | null;
+      codigo_rubrica_interno: string | null;
+      situacao: SituacaoEspelho;
+    }[] = [];
+    const situacoes: Record<SituacaoEspelho, number> = {
+      casada: 0,
+      sem_rubrica: 0,
+      sem_colaborador: 0,
+    };
+
+    for (const { numero, bruta } of linhasArquivo) {
+      const analise = analisarLinhaOlac(bruta.split(SEPARADOR_OLAC));
+      if (!analise.ok) {
+        rejeicoes.push({ linha: numero, motivo: analise.motivo, conteudo: bruta });
+        continue;
+      }
+      const linha = analise.dados;
+      if (
+        linha.competencia_ano !== competencia.ano ||
+        linha.competencia_mes !== competencia.mes
+      ) {
+        rejeicoes.push({
+          linha: numero,
+          motivo: `Linha da competência ${formatarCompetencia(linha.competencia_ano, linha.competencia_mes)} num arquivo importado em ${rotuloCompetencia} — confira se o arquivo é o certo`,
+          conteudo: bruta,
+        });
+        continue;
+      }
+      let empresaId: number | null = null;
+      if (linha.empresa_cnpj !== null) {
+        empresaId = empresaPorCnpj.get(linha.empresa_cnpj) ?? null;
+        if (empresaId === null) {
+          rejeicoes.push({
+            linha: numero,
+            motivo: `CNPJ ${linha.empresa_cnpj} não é de nenhuma empresa do grupo`,
+            conteudo: bruta,
+          });
+          continue;
+        }
+      }
+      const casamento = casarLinhaOlac(linha, {
+        colaboradorPorMatricula,
+        rubricasPorCodigo,
+      });
+      situacoes[casamento.situacao] += 1;
+      aceitas.push({
+        linha,
+        empresa_id: empresaId,
+        colaborador_id: casamento.colaborador_id,
+        codigo_rubrica_interno: casamento.codigo_rubrica_interno,
+        situacao: casamento.situacao,
+      });
+    }
+
+    // Substituição por empresa+competência (E1:a) ANTES de gravar o lote novo.
+    const empresasTocadas = new Map<string, number | null>();
+    for (const item of aceitas) {
+      empresasTocadas.set(String(item.empresa_id), item.empresa_id);
+    }
+    let substituidas = 0;
+    for (const empresaId of empresasTocadas.values()) {
+      substituidas += await apagarEspelhoOlacAnterior(
+        cliente,
+        competencia.ano,
+        competencia.mes,
+        empresaId
+      );
+    }
+
+    // A empresa do LOTE: quando o arquivo é de UMA empresa (a volta da OLAC
+    // vem por empresa processada fora), ela fica no lote; misto fica NULL e a
+    // empresa vale linha a linha no espelho.
+    const empresasDistintas = [...empresasTocadas.values()];
+    const empresaDoLote =
+      empresasDistintas.length === 1 ? empresasDistintas[0] : null;
+
+    const loteId = await inserirLoteOlac(cliente, {
+      direcao: "importacao",
+      arquivo: dados.arquivo,
+      competencia_ano: competencia.ano,
+      competencia_mes: competencia.mes,
+      empresa_id: empresaDoLote,
+      linhas_lidas: linhasArquivo.length,
+      linhas_aceitas: aceitas.length,
+      linhas_rejeitadas: rejeicoes.length,
+      relatorio: {
+        rejeitadas: rejeicoes,
+        situacoes,
+        substituidas,
+      },
+      gerado_por: sessao.usuario_id,
+    });
+    for (const item of aceitas) {
+      await inserirEspelhoOlac(cliente, {
+        lote_id: loteId,
+        competencia_ano: competencia.ano,
+        competencia_mes: competencia.mes,
+        empresa_id: item.empresa_id,
+        empresa_cnpj: item.linha.empresa_cnpj,
+        matricula: item.linha.matricula,
+        colaborador_id: item.colaborador_id,
+        codigo_rubrica_externo: item.linha.codigo_rubrica,
+        codigo_rubrica_interno: item.codigo_rubrica_interno,
+        conta_contabil: item.linha.conta_contabil,
+        valor_centavos: item.linha.valor_centavos,
+        situacao: item.situacao,
+      });
+    }
+
+    // Sem valores no diff — contagens e situações apenas.
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "importacao_olac",
+      tabela: TABELA_LOTE_OLAC,
+      registroId: String(loteId),
+      diff: {
+        Competência: { de: null, para: rotuloCompetencia },
+        Arquivo: { de: null, para: dados.arquivo },
+        "Linhas lidas": { de: null, para: String(linhasArquivo.length) },
+        "Linhas aceitas": { de: null, para: String(aceitas.length) },
+        "Linhas rejeitadas": { de: null, para: String(rejeicoes.length) },
+        "Casadas / sem rubrica / sem colaborador": {
+          de: null,
+          para: `${situacoes.casada} / ${situacoes.sem_rubrica} / ${situacoes.sem_colaborador}`,
+        },
+        "Espelho anterior substituído": {
+          de: null,
+          para: `${substituidas} linha(s)`,
+        },
+      },
+    });
+
+    return {
+      lote_id: loteId,
+      linhas_lidas: linhasArquivo.length,
+      linhas_aceitas: aceitas.length,
+      linhas_rejeitadas: rejeicoes.length,
+      situacoes,
+      substituidas,
+      rejeicoes,
+    };
+  });
+}
+
+// ------------------------------------------------------------------ de-para conta contábil (E3:a)
+
+/** Um dia antes, em aritmética de calendário UTC (molde dataReferencia…). */
+function diaAnterior(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1, dia - 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * Cria a vigência do de-para de uma rubrica. Se já existe uma ATIVA, ela é
+ * encerrada NO DIA ANTERIOR ao início da nova, na mesma transação — o catálogo
+ * nunca fica com duas contas valendo no mesmo dia (o índice parcial do banco
+ * é o cinto; isto é a regra).
+ *
+ * A validação corre contra TODAS as vigências da rubrica, ENCERRADAS
+ * incluídas: uma vigência retro-datada que sobrepõe janela já encerrada
+ * criaria duas contas "valendo" no mesmo dia — e quem escolheria qual sai no
+ * arquivo seria o desempate da LATERAL, não uma regra. Interseção → 409 com a
+ * janela conflitante.
+ */
+export async function criarContaContabil(
+  sessao: PayloadSessao,
+  dados: NovaContaContabil
+): Promise<{ id: number }> {
+  return comTransacao(sessao.usuario_id, async (cliente) => {
+    const rubrica = await buscarRubricaParaAtualizar(cliente, dados.rubrica_id);
+    if (!rubrica) {
+      throw new ErroHttpCampo(404, "Rubrica não encontrada.", "rubrica_id");
+    }
+    const vigencias = await listarVigenciasContaContabilParaAtualizar(
+      cliente,
+      dados.rubrica_id
+    );
+    const ativa = vigencias.find((vigencia) => vigencia.status === "ativa");
+    if (ativa && dados.inicio_vigencia <= ativa.inicio_vigencia) {
+      throw new ErroHttpCampo(
+        400,
+        `A nova vigência precisa começar depois de ${ativa.inicio_vigencia}, o início da vigência atual.`,
+        "inicio_vigencia"
+      );
+    }
+    const conflito = vigenciaContaConflitante(dados.inicio_vigencia, vigencias);
+    if (conflito) {
+      throw new ErroHttpCampo(
+        409,
+        `A vigência começando em ${dados.inicio_vigencia} sobrepõe a conta ` +
+          `${conflito.conta_contabil}, que valeu de ${conflito.inicio_vigencia} ` +
+          `a ${conflito.fim_vigencia ?? "(sem fim)"} — duas contas não podem ` +
+          `valer no mesmo dia. Comece depois de ${conflito.fim_vigencia ?? conflito.inicio_vigencia}.`,
+        "inicio_vigencia"
+      );
+    }
+    let contaAnterior: string | null = null;
+    if (ativa) {
+      await encerrarContaContabilNoBanco(
+        cliente,
+        ativa.id,
+        diaAnterior(dados.inicio_vigencia)
+      );
+      contaAnterior = `versão ${ativa.id} encerrada em ${diaAnterior(dados.inicio_vigencia)}`;
+    }
+    const id = await inserirContaContabil(cliente, {
+      rubrica_id: dados.rubrica_id,
+      conta_contabil: dados.conta_contabil,
+      inicio_vigencia: dados.inicio_vigencia,
+      criado_por: sessao.usuario_id,
+    });
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_CONTA_CONTABIL,
+      registroId: String(id),
+      diff: {
+        Rubrica: { de: null, para: `${rubrica.codigo} — ${rubrica.nome}` },
+        "Conta contábil": { de: null, para: dados.conta_contabil },
+        "Início de vigência": { de: null, para: dados.inicio_vigencia },
+        "Vigência anterior": { de: null, para: contaAnterior ?? "não havia" },
+      },
+    });
+    return { id };
+  });
+}
+
+/** Encerra a vigência ativa do de-para — a rubrica volta a sair sem conta. */
+export async function encerrarContaContabil(
+  sessao: PayloadSessao,
+  id: number,
+  dados: EncerrarContaContabil
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const vigencia = await buscarContaContabilParaAtualizar(cliente, id);
+    if (!vigencia) {
+      throw new ErroHttp(404, "Vigência de conta contábil não encontrada.");
+    }
+    if (vigencia.status !== "ativa") {
+      throw new ErroHttp(
+        409,
+        "Esta vigência já está encerrada — encerrada é imutável."
+      );
+    }
+    if (dados.fim_vigencia < vigencia.inicio_vigencia) {
+      throw new ErroHttpCampo(
+        400,
+        `O fim de vigência não pode ser anterior ao início (${vigencia.inicio_vigencia}).`,
+        "fim_vigencia"
+      );
+    }
+    await encerrarContaContabilNoBanco(cliente, id, dados.fim_vigencia);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "encerramento",
+      tabela: TABELA_CONTA_CONTABIL,
+      registroId: String(id),
+      diff: {
+        Rubrica: {
+          de: null,
+          para: `${vigencia.codigo} — ${vigencia.rubrica_nome}`,
+        },
+        "Conta contábil": { de: vigencia.conta_contabil, para: null },
+        "Fim de vigência": { de: null, para: dados.fim_vigencia },
+      },
+    });
+  });
 }

@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PortalColaborador } from "./portal-colaborador";
 
 /**
@@ -10,9 +9,6 @@ import { PortalColaborador } from "./portal-colaborador";
  * decide bloco por bloco pela chave do domínio dono.
  */
 export default async function PaginaPortalColaborador() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  await exigirSessaoDePagina();
   return <PortalColaborador />;
 }

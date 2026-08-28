@@ -1,4 +1,3 @@
-import { ErroHttp } from "../../lib/sessao";
 import type { Escopo } from "../colaboradores/repositorio";
 import { resolverEscopo } from "../colaboradores/servico";
 import { listarOpcoesDeFiltroEstrutura } from "../estrutura/repositorio";
@@ -540,16 +539,9 @@ export async function montarOrganograma(
   };
 }
 
-/** Guarda de sessão da rota: leitura de estrutura exige sessão completa. */
-export function exigirSessaoCompleta(sessao: PayloadSessao | null): PayloadSessao {
-  if (!sessao) {
-    throw new ErroHttp(401, "Não autenticado");
-  }
-  if (sessao.pendente_2fa) {
-    throw new ErroHttp(
-      403,
-      "Configure a autenticação em duas etapas para continuar"
-    );
-  }
-  return sessao;
-}
+// A guarda local `exigirSessaoCompleta` foi APAGADA (A6): ela era uma cópia
+// de exigirSessaoValida SEM a reconferência de usuário ativo — um desativado
+// lia a hierarquia inteira por até 8h de JWT. A rota usa exigirSessao (lib/
+// sessao), que reconfere `usuario.ativo` no banco a cada leitura — e, por
+// herdar exigirSessaoValida, também barra pendente_2fa e ciencia_pendente
+// (A8). Guarda de sessão não se copia: mora num lugar só.

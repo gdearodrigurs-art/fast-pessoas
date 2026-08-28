@@ -14,13 +14,17 @@ import {
   OrigemCandidato,
   RECOMENDACOES_PARECER,
   RecomendacaoParecer,
+  RESULTADOS_PESQUISA_SOCIAL,
+  ResultadoPesquisaSocial,
   ROTULOS_MOTIVO_MOVIMENTACAO,
   ROTULOS_ORIGEM,
   ROTULOS_RECOMENDACAO,
+  ROTULOS_RESULTADO_PESQUISA_SOCIAL,
   ROTULOS_STATUS_CANDIDATURA,
   ROTULOS_STATUS_OFERTA,
   ROTULOS_STATUS_VAGA,
 } from "@/dominios/recrutamento/esquemas";
+import type { ModeloResumo } from "@/dominios/recrutamento/repositorio";
 import comum from "./comum.module.css";
 import {
   formatarData,
@@ -35,6 +39,7 @@ import {
   Kanban,
   Parecer,
   Permissoes,
+  Vaga,
 } from "./tipos";
 
 interface Alvo {
@@ -67,6 +72,8 @@ export function KanbanVaga({
     (Alvo & { resposta: "aceita" | "recusada" }) | null
   >(null);
   const [admissao, setAdmissao] = useState<Alvo | null>(null);
+  const [pesquisaSocial, setPesquisaSocial] = useState<Alvo | null>(null);
+  const [dialogoTrocarModelo, setDialogoTrocarModelo] = useState(false);
   const [senha, setSenha] = useState<{
     candidato_nome: string;
     senha_temporaria: string;
@@ -150,7 +157,11 @@ export function KanbanVaga({
       !kanban.candidaturas.some((c) => c.candidato_id === candidato.id)
   );
 
-  function renderCartao(candidatura: CandidaturaCartao, etapaTipo: string | null) {
+  function renderCartao(
+    candidatura: CandidaturaCartao,
+    etapaTipo: string | null,
+    ehUltima: boolean
+  ) {
     return (
       <CartaoCandidatura
         key={candidatura.id}
@@ -158,13 +169,14 @@ export function KanbanVaga({
         etapaTipo={etapaTipo}
         pode={pode}
         vagaAberta={vagaAberta}
-        ehUltima={candidatura.etapa_ordem >= ultimaOrdem}
+        ehUltima={ehUltima}
         avancando={avancando === candidatura.id}
         aoAvancar={() => avancar(candidatura)}
         aoReprovar={() => setReprovacao({ candidatura })}
         aoOferta={() => setOferta({ candidatura })}
         aoResponder={(r) => setResposta({ candidatura, resposta: r })}
         aoIniciarAdmissao={() => setAdmissao({ candidatura })}
+        aoPesquisaSocial={() => setPesquisaSocial({ candidatura })}
       />
     );
   }
@@ -183,11 +195,21 @@ export function KanbanVaga({
             Banda congelada {formatarSalario(kanban.vaga.faixa_min)} a{" "}
             {formatarSalario(kanban.vaga.faixa_max)} · prazo-alvo{" "}
             {formatarData(kanban.vaga.prazo_alvo)}
-            {vagaAberta && ` (${textoPrazo(kanban.vaga.dias_ate_prazo)})`}
+            {vagaAberta && ` (${textoPrazo(kanban.vaga.dias_ate_prazo)})`} ·
+            modelo {kanban.vaga.modelo_nome}
           </p>
         </div>
         {pode.gerir && (
           <div className={comum.acoes}>
+            {vagaAberta && kanban.candidaturas.length === 0 && (
+              <button
+                className={comum.botaoSecundario}
+                type="button"
+                onClick={() => setDialogoTrocarModelo(true)}
+              >
+                Trocar modelo
+              </button>
+            )}
             <button
               className={comum.botaoSecundario}
               type="button"
@@ -226,7 +248,7 @@ export function KanbanVaga({
                 <p className={estilos.vazioColuna}>Ninguém nesta etapa.</p>
               ) : (
                 daColuna.map((candidatura) =>
-                  renderCartao(candidatura, etapa.tipo)
+                  renderCartao(candidatura, etapa.tipo, etapa.ordem >= ultimaOrdem)
                 )
               )}
             </div>
@@ -239,11 +261,22 @@ export function KanbanVaga({
               <span>{foraDasEtapas.length}</span>
             </h3>
             {foraDasEtapas.map((candidatura) =>
-              renderCartao(candidatura, null)
+              renderCartao(candidatura, null, false)
             )}
           </div>
         )}
       </div>
+
+      {dialogoTrocarModelo && (
+        <DialogoTrocarModelo
+          vaga={kanban.vaga}
+          aoFechar={() => setDialogoTrocarModelo(false)}
+          aoConcluir={() => {
+            setDialogoTrocarModelo(false);
+            recarregar();
+          }}
+        />
+      )}
 
       {dialogoNovoCandidato && (
         <DialogoNovoCandidato
@@ -299,6 +332,17 @@ export function KanbanVaga({
           aoFechar={() => setResposta(null)}
           aoConcluir={() => {
             setResposta(null);
+            recarregar();
+          }}
+        />
+      )}
+
+      {pesquisaSocial && (
+        <DialogoPesquisaSocial
+          candidatura={pesquisaSocial.candidatura}
+          aoFechar={() => setPesquisaSocial(null)}
+          aoConcluir={() => {
+            setPesquisaSocial(null);
             recarregar();
           }}
         />
@@ -363,6 +407,7 @@ function CartaoCandidatura({
   aoOferta,
   aoResponder,
   aoIniciarAdmissao,
+  aoPesquisaSocial,
 }: {
   candidatura: CandidaturaCartao;
   etapaTipo: string | null;
@@ -375,6 +420,7 @@ function CartaoCandidatura({
   aoOferta: () => void;
   aoResponder: (resposta: "aceita" | "recusada") => void;
   aoIniciarAdmissao: () => void;
+  aoPesquisaSocial: () => void;
 }) {
   const [aberto, setAberto] = useState(false);
   const [pareceres, setPareceres] = useState<Parecer[] | null>(null);
@@ -492,11 +538,39 @@ function CartaoCandidatura({
             {candidatura.oferta_dentro_banda === false && " (fora da banda)"}
           </span>
         )}
+        {/* Desfecho da pesquisa social — o serviço só o envia a rs.gerir (G3:a). */}
+        {candidatura.pesquisa_social_resultado && (
+          <span
+            className={`${comum.badge} ${
+              candidatura.pesquisa_social_resultado === "aprovado"
+                ? comum.badgeSuccess
+                : comum.badgeDanger
+            }`}
+          >
+            {ROTULOS_RESULTADO_PESQUISA_SOCIAL[
+              candidatura.pesquisa_social_resultado
+            ]}
+            {candidatura.pesquisa_social_tem_anexo && (
+              <>
+                {" — "}
+                <a
+                  href={`/api/recrutamento/candidaturas/${candidatura.id}/pesquisa-social/anexo`}
+                >
+                  anexo
+                </a>
+              </>
+            )}
+          </span>
+        )}
       </div>
 
       {pode.gerir && ativa && vagaAberta && (
         <div className={comum.acoes}>
-          {!ehUltima && (
+          {/* Na etapa de pesquisa social, avançar só com desfecho APROVADO —
+              o mesmo gate que o serviço impõe (bloqueioDeAvancoPesquisaSocial). */}
+          {!ehUltima &&
+            (etapaTipo !== "pesquisa_social" ||
+              candidatura.pesquisa_social_resultado === "aprovado") && (
             <button
               className={comum.botaoMiudo}
               type="button"
@@ -506,6 +580,16 @@ function CartaoCandidatura({
               {avancando ? "Avançando…" : "Avançar →"}
             </button>
           )}
+          {etapaTipo === "pesquisa_social" &&
+            !candidatura.pesquisa_social_resultado && (
+              <button
+                className={comum.botaoMiudo}
+                type="button"
+                onClick={aoPesquisaSocial}
+              >
+                Registrar pesquisa social
+              </button>
+            )}
           {etapaTipo === "oferta" && !candidatura.oferta_status && (
             <button
               className={comum.botaoMiudo}
@@ -643,6 +727,129 @@ function CartaoCandidatura({
 }
 
 // ------------------------------------------------------------------ diálogos
+
+function DialogoTrocarModelo({
+  vaga,
+  aoFechar,
+  aoConcluir,
+}: {
+  vaga: Vaga;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  const [modelos, setModelos] = useState<ModeloResumo[] | null>(null);
+  const [modeloId, setModeloId] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/recrutamento/modelos");
+        const corpo = await resposta.json().catch(() => ({}));
+        if (!ativo) return;
+        if (resposta.ok) {
+          setModelos((corpo.modelos ?? []) as ModeloResumo[]);
+        } else {
+          setErro(corpo.erro ?? "Não foi possível carregar os modelos.");
+        }
+      } catch {
+        if (ativo) setErro("Falha de conexão. Tente novamente.");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
+  const opcoes = (modelos ?? []).filter((m) => m.id !== vaga.modelo_versao_id);
+  const escolhido = opcoes.find((m) => String(m.id) === modeloId);
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setEnviando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(`/api/recrutamento/vagas/${vaga.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelo_versao_id: Number(modeloId) }),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        aoConcluir();
+      } else {
+        setErro(dados.erro ?? "Não foi possível trocar o modelo.");
+      }
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className={comum.fundoDialogo}>
+      <div className={comum.dialogo} role="dialog" aria-modal="true">
+        <h3>Trocar modelo — {vaga.titulo}</h3>
+        <p className={comum.subDialogo}>
+          A vaga corre hoje pelo modelo <b>{vaga.modelo_nome}</b>. A troca só
+          vale enquanto a vaga não tem candidatura: assim que alguém entra no
+          pipeline, o modelo congela de vez.
+        </p>
+        <form onSubmit={enviar}>
+          <label className={comum.rotuloCampo} htmlFor="troca-modelo">
+            Novo modelo de processo
+          </label>
+          <select
+            className={comum.campo}
+            id="troca-modelo"
+            required
+            value={modeloId}
+            onChange={(e) => setModeloId(e.target.value)}
+          >
+            <option value="" disabled>
+              {modelos === null
+                ? "Carregando modelos…"
+                : opcoes.length === 0
+                  ? "Nenhum outro modelo ativo"
+                  : "Escolha o modelo…"}
+            </option>
+            {opcoes.map((m) => (
+              <option key={m.id} value={String(m.id)}>
+                {m.nome}
+                {m.padrao ? " (GERAL — padrão)" : ""}
+              </option>
+            ))}
+          </select>
+          {escolhido && (
+            <p className={comum.dica}>
+              {escolhido.etapas.map((e) => e.nome).join(" → ")}
+            </p>
+          )}
+          {erro && <p className={comum.erroAcao}>{erro}</p>}
+          <div className={comum.acoesDialogo}>
+            <button
+              className={comum.botaoSecundario}
+              type="button"
+              onClick={aoFechar}
+            >
+              Cancelar
+            </button>
+            <button
+              className={comum.botaoPrimario}
+              type="submit"
+              disabled={enviando || modeloId === ""}
+            >
+              {enviando ? "Trocando…" : "Trocar modelo"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 function DialogoNovoCandidato({
   vagaId,
@@ -1036,6 +1243,128 @@ function DialogoReprovacao({
               disabled={enviando || motivo === ""}
             >
               {enviando ? "Registrando…" : "Reprovar"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function DialogoPesquisaSocial({
+  candidatura,
+  aoFechar,
+  aoConcluir,
+}: {
+  candidatura: CandidaturaCartao;
+  aoFechar: () => void;
+  aoConcluir: () => void;
+}) {
+  // Nasce VAZIO: o desfecho de uma checagem sobre pessoa não se pré-seleciona.
+  const [resultado, setResultado] = useState<ResultadoPesquisaSocial | "">("");
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setEnviando(true);
+    setErro(null);
+    try {
+      let anexo:
+        | { nome_arquivo: string; mime: string; conteudo_base64: string }
+        | undefined;
+      if (arquivo) {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const leitor = new FileReader();
+          leitor.onload = () => resolve(String(leitor.result));
+          leitor.onerror = () => reject(new Error("Falha ao ler o arquivo"));
+          leitor.readAsDataURL(arquivo);
+        });
+        anexo = {
+          nome_arquivo: arquivo.name || "anexo",
+          mime: arquivo.type || "application/octet-stream",
+          conteudo_base64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+        };
+      }
+      const respostaHttp = await fetch(
+        `/api/recrutamento/candidaturas/${candidatura.id}/pesquisa-social`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resultado, anexo }),
+        }
+      );
+      const dados = await respostaHttp.json().catch(() => ({}));
+      if (respostaHttp.ok) {
+        aoConcluir();
+      } else {
+        setErro(dados.erro ?? "Não foi possível registrar a pesquisa social.");
+      }
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className={comum.fundoDialogo}>
+      <div className={comum.dialogo} role="dialog" aria-modal="true">
+        <h3>Pesquisa social — {candidatura.candidato_nome}</h3>
+        <p className={comum.subDialogo}>
+          Desfecho binário, único por candidatura. O anexo vai para o GED e é
+          visível só a quem gere a seleção, com trilha de leitura; ele é
+          apagado 6 meses após o descarte de candidatura recusada (retenção).
+          Reprovado não avança — o caminho é reprovar com motivo do catálogo.
+        </p>
+        <form onSubmit={enviar}>
+          <label className={comum.rotuloCampo} htmlFor="ps-resultado">
+            Resultado
+          </label>
+          <select
+            className={comum.campo}
+            id="ps-resultado"
+            required
+            value={resultado}
+            onChange={(e) =>
+              setResultado(e.target.value as ResultadoPesquisaSocial | "")
+            }
+          >
+            <option value="" disabled>
+              Escolha o resultado…
+            </option>
+            {RESULTADOS_PESQUISA_SOCIAL.map((r) => (
+              <option key={r} value={r}>
+                {ROTULOS_RESULTADO_PESQUISA_SOCIAL[r]}
+              </option>
+            ))}
+          </select>
+          <label className={comum.rotuloCampo} htmlFor="ps-anexo">
+            Anexo (opcional — PDF, Word, texto ou imagem, até 10 MB)
+          </label>
+          <input
+            className={comum.campo}
+            id="ps-anexo"
+            type="file"
+            accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png"
+            onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
+          />
+          {erro && <p className={comum.erroAcao}>{erro}</p>}
+          <div className={comum.acoesDialogo}>
+            <button
+              className={comum.botaoSecundario}
+              type="button"
+              onClick={aoFechar}
+            >
+              Cancelar
+            </button>
+            <button
+              className={comum.botaoPrimario}
+              type="submit"
+              disabled={enviando || resultado === ""}
+            >
+              {enviando ? "Registrando…" : "Registrar desfecho"}
             </button>
           </div>
         </form>

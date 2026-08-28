@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { CHAVE_PAINEL } from "@/dominios/painel-executivo/esquemas";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelExecutivoTela } from "./painel";
 
 /**
@@ -11,10 +11,7 @@ import { PainelExecutivoTela } from "./painel";
  * que decide, por `folha.ver`, se o card de custo sai com número ou bloqueado.
  */
 export default async function PaginaPainelExecutivo() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{ pode_ver: boolean }>(
     "SELECT sistema.tem_permissao($1, $2) AS pode_ver",
     [sessao.usuario_id, CHAVE_PAINEL]

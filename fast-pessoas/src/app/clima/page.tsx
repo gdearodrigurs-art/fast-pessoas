@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { CheckinCliente } from "./checkin-cliente";
 
 async function temPermissao(
@@ -15,10 +15,7 @@ async function temPermissao(
 }
 
 export default async function PaginaClima() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   if (!(await temPermissao(sessao.usuario_id, "clima.responder"))) {
     redirect("/");
   }

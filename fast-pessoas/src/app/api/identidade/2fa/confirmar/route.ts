@@ -2,7 +2,12 @@ import { esquemaConfirmacao2fa } from "@/dominios/identidade/esquemas";
 import { confirmarAtivacao2fa } from "@/dominios/identidade/servico";
 import { verificarSecretPendente } from "@/dominios/identidade/token-2fa";
 import { responderErro } from "@/lib/http";
-import { criarSessao, ErroHttp, lerSessao } from "@/lib/sessao";
+import {
+  criarSessao,
+  ErroHttp,
+  garantirUsuarioAtivo,
+  lerSessao,
+} from "@/lib/sessao";
 import { lerCookiePendente, limparCookiePendente } from "../cookie-pendente";
 
 export async function POST(request: Request) {
@@ -11,6 +16,9 @@ export async function POST(request: Request) {
     if (!sessao) {
       throw new ErroHttp(401, "Não autenticado");
     }
+    // A7: conta desativada não confirma 2FA — reconferência no banco, como em
+    // trocar-senha; a rota continua aceitando a sessão pendente_2fa.
+    await garantirUsuarioAtivo(sessao.usuario_id);
 
     const corpo = await request.json().catch(() => null);
     const analise = esquemaConfirmacao2fa.safeParse(corpo);
@@ -36,12 +44,14 @@ export async function POST(request: Request) {
     await limparCookiePendente();
 
     // Reemite a sessão SEM o claim pendente_2fa: o acesso é liberado na
-    // hora, sem exigir novo login.
+    // hora, sem exigir novo login. O claim ciencia_pendente SOBREVIVE à
+    // configuração do 2FA — só a regularização (ciência/liberação) o limpa.
     if (sessao.pendente_2fa) {
       await criarSessao({
         usuario_id: sessao.usuario_id,
         papel: sessao.papel,
         nome: sessao.nome,
+        ...(sessao.ciencia_pendente ? { ciencia_pendente: true } : {}),
       });
     }
     return Response.json({ ok: true });

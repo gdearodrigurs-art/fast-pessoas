@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fast-pessoas-local",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["db/servidor.js", "dev"],
+      "port": 3001
+    }
+  ]
+}

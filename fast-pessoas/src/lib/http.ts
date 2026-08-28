@@ -58,8 +58,33 @@ export function responderErro(erro: unknown): Response {
   if (erro instanceof ErroHttp) {
     return Response.json({ erro: erro.message }, { status: erro.status });
   }
+  const trinco = mensagemDoTrinco(erro);
+  if (trinco) {
+    return Response.json({ erro: trinco }, { status: 400 });
+  }
   console.error(erro);
   return Response.json({ erro: "Erro interno do servidor" }, { status: 500 });
+}
+
+/**
+ * SQLSTATE da classe '45' = "trinco de negócio" do banco: um BEFORE INSERT/UPDATE
+ * recusou a linha (fails-safe) com uma mensagem já amigável. A classe '45' é livre
+ * no PostgreSQL e fica reservada AQUI para isso; qualquer trigger que a use vira
+ * 400 com a própria mensagem, em vez do 500 cru. Devolve a mensagem, ou null se o
+ * erro não for um trinco. (ver db/migrations/0071)
+ */
+export function mensagemDoTrinco(erro: unknown): string | null {
+  if (
+    typeof erro === "object" &&
+    erro !== null &&
+    "code" in erro &&
+    typeof (erro as { code?: unknown }).code === "string" &&
+    (erro as { code: string }).code.startsWith("45")
+  ) {
+    const mensagem = (erro as { message?: unknown }).message;
+    return typeof mensagem === "string" ? mensagem : "Requisição recusada.";
+  }
+  return null;
 }
 
 export function violacaoUnica(erro: unknown): string | null {

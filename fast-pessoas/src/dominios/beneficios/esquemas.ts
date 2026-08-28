@@ -257,6 +257,9 @@ export const esquemaCriacaoDependente = z.object({
   nascimento: esquemaData,
   parentesco: z.enum(PARENTESCOS),
   cpf: esquemaCpf.optional(),
+  // Só a tela do DP oferece este campo (conferência do IRRF). O autoatendimento
+  // usa outro esquema (portais/colaborador) que nem tem deduz_irrf: nasce false.
+  deduz_irrf: z.boolean().optional(),
 });
 
 export type CriacaoDependente = z.infer<typeof esquemaCriacaoDependente>;
@@ -267,6 +270,7 @@ export const esquemaAtualizacaoDependente = z
     nascimento: esquemaData.optional(),
     parentesco: z.enum(PARENTESCOS).optional(),
     cpf: esquemaCpf.nullable().optional(),
+    deduz_irrf: z.boolean().optional(),
   })
   .refine(
     (dados) => Object.values(dados).some((valor) => valor !== undefined),

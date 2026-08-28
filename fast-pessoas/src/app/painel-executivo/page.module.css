@@ -53,6 +53,37 @@
   cursor: progress;
 }
 
+/* Selo do recorte ativo, ao lado do h1 — some quando o filtro está vazio. */
+.recorteSelo {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #fdeceb;
+  border: 1px solid #f3c9c8;
+  font-size: 12px;
+  color: #d21217;
+}
+
+.recorteSelo strong {
+  font-weight: 600;
+}
+
+/* Caixa do seletor dos três, acima da grade de cards. */
+.filtroSecao {
+  margin: 0 0 22px;
+  padding: 14px 16px;
+  border: 1px solid #e3e0dc;
+  border-radius: 12px;
+  background: #fbfaf9;
+}
+
+.filtroSecao h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #3c3835;
+}
+
 .grade {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
@@ -11,13 +12,19 @@ import {
   StatusRequisicao,
   StatusVaga,
 } from "@/dominios/recrutamento/esquemas";
+import type { ModeloResumo } from "@/dominios/recrutamento/repositorio";
 import comum from "./comum.module.css";
-import { formatarData, formatarSalario, textoPrazo } from "./formato";
+import {
+  formatarData,
+  formatarDuracaoDias,
+  formatarSalario,
+  textoPrazo,
+} from "./formato";
 import { KanbanVaga } from "./kanban-vaga";
 import estilos from "./page.module.css";
-import { Painel, Requisicao, Vaga } from "./tipos";
+import { Painel, Requisicao, TempoEtapa, Vaga } from "./tipos";
 
-type Aba = "requisicoes" | "vagas" | "kanban";
+type Aba = "requisicoes" | "vagas" | "kanban" | "tempos";
 
 const BADGE_REQUISICAO: Record<StatusRequisicao, string> = {
   solicitada: comum.badgeWarning,
@@ -96,16 +103,23 @@ export function PainelRecrutamento() {
       <main className={estilos.conteudo}>
         <div className={estilos.linhaTitulo}>
           <h1>Recrutamento e Seleção</h1>
-          {painel?.pode.requisicao_criar && (
-            <button
-              className={comum.botaoPrimario}
-              type="button"
-              onClick={() => setDialogoRequisicao(true)}
-              disabled={!painel.cargos || painel.cargos.length === 0}
-            >
-              + Nova requisição de vaga
-            </button>
-          )}
+          <div className={comum.acoes}>
+            {painel?.pode.gerir && (
+              <Link className={comum.botaoSecundario} href="/recrutamento/modelos">
+                Modelos de processo
+              </Link>
+            )}
+            {painel?.pode.requisicao_criar && (
+              <button
+                className={comum.botaoPrimario}
+                type="button"
+                onClick={() => setDialogoRequisicao(true)}
+                disabled={!painel.cargos || painel.cargos.length === 0}
+              >
+                + Nova requisição de vaga
+              </button>
+            )}
+          </div>
         </div>
         <p className={estilos.subtitulo}>
           Requisição → vaga → seleção no kanban → oferta → admissão. A seleção
@@ -177,6 +191,15 @@ export function PainelRecrutamento() {
               >
                 Kanban{vagaDoKanban ? ` — ${vagaDoKanban.titulo}` : ""}
               </button>
+              {veTudo && (
+                <button
+                  className={`${estilos.aba} ${aba === "tempos" ? estilos.abaAtiva : ""}`}
+                  type="button"
+                  onClick={() => setAba("tempos")}
+                >
+                  Tempo por etapa
+                </button>
+              )}
             </div>
 
             {aba === "requisicoes" && (
@@ -216,6 +239,8 @@ export function PainelRecrutamento() {
                 )}
               </section>
             )}
+
+            {aba === "tempos" && veTudo && <QuadroTempos />}
 
             {aba === "kanban" &&
               (vagaSelecionada === null ? (
@@ -273,6 +298,107 @@ export function PainelRecrutamento() {
         />
       )}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ tempo por etapa (mediana)
+
+function QuadroTempos() {
+  const [linhas, setLinhas] = useState<TempoEtapa[] | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/recrutamento/relatorio-etapas");
+        const corpo = await resposta.json().catch(() => ({}));
+        if (!ativo) return;
+        if (resposta.ok) {
+          setLinhas((corpo.linhas ?? []) as TempoEtapa[]);
+        } else {
+          setErro(corpo.erro ?? "Não foi possível carregar o relatório.");
+        }
+      } catch {
+        if (ativo) setErro("Falha de conexão. Recarregue a página.");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
+  if (erro) {
+    return (
+      <section className={estilos.area}>
+        <p className={estilos.erro}>{erro}</p>
+      </section>
+    );
+  }
+  if (linhas === null) {
+    return (
+      <section className={estilos.area}>
+        <p className={estilos.vazio}>Carregando…</p>
+      </section>
+    );
+  }
+  if (linhas.length === 0) {
+    return (
+      <section className={estilos.area}>
+        <p className={estilos.vazio}>
+          Ainda não há movimentações fechadas para medir — o quadro nasce com o
+          primeiro avanço de candidato.
+        </p>
+      </section>
+    );
+  }
+
+  // Agrupa por CARGO_ID (a identidade estável — nunca o título livre da vaga
+  // nem o nome da versão: cargos homônimos não se fundem, e renomear não
+  // parte o histórico). O nome é só exibição.
+  const porCargo = new Map<number, TempoEtapa[]>();
+  for (const linha of linhas) {
+    const grupo = porCargo.get(linha.cargo_id) ?? [];
+    grupo.push(linha);
+    porCargo.set(linha.cargo_id, grupo);
+  }
+
+  return (
+    <section className={estilos.area}>
+      <p className={comum.meta}>
+        Mediana do tempo que a candidatura passa em cada etapa do catálogo, por
+        cargo — candidaturas abertas e encerradas contam com seus intervalos já
+        fechados; a etapa onde alguém ainda está parado não entra até fechar.
+      </p>
+      {[...porCargo.entries()].map(([cargoId, etapas]) => (
+        <article className={comum.cartao} key={cargoId}>
+          <div className={comum.topo}>
+            <span className={comum.nome}>{etapas[0].cargo_nome}</span>
+          </div>
+          {etapas.map((etapa) => (
+            <div
+              key={etapa.etapa_nome}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "4px 0",
+                flexWrap: "wrap",
+              }}
+            >
+              <span>{etapa.etapa_nome}</span>
+              <span>
+                <b>{formatarDuracaoDias(etapa.mediana_dias)}</b>{" "}
+                <span className={comum.dica}>
+                  (mediana de {etapa.amostras} passagem
+                  {etapa.amostras > 1 ? "s" : ""})
+                </span>
+              </span>
+            </div>
+          ))}
+        </article>
+      ))}
+    </section>
   );
 }
 
@@ -677,6 +803,30 @@ function DialogoNovaVaga({
   const [prazoAlvo, setPrazoAlvo] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [modelos, setModelos] = useState<ModeloResumo[]>([]);
+  const [modeloId, setModeloId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/recrutamento/modelos");
+        if (!resposta.ok) return;
+        const corpo = await resposta.json().catch(() => ({}));
+        if (!ativo) return;
+        const lista: ModeloResumo[] = corpo.modelos ?? [];
+        setModelos(lista);
+        // GERAL pré-selecionado (decisão 13a); sem picker cai nele no servidor.
+        const padrao = lista.find((m) => m.padrao) ?? lista[0];
+        if (padrao) setModeloId(padrao.id);
+      } catch {
+        // Sem lista: a vaga usa o GERAL (padrão) — o servidor resolve.
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   async function enviar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
@@ -690,6 +840,7 @@ function DialogoNovaVaga({
           requisicao_id: requisicao.id,
           titulo,
           prazo_alvo: prazoAlvo,
+          modelo_versao_id: modeloId ?? undefined,
         }),
       });
       const dados = await resposta.json().catch(() => ({}));
@@ -736,6 +887,26 @@ function DialogoNovaVaga({
             value={prazoAlvo}
             onChange={(e) => setPrazoAlvo(e.target.value)}
           />
+          {modelos.length > 1 && (
+            <>
+              <label className={comum.rotuloCampo} htmlFor="vaga-modelo">
+                Modelo de processo seletivo
+              </label>
+              <select
+                className={comum.campo}
+                id="vaga-modelo"
+                value={modeloId ?? ""}
+                onChange={(e) => setModeloId(Number(e.target.value))}
+              >
+                {modelos.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.nome}
+                    {m.padrao ? " (GERAL — padrão)" : ""}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           {erro && <p className={comum.erroAcao}>{erro}</p>}
           <div className={comum.acoesDialogo}>
             <button

@@ -14,6 +14,10 @@ import {
   temPermissao,
 } from "../colaboradores/repositorio";
 import { PayloadSessao } from "../identidade/esquemas";
+// A2:a (docs/20) — "minha equipe" é a SUB-ÁRVORE (diretos e indiretos), uma
+// semântica só no sistema. A caminhada é em JS com teto e imune a ciclo;
+// subarvore.ts carrega o quadro UMA vez por chamada.
+import { carregarLideradosDaSubArvore } from "../organograma/subarvore";
 import {
   agruparMarcacoesPorDia,
   apurarPonto,
@@ -849,8 +853,21 @@ export async function ajustarMarcacao(
   // estrangeira de rh.marcacao estourava lá dentro e o DP recebia 500 ("erro
   // interno") por ter digitado um id errado, que é erro dele e não do servidor.
   await exigirColaboradorExistente(dados.colaborador_id);
+  // Escrever ponto de terceiro exige ALCANCE sobre a pessoa, igual à leitura
+  // (diaParaAjuste): a chave ponto.ajustar sozinha não basta. Sem isto, quem
+  // recebesse ponto.ajustar sem ponto.administrar corrigia ponto de qualquer um,
+  // enquanto a leitura do mesmo dia lhe daria 403 — filtro no servidor (eixo 7,
+  // revisão). O DP atual (ponto.administrar) segue passando por todos.
+  if (!(await ehVinculoProprio(sessao, dados.colaborador_id))) {
+    await exigirAlcanceSobre(sessao, dados.colaborador_id);
+  }
   return comTransacao(sessao.usuario_id, async (cliente) => {
     if (dados.substitui_marcacao_id) {
+      // Trava a original ANTES de ler: serializa dois ajustes concorrentes sobre
+      // a MESMA batida. Sem isto ambos liam superada=false e o dia ficava com
+      // duas substitutas 'registro' — trabalhado/HE fantasma na reapuração (o
+      // UNIQUE marcacao_sem_repeticao só cobre substitui_marcacao_id IS NULL).
+      await repo.travarMarcacao(cliente, dados.substitui_marcacao_id);
       const original = await repo.buscarMarcacao(
         cliente,
         dados.substitui_marcacao_id
@@ -1138,11 +1155,11 @@ export async function apurarCompetencia(
     primeiroDia,
     ultimoDia
   );
-  // Saldo de banco de horas de todos. Antes lia-se de dentro da transação de
-  // cada pessoa, mas SEMPRE pelo pool (nunca pelo cliente da transação), então
-  // ler tudo aqui devolve exatamente os mesmos números: o saldo de uma pessoa
-  // não depende do que foi gravado para outra.
-  const saldos = await repo.saldosBanco(idsAlvo);
+  // O saldo do banco (base do teto) é lido na FASE 3, DENTRO da transação e atrás
+  // da trava POR colaborador — não aqui, fora de trava. Ler no pool ~50 s antes de
+  // gravar deixava o teto ser conferido contra saldo obsoleto quando um lançamento
+  // manual concorrente commitava no meio (a trava da apuração e a do banco usam
+  // namespaces diferentes e não se serializam). (revisão)
 
   // ------------------------------------------------------------------
   // FASE 2 — CÁLCULO PURO: o motor roda para todo mundo SEM tocar no banco.
@@ -1405,6 +1422,18 @@ export async function apurarCompetencia(
       ano,
       mes
     );
+
+    // Trava o banco de cada pessoa (ordem de id, sem deadlock) e RELÊ o saldo
+    // dentro da transação: o teto é conferido contra o saldo corrente, não contra
+    // o da FASE 1. No caso comum (sem lançamento concorrente) o valor é idêntico,
+    // então a apuração normal não muda de resultado. (revisão)
+    for (const id of [...idsPreparados].sort((a, b) => a - b)) {
+      await repo.travarBancoDoColaborador(cliente, id);
+    }
+    const saldos = new Map<number, number>();
+    for (const id of idsPreparados) {
+      saldos.set(id, await repo.saldoBanco(id, cliente));
+    }
 
     const paraGravar: repo.DadosApuracao[] = [];
     for (const pessoa of preparadas) {
@@ -2128,9 +2157,10 @@ async function ehVinculoProprio(
 
 /**
  * Alcance de leitura: DP/diretoria (ponto.administrar) veem todo mundo; gestor
- * (ponto.ver.equipe) só quem está na relação vigente. O papel do login não dá
- * alcance sozinho — quem dá é rh.relacao_gestor. Devolve a chave que autorizou,
- * para quem chama levá-la à trilha.
+ * (ponto.ver.equipe) só quem está na SUA SUB-ÁRVORE — diretos e indiretos
+ * (decisão A2:a). O papel do login não dá alcance sozinho — quem dá é
+ * rh.relacao_gestor, agora transitiva. Devolve a chave que autorizou, para
+ * quem chama levá-la à trilha.
  */
 async function exigirAlcanceSobre(
   sessao: PayloadSessao,
@@ -2142,8 +2172,8 @@ async function exigirAlcanceSobre(
   if (await temPermissao(sessao.usuario_id, "ponto.ver.equipe")) {
     const proprio = await repo.colaboradorDoUsuario(sessao.usuario_id);
     if (proprio) {
-      const equipe = await repo.liderados(proprio.id);
-      if (equipe.some((pessoa) => pessoa.id === colaboradorId)) {
+      const equipe = await carregarLideradosDaSubArvore(proprio.id);
+      if (equipe.includes(colaboradorId)) {
         return "ponto.ver.equipe";
       }
     }
@@ -2209,10 +2239,11 @@ export async function listarIntercorrencias(
       mais_antiga: null,
     };
   }
-  const equipe = await repo.liderados(proprio.id);
+  // A fila do gestor cobre a SUB-ÁRVORE (A2:a) — o quadro sai uma vez aqui.
+  const equipe = await carregarLideradosDaSubArvore(proprio.id);
   const fila = await repo.listarIntercorrencias({
     ...filtros,
-    colaboradoresPermitidos: equipe.map((pessoa) => pessoa.id),
+    colaboradoresPermitidos: equipe,
   });
   if (fila.itens.length > 0) {
     await registrarLeituraDePonto(
@@ -2220,6 +2251,40 @@ export async function listarIntercorrencias(
       "ponto.ver.equipe",
       "ponto.intercorrencias",
       `equipe:${proprio.id}`
+    );
+  }
+  return fila;
+}
+
+/**
+ * Fila de intercorrências JÁ recortada a um time no servidor: o LIMIT da
+ * consulta se aplica aos liderados, não à empresa inteira. Usada pelo portal do
+ * gestor, onde o DP/diretoria navega o time de um gestor (?gestor_id). Filtrar
+ * no cliente depois de o servidor cortar as 500 mais recentes da EMPRESA fazia
+ * as intercorrências antigas do time (as que estão vencendo) sumirem atrás das
+ * recentes de outros times. A autorização do time já foi resolvida na rota por
+ * resumoPontoDaEquipeComAlcance (gateia por ponto.ver.equipe e pelo alcance).
+ */
+export async function listarIntercorrenciasDaEquipe(
+  sessao: PayloadSessao,
+  gestorId: number,
+  colaboradorIds: number[],
+  filtros: {
+    status?: StatusIntercorrencia | null;
+    de?: string | null;
+    ate?: string | null;
+  }
+): Promise<repo.FilaIntercorrencias> {
+  const fila = await repo.listarIntercorrencias({
+    ...filtros,
+    colaboradoresPermitidos: colaboradorIds,
+  });
+  if (fila.itens.length > 0) {
+    await registrarLeituraDePonto(
+      sessao,
+      "ponto.ver.equipe",
+      "ponto.intercorrencias",
+      `equipe:${gestorId}`
     );
   }
   return fila;
@@ -2600,48 +2665,59 @@ export async function lancarMovimentoBanco(
   // chegava até o INSERT e voltava 500 pela chave estrangeira — e um saldo de
   // banco de horas resolvido para pessoa nenhuma não é erro de servidor.
   await exigirColaboradorExistente(dados.colaborador_id);
-  const regra = await repo.resolverRegraBanco(dados.colaborador_id, dados.data);
-  const saldoAtual = await repo.saldoBanco(dados.colaborador_id);
-  const novoSaldo = saldoAtual + dados.minutos;
-  if (regra) {
-    // O limite barra quem AFASTA o saldo do teto, não quem o aproxima. Testar
-    // só o estado final trancava o DP na armadilha: a apuração credita sem
-    // conferir teto nenhum (é fato do mundo, não pedido de autorização), e quem
-    // amanhecia estourado não conseguia mais lançar a compensação, a expiração
-    // nem o acerto de rescisão que baixariam o saldo — cada um deles voltava 422
-    // dizendo que o saldo "passaria" de um teto que já estava passado.
-    if (
-      novoSaldo > regra.limite_positivo_minutos &&
-      novoSaldo > saldoAtual
-    ) {
-      throw new ErroHttpCampo(
-        422,
-        `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite positivo da regra ` +
-          `(${regra.escopo}) é ${formatarMinutos(regra.limite_positivo_minutos)}` +
-          (saldoAtual > regra.limite_positivo_minutos
-            ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está acima do ` +
-              `limite, então só passa movimento que o reduza`
-            : ""),
-        "minutos"
-      );
-    }
-    if (
-      novoSaldo < -regra.limite_negativo_minutos &&
-      novoSaldo < saldoAtual
-    ) {
-      throw new ErroHttpCampo(
-        422,
-        `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite negativo da regra ` +
-          `(${regra.escopo}) é ${formatarMinutos(-regra.limite_negativo_minutos)}` +
-          (saldoAtual < -regra.limite_negativo_minutos
-            ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está abaixo do ` +
-              `limite, então só passa movimento que o eleve`
-            : ""),
-        "minutos"
-      );
-    }
+  // Mesma trava de alcance da marcação: lançar banco de terceiro exige alcance
+  // sobre a pessoa, não só a chave ponto.ajustar (eixo 7, revisão).
+  if (!(await ehVinculoProprio(sessao, dados.colaborador_id))) {
+    await exigirAlcanceSobre(sessao, dados.colaborador_id);
   }
+  const regra = await repo.resolverRegraBanco(dados.colaborador_id, dados.data);
   return comTransacao(sessao.usuario_id, async (cliente) => {
+    // Trava por colaborador ANTES de somar o saldo: sem ela, dois lançamentos
+    // simultâneos liam o mesmo saldo (leitura fora da transação, sem trava), os
+    // dois passavam na guarda de teto/piso e o saldo final furava o limite que a
+    // regra jurou. O saldo é a SOMA dos movimentos (não há CHECK no banco), então
+    // serializar é a única defesa — mesma técnica da apuração (advisory lock).
+    await repo.travarBancoDoColaborador(cliente, dados.colaborador_id);
+    const saldoAtual = await repo.saldoBanco(dados.colaborador_id, cliente);
+    const novoSaldo = saldoAtual + dados.minutos;
+    if (regra) {
+      // O limite barra quem AFASTA o saldo do teto, não quem o aproxima. Testar
+      // só o estado final trancava o DP na armadilha: a apuração credita sem
+      // conferir teto nenhum (é fato do mundo, não pedido de autorização), e quem
+      // amanhecia estourado não conseguia mais lançar a compensação, a expiração
+      // nem o acerto de rescisão que baixariam o saldo — cada um deles voltava 422
+      // dizendo que o saldo "passaria" de um teto que já estava passado.
+      if (
+        novoSaldo > regra.limite_positivo_minutos &&
+        novoSaldo > saldoAtual
+      ) {
+        throw new ErroHttpCampo(
+          422,
+          `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite positivo da regra ` +
+            `(${regra.escopo}) é ${formatarMinutos(regra.limite_positivo_minutos)}` +
+            (saldoAtual > regra.limite_positivo_minutos
+              ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está acima do ` +
+                `limite, então só passa movimento que o reduza`
+              : ""),
+          "minutos"
+        );
+      }
+      if (
+        novoSaldo < -regra.limite_negativo_minutos &&
+        novoSaldo < saldoAtual
+      ) {
+        throw new ErroHttpCampo(
+          422,
+          `Saldo passaria de ${formatarMinutos(novoSaldo)} e o limite negativo da regra ` +
+            `(${regra.escopo}) é ${formatarMinutos(-regra.limite_negativo_minutos)}` +
+            (saldoAtual < -regra.limite_negativo_minutos
+              ? ` — o saldo atual (${formatarMinutos(saldoAtual)}) já está abaixo do ` +
+                `limite, então só passa movimento que o eleve`
+              : ""),
+          "minutos"
+        );
+      }
+    }
     const id = await repo.inserirMovimentoBanco(cliente, {
       colaborador_id: dados.colaborador_id,
       data: dados.data,
@@ -2759,6 +2835,17 @@ async function levantarExpiracao(
 ): Promise<ExpiracaoPessoa[]> {
   const candidatos = await repo.colaboradoresComSaldoPositivo();
   if (candidatos.length === 0) return [];
+  // Sob transação (execução real da expiração), trava cada banco ANTES de ler o
+  // livro — em ordem de id para não haver deadlock. Duas execuções concorrentes
+  // serializam por colaborador, e a segunda relê o livro já com a expiração da
+  // primeira aplicada, não expirando em dobro. Na prévia da tela (cliente null)
+  // não há trava nem escrita, então não trava. (revisão)
+  if (cliente) {
+    const ids = candidatos.map((pessoa) => pessoa.id).sort((a, b) => a - b);
+    for (const id of ids) {
+      await repo.travarBancoDoColaborador(cliente, id);
+    }
+  }
   const livros = await repo.movimentosBancoEmOrdem(
     cliente,
     candidatos.map((pessoa) => pessoa.id)
@@ -2938,7 +3025,11 @@ export async function liquidarBancoNaRescisao(
   colaboradorId: number,
   dataTermino: string
 ): Promise<AcertoBancoRescisao> {
-  const saldo = await repo.saldoBanco(colaboradorId);
+  // Trava o banco ANTES de ler o saldo (como lancarMovimentoBanco): senão a
+  // liquidação lia o saldo fora da transação e uma expiração/lançamento
+  // concorrente furava o acerto. saldoBanco com cliente lê atrás da trava. (revisão)
+  await repo.travarBancoDoColaborador(cliente, colaboradorId);
+  const saldo = await repo.saldoBanco(colaboradorId, cliente);
   const regra = await repo.resolverRegraBanco(colaboradorId, dataTermino);
   if (!regra) {
     return {
@@ -3053,19 +3144,44 @@ export interface ResumoPontoEquipe {
 }
 
 /**
+ * Costuras do resumo do time com o banco — o que os testes trocam por dublês
+ * (molde DepsPosse, pendência 16.2). Produção não passa o parâmetro.
+ */
+export interface DepsResumoEquipe {
+  lideradosDaSubArvore: typeof carregarLideradosDaSubArvore;
+  colaboradoresPorIds: typeof repo.colaboradoresPorIds;
+  saldosBanco: typeof repo.saldosBanco;
+  ultimasApuracoes: typeof repo.ultimasApuracoes;
+  contarIntercorrenciasAbertas: typeof repo.contarIntercorrenciasAbertas;
+  resolverRegraBanco: typeof repo.resolverRegraBanco;
+}
+
+const DEPS_RESUMO_EQUIPE_REAIS: DepsResumoEquipe = {
+  lideradosDaSubArvore: carregarLideradosDaSubArvore,
+  colaboradoresPorIds: repo.colaboradoresPorIds,
+  saldosBanco: repo.saldosBanco,
+  ultimasApuracoes: repo.ultimasApuracoes,
+  contarIntercorrenciasAbertas: repo.contarIntercorrenciasAbertas,
+  resolverRegraBanco: repo.resolverRegraBanco,
+};
+
+/**
  * Visão do portal do gestor: banco de horas do time e QUEM ESTÁ ESTOURANDO
  * hora extra — o limite vem da regra resolvida nos três níveis para cada
- * pessoa, não de um número fixo na tela.
+ * pessoa, não de um número fixo na tela. O time é a SUB-ÁRVORE do gestor
+ * (A2:a): o quadro é carregado UMA vez e a caminhada alcança diretos e
+ * indiretos.
  */
 export async function resumoPontoDaEquipe(
-  gestorColaboradorId: number
+  gestorColaboradorId: number,
+  deps: DepsResumoEquipe = DEPS_RESUMO_EQUIPE_REAIS
 ): Promise<ResumoPontoEquipe> {
-  const equipe = await repo.liderados(gestorColaboradorId);
-  const ids = equipe.map((pessoa) => pessoa.id);
+  const ids = await deps.lideradosDaSubArvore(gestorColaboradorId);
+  const equipe = await deps.colaboradoresPorIds(ids);
   const [saldos, ultimas, abertas] = await Promise.all([
-    repo.saldosBanco(ids),
-    repo.ultimasApuracoes(ids),
-    repo.contarIntercorrenciasAbertas(ids),
+    deps.saldosBanco(ids),
+    deps.ultimasApuracoes(ids),
+    deps.contarIntercorrenciasAbertas(ids),
   ]);
   const hoje = hojeLocal();
 
@@ -3073,7 +3189,7 @@ export async function resumoPontoDaEquipe(
   for (const pessoa of equipe) {
     const saldo = saldos.get(pessoa.id) ?? 0;
     const ultima = ultimas.get(pessoa.id) ?? null;
-    const regra = await repo.resolverRegraBanco(pessoa.id, hoje);
+    const regra = await deps.resolverRegraBanco(pessoa.id, hoje);
     linhas.push({
       colaborador_id: pessoa.id,
       nome: pessoa.nome_completo,

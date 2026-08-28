@@ -156,6 +156,25 @@ export const esquemaLoteDesempenho = z.object({
 
 export type EntradaLote = z.infer<typeof esquemaLoteDesempenho>;
 
+/** Seleção de pares pelo gestor (ids de colaboradores; o serviço valida a equipe). */
+export const esquemaSelecionarPares = z.object({
+  colaborador_ids: z
+    .array(z.number().int().positive())
+    .min(1, "Selecione ao menos um par")
+    .max(50, "Pares demais")
+    .refine((l) => new Set(l).size === l.length, {
+      message: "Par repetido na seleção",
+    }),
+});
+
+export type SelecionarPares = z.infer<typeof esquemaSelecionarPares>;
+
+export const esquemaRemoverPar = z.object({
+  colaborador_id: z.number().int().positive(),
+});
+
+export type RemoverPar = z.infer<typeof esquemaRemoverPar>;
+
 export const esquemaCancelamento = z.object({
   motivo: z
     .string()
@@ -199,6 +218,9 @@ const esquemaFaixaEntrada = z.object({
 });
 
 export const esquemaEstruturaModelo = z.object({
+  // Família do modelo (0074): null = Geral (o piso/fallback); senão o cargo a
+  // que este modelo se aplica. Ausente = Geral, o padrão seguro.
+  cargo_id: z.number().int().positive().nullable().default(null),
   nome: z.string().trim().min(1, "Nome do modelo é obrigatório").max(200),
   pilares: z
     .array(esquemaPilarEntrada)
@@ -237,7 +259,7 @@ export interface ProblemaAtivacao {
  * sem furo nem sobreposição. Lista vazia = pode ativar.
  */
 export function validarAtivacao(
-  estrutura: EstruturaModeloEntrada
+  estrutura: Pick<EstruturaModeloEntrada, "nome" | "pilares" | "faixas">
 ): ProblemaAtivacao[] {
   const problemas: ProblemaAtivacao[] = [];
   const somaPilares = estrutura.pilares.reduce((s, p) => s + p.peso, 0);

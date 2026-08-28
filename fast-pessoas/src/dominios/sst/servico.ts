@@ -188,13 +188,15 @@ export async function listarAsosParaSessao(
     };
   });
 
-  // Trilha de leitura: um registro por ASO cuja restrição foi decifrada.
-  const idsComRestricao = linhas
-    .filter((linha) => linha.restricoes_cifradas !== null)
-    .map((linha) => String(linha.id));
-  if (idsComRestricao.length > 0) {
+  // Trilha de leitura: um registro por ASO DEVOLVIDO — não só os que têm
+  // restrição cifrada. O payload entrega a CONCLUSÃO clínica (resultado:
+  // apto/inapto/apto_com_restrições) de toda linha, e ler "inapto" já é ler
+  // saúde de terceiro. A trilha se amarra ao dado devolvido, não à existência
+  // de um campo cifrado (mesmo critério da CAT).
+  const idsLidos = linhas.map((linha) => String(linha.id));
+  if (idsLidos.length > 0) {
     await comTransacao(sessao.usuario_id, async (cliente) => {
-      for (const registroId of idsComRestricao) {
+      for (const registroId of idsLidos) {
         await registrarLeituraSensivel(cliente, {
           usuarioId: sessao.usuario_id,
           chavePermissao: CHAVE_SAUDE_VER,
@@ -498,13 +500,14 @@ export async function listarPsicossociaisParaSessao(
     };
   });
 
-  // Trilha de leitura: um registro por avaliação cuja observação foi decifrada.
-  const idsComObservacao = linhas
-    .filter((linha) => linha.observacoes_cifradas !== null)
-    .map((linha) => String(linha.id));
-  if (idsComObservacao.length > 0) {
+  // Trilha de leitura: um registro por avaliação DEVOLVIDA — não só as com
+  // observação cifrada. classificacao_risco (baixo/médio/alto/crítico) é
+  // conclusão de saúde e sai em toda linha, então a trilha cobre a leitura do
+  // resultado, não a existência de um campo cifrado.
+  const idsLidos = linhas.map((linha) => String(linha.id));
+  if (idsLidos.length > 0) {
     await comTransacao(sessao.usuario_id, async (cliente) => {
-      for (const registroId of idsComObservacao) {
+      for (const registroId of idsLidos) {
         await registrarLeituraSensivel(cliente, {
           usuarioId: sessao.usuario_id,
           chavePermissao: CHAVE_SAUDE_VER,
@@ -778,6 +781,16 @@ export async function registrarEntregaEpi(
         "termo_documento_id"
       );
     }
+    // Costura 1.4×1.5: documento do CICLO de ciência não vira termo de entrega.
+    // A ciência do ciclo tem regras próprias (ler até o fim, recusa, ato,
+    // versão vigente) e a ciência da entrega as atropelaria — barra na origem.
+    if (termo.exige_ciencia) {
+      throw new ErroHttpCampo(
+        400,
+        "Este documento participa do ciclo de ciência e não pode ser usado como termo de entrega — publique o termo fora do ciclo.",
+        "termo_documento_id"
+      );
+    }
     termoTitulo = termo.titulo;
   }
   const termoId = dados.termo_documento_id ?? null;
@@ -856,6 +869,11 @@ export async function registrarDevolucaoEpi(
     sessao.usuario_id,
     async (cliente) => {
       const momento = await marcarDevolucaoEpi(cliente, entregaId);
+      if (momento === null) {
+        // Corrida: outra requisição registrou a devolução entre o pré-check
+        // (fora da transação) e aqui. 409 em vez do 500 do trigger.
+        throw new ErroHttp(409, "Devolução já registrada para esta entrega.");
+      }
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
@@ -906,50 +924,81 @@ export async function darCienciaEntregaEpi(
   if (!termo) {
     throw new ErroHttp(404, "Termo não encontrado no GED.");
   }
+  // Costura 1.4×1.5: a ciência de EPI NÃO assina documento do ciclo — o ciclo
+  // exige ler até o fim e tem recusa/ato/liberação; este atalho pularia tudo
+  // isso. registrarEntregaEpi barra na origem; aqui é o cinto p/ dado antigo.
+  if (termo.exige_ciencia) {
+    throw new ErroHttp(
+      409,
+      "Este documento participa do ciclo de ciência — registre a ciência pelo fluxo do documento, na tela de Documentos."
+    );
+  }
+  // Espelho de darCiencia (documentos/servico.ts): versão substituída não
+  // colhe ciência nova — a ciência vale na ponta da cadeia.
+  if (termo.substituido_por_id !== null) {
+    throw new ErroHttp(
+      409,
+      "Este documento foi substituído por uma versão nova — registre a ciência na versão vigente."
+    );
+  }
   // Ciência já dada no GED (ex.: pela tela de documentos)? Então só projeta.
   const jaDeuCiencia = await cienciaExistente(termo.id, sessao.usuario_id);
 
-  const dadaEm = await comTransacao(sessao.usuario_id, async (cliente) => {
-    let momento = new Date().toISOString();
-    if (!jaDeuCiencia) {
-      const ciencia = await inserirCiencia(cliente, {
-        documentoId: termo.id,
-        usuarioId: sessao.usuario_id,
-        hashNoMomento: termo.hash_sha256,
-      });
-      momento = ciencia.dada_em;
+  try {
+    const dadaEm = await comTransacao(sessao.usuario_id, async (cliente) => {
+      let momento = new Date().toISOString();
+      if (!jaDeuCiencia) {
+        const ciencia = await inserirCiencia(cliente, {
+          documentoId: termo.id,
+          usuarioId: sessao.usuario_id,
+          hashNoMomento: termo.hash_sha256,
+        });
+        momento = ciencia.dada_em;
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "criacao",
+          tabela: TABELA_CIENCIA,
+          registroId: String(ciencia.id),
+          diff: {
+            Documento: { de: null, para: `${termo.titulo} (#${termo.id})` },
+            "Hash no momento": { de: null, para: termo.hash_sha256 },
+          },
+        });
+      }
+      const marcou = await marcarCienciaEntregaEpi(cliente, entregaId);
+      if (!marcou) {
+        // Corrida na projeção: outra requisição marcou entre o pré-check
+        // (fora da transação) e aqui. 409, molde registrarDevolucaoEpi.
+        throw new ErroHttp(409, "Ciência já registrada para esta entrega.");
+      }
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
-        acao: "criacao",
-        tabela: TABELA_CIENCIA,
-        registroId: String(ciencia.id),
+        acao: "ciencia_epi",
+        tabela: TABELA_EPI_ENTREGA,
+        registroId: String(entregaId),
         diff: {
-          Documento: { de: null, para: `${termo.titulo} (#${termo.id})` },
-          "Hash no momento": { de: null, para: termo.hash_sha256 },
+          "Ciência": {
+            de: "pendente",
+            para: jaDeuCiencia
+              ? "registrada (ciência prévia no GED reaproveitada)"
+              : "registrada",
+          },
         },
       });
-    }
-    await marcarCienciaEntregaEpi(cliente, entregaId);
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "ciencia_epi",
-      tabela: TABELA_EPI_ENTREGA,
-      registroId: String(entregaId),
-      diff: {
-        "Ciência": {
-          de: "pendente",
-          para: jaDeuCiencia
-            ? "registrada (ciência prévia no GED reaproveitada)"
-            : "registrada",
-        },
-      },
+      return momento;
     });
-    return momento;
-  });
-
-  return { dada_em: dadaEm };
+    return { dada_em: dadaEm };
+  } catch (erro) {
+    // Corrida no INSERT de rh.ciencia (UNIQUE documento+usuário, 0006): as
+    // duas requisições do duplo clique passam pelo mesmo pré-check e a
+    // segunda estoura 23505 dentro da transação — sem esta tradução, 500 cru.
+    if (violacaoUnica(erro) === "ciencia_documento_id_usuario_id_key") {
+      throw new ErroHttp(409, "Ciência já registrada para esta entrega.");
+    }
+    throw erro;
+  }
 }
 
 // ------------------------------------------------------------------ CAT

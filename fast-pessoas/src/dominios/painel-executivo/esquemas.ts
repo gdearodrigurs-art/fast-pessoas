@@ -1,14 +1,24 @@
 // Contrato de SAÍDA do Dashboard Executivo.
 //
-// Este domínio não tem entrada: a rota é um GET sem parâmetro e o recorte é
-// sempre "a empresa inteira, hoje, contra os últimos 12 meses" — por decisão de
-// escopo, não por esquecimento (filtro por unidade e por período livre estão
-// registrados como evolução no fim deste arquivo). Por isso `esquemas.ts` aqui
-// carrega o CONTRATO e os rótulos, e não um objeto zod de validação.
+// A ENTRADA do painel é o filtro dos TRÊS da estrutura (registro / lotação /
+// centro de custo), o MESMO da lista de colaboradores — por isso o esquema de
+// entrada não mora aqui: a rota reusa `esquemaFiltroEstrutura` de ../estrutura.
+// Filtro em branco é a leitura de sempre ("a empresa inteira, hoje, contra os
+// últimos 12 meses"): com nada escolhido cada consulta gera EXATAMENTE o SQL de
+// antes deste filtro, e nenhum número muda. O que este arquivo carrega é o
+// CONTRATO de saída e os rótulos — e agora também as OPÇÕES dos seletores e o
+// RECORTE já resolvido em rótulo, para a tela dizer por onde recortou.
+//
+// Cada consulta que aceita o filtro resolve a lotação NA SUA data de referência
+// (ponto-no-tempo), não na de hoje: turnover recorta pela unidade da época do
+// desligamento/admissão, custo pela da competência, absenteísmo dia a dia.
+// Só período livre (de/até) continua fora — segue na evolução no fim do arquivo.
 //
 // Regra de ouro do painel, que vale para cada tipo abaixo: número de diretoria
 // vem com PROCEDÊNCIA. Todo card diz o valor, o PERÍODO a que se refere e A
 // CONTA que o produziu. Um número sem origem não serve para decidir.
+
+import type { OpcoesFiltroEstrutura } from "../estrutura/esquemas";
 
 export const CHAVE_PAINEL = "painel.executivo.ver";
 
@@ -87,6 +97,19 @@ export interface CardSemFonte {
   disponivel: false;
   bloqueio: "sem_fonte";
   motivo: string;
+}
+
+/**
+ * Desenvolvimento das pessoas — vive no PDI. Substitui o antigo "ROI de
+ * treinamento" (que dependia do T&D no Sults): agora há fonte de verdade.
+ */
+export interface CardDesenvolvimento {
+  disponivel: true;
+  planos_ativos: number;
+  pessoas: number;
+  acoes_total: number;
+  acoes_concluidas: number;
+  acoes_andamento: number;
 }
 
 export interface CardHeadcount {
@@ -230,6 +253,23 @@ export interface PainelExecutivo {
   /** Data de referência do painel (America/Sao_Paulo, AAAA-MM-DD). */
   hoje: string;
   janela_12m: { inicio: string; fim: string };
+  /**
+   * O que oferecer nos três seletores. Vem de `listarOpcoesDeFiltroEstrutura`
+   * (ancorada em hoje), a mesma fonte da lista de colaboradores — a tela lê as
+   * opções da própria resposta, sem um segundo fetch.
+   */
+  estrutura_opcoes: OpcoesFiltroEstrutura;
+  /**
+   * Recorte aplicado, já traduzido em rótulo (não em id), ou `null` quando o
+   * filtro veio vazio. Cada campo é o rótulo do que foi escolhido ou `null`. A
+   * tela usa isto no selo "Recortado por: …"; as `conta` dos cards afetados
+   * repetem a procedência para o número não sair sem origem.
+   */
+  recorte: {
+    empresa: string | null;
+    lotacao: string | null;
+    centro_custo: string | null;
+  } | null;
   headcount: CardHeadcount;
   turnover: CardTurnover;
   /**
@@ -246,7 +286,7 @@ export interface PainelExecutivo {
   diversidade: CardDiversidade;
   clima: CardClima;
   performance: CardPerformance;
-  roi_treinamento: CardSemFonte;
+  desenvolvimento: CardDesenvolvimento;
 }
 
 // ------------------------------------------------------------------ rótulos
@@ -290,10 +330,16 @@ export function dataCurta(iso: string): string {
 
 // ------------------------------------------------------------------ evolução
 // Registrado, não escondido — o que ficou fora deste corte e por quê:
-//  • FILTRO POR UNIDADE no painel inteiro: hoje cada card traz o recorte por
-//    unidade onde ele existe (headcount, custo), mas não há um seletor global.
-//    Turnover e absenteísmo por unidade exigem decidir a unidade DA ÉPOCA do
-//    fato (a lotação muda), e isso é modelagem, não tela.
+//  • FILTRO POR UNIDADE no painel inteiro: FEITO. Há um seletor global dos três
+//    (registro / lotação / centro de custo) e cada card recorta na unidade DA
+//    ÉPOCA do fato — turnover pela véspera do desligamento e pelo dia da
+//    admissão, custo pela competência, absenteísmo dia a dia. Dois recortes
+//    ficaram de fora por decisão: tempo de contratação recorta SÓ por lotação
+//    (a ponte vaga→admissão não tem registro nem centro de custo próprios) e
+//    clima, performance e desenvolvimento não recortam (anonimato / visão de
+//    empresa). Limitação conhecida: as OPÇÕES dos seletores saem de
+//    listarOpcoesDeFiltroEstrutura, ancorada em HOJE — uma unidade sem ninguém
+//    lotado hoje não aparece na lista, mesmo que tenha história na janela.
 //  • PERÍODO LIVRE (de/até): a janela é fixa em 12 meses porque é o que a
 //    diretoria compara. Período livre pede persistir a escolha e recalcular
 //    todas as bases móveis.
@@ -305,5 +351,5 @@ export function dataCurta(iso: string): string {
 //    12h tratados como se não existissem. Derivar o dia esperado da escala
 //    (rh.escala_colaborador) é conta do motor do ponto; consumi-la aqui melhora
 //    o denominador sem mudar a fórmula.
-//  • ROI DE TREINAMENTO: depende do módulo de T&D (hoje no Sults). O card diz
-//    isso na tela em vez de inventar número — ver `roi_treinamento`.
+//  • DESENVOLVIMENTO: o T&D vive no PDI (decisão do dono, 13/08/2026). O card
+//    mostra planos ativos e o andamento das ações — ver `desenvolvimento`.

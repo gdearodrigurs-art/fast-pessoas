@@ -26,6 +26,7 @@
 
 import { consultar } from "../../lib/banco";
 import { ENTRADA_NO_GRUPO, SAIDA_DO_GRUPO } from "../../lib/sql-vinculo";
+import type { FiltroEstrutura } from "../estrutura/esquemas";
 import { RUBRICA_FGTS } from "./esquemas";
 
 const HOJE_SP = "(now() AT TIME ZONE 'America/Sao_Paulo')::date";
@@ -69,6 +70,67 @@ const EH_FERIADO = (expressaoDia: string, aliasColaborador: string) => `EXISTS (
 const LOTACAO_EM = (alias: string, parametro: string) =>
   `${alias}.inicio_vigencia <= ${parametro}::date
      AND (${alias}.fim_vigencia IS NULL OR ${alias}.fim_vigencia >= ${parametro}::date)`;
+
+// ------------------------------------------------------------------ recorte pelos três
+// O filtro dos três da estrutura (registro / lotação / centro de custo), o mesmo
+// da lista de colaboradores. AQUI ele é sempre PONTO-NO-TEMPO: resolve a lotação
+// na data de referência de CADA consulta (via LOTACAO_EM), nunca a "última
+// lotação de hoje" que `condicaoFiltroEstrutura` (estrutura/repositorio) usa —
+// aquela briga com o eixo tempo do painel (a unidade da época do fato).
+//
+// Regra-mestra: filtro vazio devolve string vazia e NÃO empurra parâmetro
+// nenhum, então o SQL sai idêntico ao de antes deste filtro e nenhum número
+// muda enquanto o usuário não escolhe nada.
+
+/**
+ * As comparações de estrutura sobre um alias de rh.lotacao (só as que o filtro
+ * trouxe), empurrando cada id escolhido em `parametros`. Base comum do recorte
+ * por EXISTS (ponto-no-tempo) e do recorte direto no JOIN da consulta-âncora
+ * `headcountPorUnidade`.
+ */
+function predicadosEstrutura(
+  filtro: FiltroEstrutura,
+  parametros: unknown[],
+  alias: string
+): string[] {
+  const comparacoes: string[] = [];
+  if (filtro.empresa_id !== undefined) {
+    parametros.push(filtro.empresa_id);
+    comparacoes.push(`${alias}.empresa_id = $${parametros.length}`);
+  }
+  if (filtro.estabelecimento_id !== undefined) {
+    parametros.push(filtro.estabelecimento_id);
+    comparacoes.push(`${alias}.estabelecimento_id = $${parametros.length}`);
+  }
+  if (filtro.centro_custo_id !== undefined) {
+    parametros.push(filtro.centro_custo_id);
+    comparacoes.push(`${alias}.centro_custo_id = $${parametros.length}`);
+  }
+  return comparacoes;
+}
+
+/**
+ * Pedaço de WHERE (já começando por AND) que restringe `<alias>.id` a quem tinha
+ * lotação casada com o filtro NA data `dataExpr` — ou "" quando o filtro está
+ * vazio (e aí nada muda, nem o SQL nem `parametros`). `dataExpr` é a expressão
+ * de data-régua da consulta chamadora ("$1", "m.ref", "c.data_admissao", …); o
+ * `::date` já é acrescentado por LOTACAO_EM.
+ */
+export const recorteNaData = (
+  filtro: FiltroEstrutura,
+  parametros: unknown[],
+  dataExpr: string,
+  aliasColaborador = "c"
+): string => {
+  const comparacoes = predicadosEstrutura(filtro, parametros, "l");
+  if (comparacoes.length === 0) return "";
+  return ` AND EXISTS (
+      SELECT 1 FROM rh.lotacao l
+       WHERE l.colaborador_id = ${aliasColaborador}.id
+         AND ${LOTACAO_EM("l", dataExpr)}
+         AND ${comparacoes.join(" AND ")}
+    )`;
+};
 
 export interface LinhaSerie extends Record<string, unknown> {
   mes: string;
@@ -124,12 +186,54 @@ export async function registrarLeituraSensivel(entrada: {
 
 // ------------------------------------------------------------------ headcount
 
-export async function headcountEm(data: string): Promise<number> {
+export async function headcountEm(
+  data: string,
+  filtro: FiltroEstrutura = {}
+): Promise<number> {
+  const parametros: unknown[] = [data];
+  const recorte = recorteNaData(filtro, parametros, "$1");
   const linhas = await consultar<{ total: number }>(
-    `SELECT COUNT(*)::int AS total FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$1")}`,
-    [data]
+    `SELECT COUNT(*)::int AS total FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$1")}${recorte}`,
+    parametros
   );
   return linhas[0]?.total ?? 0;
+}
+
+/**
+ * Desenvolvimento (PDI): planos homologados e o andamento das ações. Substitui o
+ * antigo "ROI de treinamento" — agora que o T&D vive no PDI, há fonte de verdade.
+ * Visão de empresa (o painel é de diretoria/DP); as ações vivem em rh.acao_aberta.
+ */
+export async function desenvolvimentoPdi(): Promise<{
+  planos_ativos: number;
+  pessoas: number;
+  acoes_total: number;
+  acoes_concluidas: number;
+  acoes_andamento: number;
+}> {
+  const linhas = await consultar<{
+    planos_ativos: number;
+    pessoas: number;
+    acoes_total: number;
+    acoes_concluidas: number;
+    acoes_andamento: number;
+  }>(
+    `SELECT
+       (SELECT count(*) FROM rh.pdi WHERE status = 'homologado')::int AS planos_ativos,
+       (SELECT count(DISTINCT pessoa_id) FROM rh.pdi WHERE status = 'homologado')::int AS pessoas,
+       count(*)::int AS acoes_total,
+       count(*) FILTER (WHERE a.status = 'concluida')::int AS acoes_concluidas,
+       count(*) FILTER (WHERE a.status = 'em_andamento')::int AS acoes_andamento
+     FROM rh.acao_aberta a`
+  );
+  const l = linhas[0];
+  return {
+    planos_ativos: l?.planos_ativos ?? 0,
+    pessoas: l?.pessoas ?? 0,
+    acoes_total: l?.acoes_total ?? 0,
+    acoes_concluidas: l?.acoes_concluidas ?? 0,
+    acoes_andamento: l?.acoes_andamento ?? 0,
+  };
 }
 
 /**
@@ -145,31 +249,41 @@ export async function headcountEm(data: string): Promise<number> {
  * renomeada continua sendo uma só.
  */
 export async function headcountPorUnidade(
-  data: string
+  data: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaContagemBruta[]> {
+  // Consulta-âncora: já tem o JOIN com rh.lotacao resolvido em LOTACAO_EM('$1'),
+  // então o recorte entra DIRETO no ON do JOIN (não por EXISTS) — a linha da
+  // quebra é a mesma que o predicado filtra.
+  const parametros: unknown[] = [data];
+  const predicados = predicadosEstrutura(filtro, parametros, "l");
+  const recorteJoin = predicados.length ? ` AND ${predicados.join(" AND ")}` : "";
   return consultar<LinhaContagemBruta>(
     `SELECT ev.unidade AS rotulo, COUNT(*)::int AS quantidade
        FROM rh.colaborador c
-       JOIN rh.lotacao l ON l.colaborador_id = c.id AND ${LOTACAO_EM("l", "$1")}
+       JOIN rh.lotacao l ON l.colaborador_id = c.id AND ${LOTACAO_EM("l", "$1")}${recorteJoin}
        LEFT JOIN rh.estabelecimento_versao ev
          ON ev.id = rh.estabelecimento_versao_em(l.estabelecimento_id, $1::date)
       WHERE ${ATIVO_EM("c", "$1")}
       GROUP BY l.estabelecimento_id, ev.unidade
       ORDER BY 2 DESC, 1`,
-    [data]
+    parametros
   );
 }
 
 export async function headcountPorVinculo(
-  data: string
+  data: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaContagemBruta[]> {
+  const parametros: unknown[] = [data];
+  const recorte = recorteNaData(filtro, parametros, "$1");
   return consultar<LinhaContagemBruta>(
     `SELECT c.tipo_vinculo AS rotulo, COUNT(*)::int AS quantidade
        FROM rh.colaborador c
-      WHERE ${ATIVO_EM("c", "$1")}
+      WHERE ${ATIVO_EM("c", "$1")}${recorte}
       GROUP BY c.tipo_vinculo
       ORDER BY 2 DESC, 1`,
-    [data]
+    parametros
   );
 }
 
@@ -179,8 +293,12 @@ export async function headcountPorVinculo(
  */
 export async function serieHeadcount(
   primeiroMes: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaSerie[]> {
+  const parametros: unknown[] = [primeiroMes, fim];
+  // Régua = fim do mês de cada ponto (m.ref): a lotação da época de cada mês.
+  const recorte = recorteNaData(filtro, parametros, "m.ref");
   return consultar<LinhaSerie>(
     `WITH meses AS (
        SELECT g::date AS mes,
@@ -191,10 +309,10 @@ export async function serieHeadcount(
      SELECT to_char(m.mes, 'YYYY-MM') AS mes,
             (SELECT COUNT(*)::int FROM rh.colaborador c
               WHERE c.data_admissao <= m.ref
-                AND (c.data_desligamento IS NULL OR c.data_desligamento > m.ref)) AS valor
+                AND (c.data_desligamento IS NULL OR c.data_desligamento > m.ref)${recorte}) AS valor
        FROM meses m
       ORDER BY 1`,
-    [primeiroMes, fim]
+    parametros
   );
 }
 
@@ -210,37 +328,51 @@ export interface TurnoverBruto extends Record<string, unknown> {
 /** Janela ABERTA no início e fechada no fim: (inicio, fim]. */
 export async function turnoverJanela(
   inicio: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<TurnoverBruto> {
+  // Cada perna resolve a unidade da SUA época (precedente J-3): o desligado pela
+  // VÉSPERA da saída (ainda estava lotado), o admitido pelo DIA da admissão, e
+  // os dois headcounts pela sua data-régua ($1 e $2).
+  const parametros: unknown[] = [inicio, fim];
+  const recorteDesligados = recorteNaData(filtro, parametros, "(c.data_desligamento - 1)");
+  const recorteAdmitidos = recorteNaData(filtro, parametros, "c.data_admissao");
+  const recorteInicio = recorteNaData(filtro, parametros, "$1");
+  const recorteFim = recorteNaData(filtro, parametros, "$2");
   const linhas = await consultar<TurnoverBruto>(
     `SELECT
        (SELECT COUNT(*)::int FROM rh.colaborador c
          WHERE c.data_desligamento > $1::date AND c.data_desligamento <= $2::date
-           AND ${SAIDA_DO_GRUPO("c")}) AS desligados,
+           AND ${SAIDA_DO_GRUPO("c")}${recorteDesligados}) AS desligados,
        (SELECT COUNT(*)::int FROM rh.colaborador c
          WHERE c.data_admissao > $1::date AND c.data_admissao <= $2::date
-           AND ${ENTRADA_NO_GRUPO("c")}) AS admitidos,
-       (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$1")}) AS hc_inicio,
-       (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$2")}) AS hc_fim`,
-    [inicio, fim]
+           AND ${ENTRADA_NO_GRUPO("c")}${recorteAdmitidos}) AS admitidos,
+       (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$1")}${recorteInicio}) AS hc_inicio,
+       (SELECT COUNT(*)::int FROM rh.colaborador c WHERE ${ATIVO_EM("c", "$2")}${recorteFim}) AS hc_fim`,
+    parametros
   );
   return linhas[0];
 }
 
 export async function serieDesligamentos(
   primeiroMes: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaSerie[]> {
+  const parametros: unknown[] = [primeiroMes, fim];
+  // Mesma véspera do turnover (J-3): a unidade em que a pessoa estava no dia
+  // anterior ao desligamento.
+  const recorte = recorteNaData(filtro, parametros, "(c.data_desligamento - 1)");
   return consultar<LinhaSerie>(
     `SELECT to_char(g.mes, 'YYYY-MM') AS mes,
             (SELECT COUNT(*)::int FROM rh.colaborador c
               WHERE c.data_desligamento >= g.mes::date
                 AND c.data_desligamento < (g.mes + interval '1 month')::date
-                AND ${SAIDA_DO_GRUPO("c")}) AS valor
+                AND ${SAIDA_DO_GRUPO("c")}${recorte}) AS valor
        FROM generate_series($1::date, date_trunc('month', $2::date)::date,
                             interval '1 month') AS g(mes)
       ORDER BY 1`,
-    [primeiroMes, fim]
+    parametros
   );
 }
 
@@ -282,8 +414,23 @@ export interface TotalCompetencia extends Record<string, unknown> {
  * vez de deixar a diretoria achar que é custo total.
  */
 export async function totalCompetencia(
-  competenciaId: number
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
 ): Promise<TotalCompetencia> {
+  // A época é embutida na competência (último dia), então o recorte usa a view
+  // rh_folha.apropriacao_competencia (que resolve estrutura na data da folha),
+  // sem passar data. O MESMO EXISTS entra no total de proventos (alias f) e no
+  // subselect do FGTS (alias f2), senão o card somaria proventos recortados a um
+  // FGTS de todo mundo. Filtro vazio -> comparacoes = [] -> exists() = "" ->
+  // SQL idêntico ao de antes.
+  const parametros: unknown[] = [competenciaId, RUBRICA_FGTS];
+  const comparacoes = predicadosEstrutura(filtro, parametros, "ap");
+  const existe = (aliasFolha: string) =>
+    comparacoes.length === 0
+      ? ""
+      : ` AND EXISTS (SELECT 1 FROM rh_folha.apropriacao_competencia ap
+            WHERE ap.folha_colaborador_id = ${aliasFolha}.id
+              AND ${comparacoes.join(" AND ")})`;
   const linhas = await consultar<TotalCompetencia>(
     `SELECT COUNT(*)::int AS pessoas,
             COALESCE(SUM(f.total_proventos), 0) AS proventos,
@@ -292,10 +439,10 @@ export async function totalCompetencia(
                         JOIN rh_folha.item_calculo i ON i.folha_colaborador_id = f2.id
                         JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
                         JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id AND r.codigo = $2
-                       WHERE f2.competencia_id = $1), 0) AS encargo_fgts
+                       WHERE f2.competencia_id = $1${existe("f2")}), 0) AS encargo_fgts
        FROM rh_folha.folha_colaborador f
-      WHERE f.competencia_id = $1`,
-    [competenciaId, RUBRICA_FGTS]
+      WHERE f.competencia_id = $1${existe("f")}`,
+    parametros
   );
   return linhas[0];
 }
@@ -329,8 +476,14 @@ export interface CustoUnidadeBruto extends Record<string, unknown> {
  * na competência — é essa diferença que o serviço publica como `sem_lotacao`.
  */
 export async function custoPorUnidade(
-  competenciaId: number
+  competenciaId: number,
+  filtro: FiltroEstrutura = {}
 ): Promise<CustoUnidadeBruto[]> {
+  // A view já resolve estrutura na data da competência, então o recorte é
+  // predicado direto sobre ap.* no WHERE (não precisa de EXISTS nem de data).
+  const parametros: unknown[] = [competenciaId, RUBRICA_FGTS];
+  const predicados = predicadosEstrutura(filtro, parametros, "ap");
+  const recorteWhere = predicados.length ? ` AND ${predicados.join(" AND ")}` : "";
   return consultar<CustoUnidadeBruto>(
     `SELECT ap.lotacao_nome AS unidade,
             ap.centro_custo_codigo AS centro_custo,
@@ -346,16 +499,30 @@ export async function custoPorUnidade(
           WHERE i.folha_colaborador_id = ap.folha_colaborador_id
        ) g ON TRUE
       WHERE ap.competencia_id = $1
-        AND ap.lotacao_id IS NOT NULL
+        AND ap.lotacao_id IS NOT NULL${recorteWhere}
       GROUP BY ap.estabelecimento_id, ap.lotacao_nome,
                ap.centro_custo_id, ap.centro_custo_codigo
       ORDER BY 4 DESC, 1`,
-    [competenciaId, RUBRICA_FGTS]
+    parametros
   );
 }
 
 /** Série do custo por competência FECHADA (só folha fechada é número oficial). */
-export async function serieCustoFechado(limite: number): Promise<LinhaSerie[]> {
+export async function serieCustoFechado(
+  limite: number,
+  filtro: FiltroEstrutura = {}
+): Promise<LinhaSerie[]> {
+  // Mesma técnica de EXISTS por competência do totalCompetencia: cada
+  // competência da série resolve a estrutura na sua própria época (a view), e o
+  // recorte vale no total de proventos (f) e no FGTS (f2) juntos.
+  const parametros: unknown[] = [limite, RUBRICA_FGTS];
+  const comparacoes = predicadosEstrutura(filtro, parametros, "ap");
+  const existe = (aliasFolha: string) =>
+    comparacoes.length === 0
+      ? ""
+      : ` AND EXISTS (SELECT 1 FROM rh_folha.apropriacao_competencia ap
+            WHERE ap.folha_colaborador_id = ${aliasFolha}.id
+              AND ${comparacoes.join(" AND ")})`;
   return consultar<LinhaSerie>(
     `SELECT to_char(make_date(cf.ano, cf.mes, 1), 'YYYY-MM') AS mes,
             COALESCE(SUM(f.total_proventos), 0)
@@ -364,14 +531,14 @@ export async function serieCustoFechado(limite: number): Promise<LinhaSerie[]> {
                           JOIN rh_folha.item_calculo i ON i.folha_colaborador_id = f2.id
                           JOIN rh_folha.rubrica_versao rv ON rv.id = i.rubrica_versao_id
                           JOIN rh_folha.rubrica r ON r.id = rv.rubrica_id AND r.codigo = $2
-                         WHERE f2.competencia_id = cf.id), 0) AS valor
+                         WHERE f2.competencia_id = cf.id${existe("f2")}), 0) AS valor
        FROM rh_folha.competencia_folha cf
        JOIN rh_folha.folha_colaborador f ON f.competencia_id = cf.id
-      WHERE cf.estado = 'fechada'
+      WHERE cf.estado = 'fechada'${existe("f")}
       GROUP BY cf.id, cf.ano, cf.mes
       ORDER BY cf.ano DESC, cf.mes DESC
       LIMIT $1`,
-    [limite, RUBRICA_FGTS]
+    parametros
   );
 }
 
@@ -402,8 +569,20 @@ export interface CasoContratacaoBruto extends Record<string, unknown> {
  */
 export async function temposContratacao(
   inicio: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<CasoContratacaoBruto[]> {
+  // Recorta SÓ por estabelecimento, via a unidade DA REQUISIÇÃO
+  // (rq.estabelecimento_versao_id -> ev.estabelecimento_id) — a ponte
+  // vaga→admissão não tem registro nem centro de custo próprios, então
+  // empresa_id/centro_custo_id são ignorados de propósito (a `conta` diz isso).
+  // ev já está sempre no JOIN (o card mostra ev.unidade), então só o predicado.
+  const parametros: unknown[] = [inicio, fim];
+  let recorteEstab = "";
+  if (filtro.estabelecimento_id !== undefined) {
+    parametros.push(filtro.estabelecimento_id);
+    recorteEstab = ` AND ev.estabelecimento_id = $${parametros.length}`;
+  }
   return consultar<CasoContratacaoBruto>(
     `SELECT rq.id::int AS requisicao_id,
             cv.nome AS cargo_nome,
@@ -422,9 +601,9 @@ export async function temposContratacao(
       WHERE ca.status = 'aprovada'
         AND co.data_admissao >= (rq.decidido_em AT TIME ZONE 'America/Sao_Paulo')::date
         AND co.data_admissao > $1::date
-        AND co.data_admissao <= $2::date
+        AND co.data_admissao <= $2::date${recorteEstab}
       ORDER BY co.data_admissao DESC`,
-    [inicio, fim]
+    parametros
   );
 }
 
@@ -436,18 +615,32 @@ export interface PernaRecrutamento extends Record<string, unknown> {
 /** Perna só de R&S: requisição aprovada → vaga fechada. Amostra maior. */
 export async function pernaRecrutamento(
   inicio: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<PernaRecrutamento> {
+  // Recorta SÓ por estabelecimento, como temposContratacao. A unidade sai da
+  // requisição (rq.estabelecimento_versao_id), então quando há recorte trazemos
+  // o JOIN de rh.estabelecimento_versao — que esta consulta não usava — para ter
+  // ev.estabelecimento_id. Sem recorte o JOIN não entra e o SQL fica idêntico.
+  const parametros: unknown[] = [inicio, fim];
+  let joinEstab = "";
+  let recorteEstab = "";
+  if (filtro.estabelecimento_id !== undefined) {
+    parametros.push(filtro.estabelecimento_id);
+    joinEstab =
+      " JOIN rh.estabelecimento_versao ev ON ev.id = rq.estabelecimento_versao_id";
+    recorteEstab = ` AND ev.estabelecimento_id = $${parametros.length}`;
+  }
   const linhas = await consultar<PernaRecrutamento>(
     `SELECT COUNT(*)::int AS vagas,
             ROUND(AVG((v.atualizado_em AT TIME ZONE 'America/Sao_Paulo')::date
                       - (rq.decidido_em AT TIME ZONE 'America/Sao_Paulo')::date), 1) AS dias_medio
        FROM rh.vaga v
-       JOIN rh.requisicao_vaga rq ON rq.id = v.requisicao_id AND rq.decidido_em IS NOT NULL
+       JOIN rh.requisicao_vaga rq ON rq.id = v.requisicao_id AND rq.decidido_em IS NOT NULL${joinEstab}
       WHERE v.status = 'fechada'
         AND (v.atualizado_em AT TIME ZONE 'America/Sao_Paulo')::date > $1::date
-        AND (v.atualizado_em AT TIME ZONE 'America/Sao_Paulo')::date <= $2::date`,
-    [inicio, fim]
+        AND (v.atualizado_em AT TIME ZONE 'America/Sao_Paulo')::date <= $2::date${recorteEstab}`,
+    parametros
   );
   return linhas[0];
 }
@@ -491,8 +684,18 @@ export interface LinhaAbsenteismo extends Record<string, unknown> {
  */
 export async function absenteismoMensal(
   inicio: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaAbsenteismo[]> {
+  // Régua = o DIA de cada iteração: numerador (ausentes) e denominador
+  // (previstos) recortam pela lotação vigente NAQUELE dia — o MESMO recorte nos
+  // dois lados, senão o percentual mistura numerador de uma unidade com
+  // denominador de todas. As duas CTEs usam a data-régua com o alias que a sua
+  // linha expõe (`dia` no denominador, `d.dia` no numerador); com filtro vazio
+  // os dois recortes são "" e o SQL sai idêntico ao de antes.
+  const parametros: unknown[] = [inicio, fim];
+  const recortePrevistos = recorteNaData(filtro, parametros, "dia");
+  const recorteAusentes = recorteNaData(filtro, parametros, "d.dia");
   return consultar<LinhaAbsenteismo>(
     `WITH dias AS (
        SELECT g::date AS dia
@@ -505,7 +708,7 @@ export async function absenteismoMensal(
          JOIN rh.colaborador c
            ON dia >= c.data_admissao
           AND (c.data_desligamento IS NULL OR dia <= c.data_desligamento)
-        WHERE NOT ${EH_FERIADO("dia", "c")}
+        WHERE NOT ${EH_FERIADO("dia", "c")}${recortePrevistos}
         GROUP BY 1
      ),
      ausentes AS (
@@ -518,7 +721,7 @@ export async function absenteismoMensal(
            ON c.id = a.colaborador_id
           AND d.dia >= c.data_admissao
           AND (c.data_desligamento IS NULL OR d.dia <= c.data_desligamento)
-        WHERE NOT ${EH_FERIADO("d.dia", "c")}
+        WHERE NOT ${EH_FERIADO("d.dia", "c")}${recorteAusentes}
         GROUP BY 1
      )
      SELECT to_char(p.mes, 'YYYY-MM') AS mes, p.dias AS previstos,
@@ -526,7 +729,7 @@ export async function absenteismoMensal(
        FROM previstos p
        LEFT JOIN ausentes a ON a.mes = p.mes
       ORDER BY 1`,
-    [inicio, fim]
+    parametros
   );
 }
 
@@ -545,36 +748,61 @@ export interface LinhaMovimentacao extends Record<string, unknown> {
  */
 export async function movimentacoesAplicadas(
   inicio: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaMovimentacao[]> {
+  // Recorta pela lotação do colaborador na DATA DE APLICAÇÃO (decisão: uniforme
+  // com o resto, NÃO pelo destino da demanda). recorteNaData correlaciona por
+  // `c.id`, e demanda_movimentacao guarda `colaborador_id` — então quando há
+  // recorte trazemos o JOIN de rh.colaborador; sem recorte o SQL fica idêntico.
+  const parametros: unknown[] = [inicio, fim];
+  const recorte = recorteNaData(
+    filtro,
+    parametros,
+    "(dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date"
+  );
+  const joinColab = recorte
+    ? " JOIN rh.colaborador c ON c.id = dm.colaborador_id"
+    : "";
   return consultar<LinhaMovimentacao>(
     `SELECT dm.tipo, COUNT(*)::int AS quantidade
-       FROM rh.demanda_movimentacao dm
+       FROM rh.demanda_movimentacao dm${joinColab}
       WHERE dm.aplicada_em IS NOT NULL
         AND (dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date > $1::date
-        AND (dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date <= $2::date
+        AND (dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date <= $2::date${recorte}
       GROUP BY dm.tipo`,
-    [inicio, fim]
+    parametros
   );
 }
 
 export async function seriePromocoes(
   primeiroMes: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaSerie[]> {
+  // Mesmo recorte de movimentacoesAplicadas: lotação na data de aplicação.
+  const parametros: unknown[] = [primeiroMes, fim];
+  const recorte = recorteNaData(
+    filtro,
+    parametros,
+    "(dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date"
+  );
+  const joinColab = recorte
+    ? " JOIN rh.colaborador c ON c.id = dm.colaborador_id"
+    : "";
   return consultar<LinhaSerie>(
     `SELECT to_char(g.mes, 'YYYY-MM') AS mes,
             (SELECT COUNT(*)::int
-               FROM rh.demanda_movimentacao dm
+               FROM rh.demanda_movimentacao dm${joinColab}
               WHERE dm.tipo = 'promocao'
                 AND dm.aplicada_em IS NOT NULL
                 AND (dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date >= g.mes::date
                 AND (dm.aplicada_em AT TIME ZONE 'America/Sao_Paulo')::date
-                    < (g.mes + interval '1 month')::date) AS valor
+                    < (g.mes + interval '1 month')::date${recorte}) AS valor
        FROM generate_series($1::date, date_trunc('month', $2::date)::date,
                             interval '1 month') AS g(mes)
       ORDER BY 1`,
-    [primeiroMes, fim]
+    parametros
   );
 }
 
@@ -585,13 +813,18 @@ export interface LinhaGenero extends Record<string, unknown> {
   quantidade: number;
 }
 
-export async function contarPorGenero(data: string): Promise<LinhaGenero[]> {
+export async function contarPorGenero(
+  data: string,
+  filtro: FiltroEstrutura = {}
+): Promise<LinhaGenero[]> {
+  const parametros: unknown[] = [data];
+  const recorte = recorteNaData(filtro, parametros, "$1");
   return consultar<LinhaGenero>(
     `SELECT c.genero, COUNT(*)::int AS quantidade
        FROM rh.colaborador c
-      WHERE ${ATIVO_EM("c", "$1")}
+      WHERE ${ATIVO_EM("c", "$1")}${recorte}
       GROUP BY c.genero`,
-    [data]
+    parametros
   );
 }
 
@@ -600,15 +833,20 @@ export interface LinhaIdade extends Record<string, unknown> {
   quantidade: number;
 }
 
-export async function contarPorIdade(data: string): Promise<LinhaIdade[]> {
+export async function contarPorIdade(
+  data: string,
+  filtro: FiltroEstrutura = {}
+): Promise<LinhaIdade[]> {
+  const parametros: unknown[] = [data];
+  const recorte = recorteNaData(filtro, parametros, "$1");
   return consultar<LinhaIdade>(
     `SELECT date_part('year', age($1::date, c.data_nascimento))::int AS idade,
             COUNT(*)::int AS quantidade
        FROM rh.colaborador c
       WHERE ${ATIVO_EM("c", "$1")}
-        AND c.data_nascimento IS NOT NULL
+        AND c.data_nascimento IS NOT NULL${recorte}
       GROUP BY 1`,
-    [data]
+    parametros
   );
 }
 
@@ -618,14 +856,17 @@ export interface CoberturaNascimento extends Record<string, unknown> {
 }
 
 export async function coberturaNascimento(
-  data: string
+  data: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<CoberturaNascimento> {
+  const parametros: unknown[] = [data];
+  const recorte = recorteNaData(filtro, parametros, "$1");
   const linhas = await consultar<CoberturaNascimento>(
     `SELECT COUNT(*) FILTER (WHERE c.data_nascimento IS NOT NULL)::int AS com_data,
             COUNT(*) FILTER (WHERE c.data_nascimento IS NULL)::int AS sem_data
        FROM rh.colaborador c
-      WHERE ${ATIVO_EM("c", "$1")}`,
-    [data]
+      WHERE ${ATIVO_EM("c", "$1")}${recorte}`,
+    parametros
   );
   return linhas[0];
 }
@@ -645,8 +886,15 @@ export interface LinhaSerieGenero extends Record<string, unknown> {
  */
 export async function serieGenero(
   primeiroMes: string,
-  fim: string
+  fim: string,
+  filtro: FiltroEstrutura = {}
 ): Promise<LinhaSerieGenero[]> {
+  // Régua m.ref (fim do mês do ponto). O MESMO recorte entra nos dois
+  // subselects — mulheres e total — para o percentual não misturar numerador de
+  // uma unidade com denominador de todas. Uma chamada só, injetada duas vezes:
+  // os dois subselects compartilham os mesmos parâmetros.
+  const parametros: unknown[] = [primeiroMes, fim];
+  const recorte = recorteNaData(filtro, parametros, "m.ref");
   return consultar<LinhaSerieGenero>(
     `WITH meses AS (
        SELECT g::date AS mes,
@@ -658,13 +906,13 @@ export async function serieGenero(
             (SELECT COUNT(*)::int FROM rh.colaborador c
               WHERE c.data_admissao <= m.ref
                 AND (c.data_desligamento IS NULL OR c.data_desligamento > m.ref)
-                AND c.genero = 'feminino') AS mulheres,
+                AND c.genero = 'feminino'${recorte}) AS mulheres,
             (SELECT COUNT(*)::int FROM rh.colaborador c
               WHERE c.data_admissao <= m.ref
-                AND (c.data_desligamento IS NULL OR c.data_desligamento > m.ref)) AS total
+                AND (c.data_desligamento IS NULL OR c.data_desligamento > m.ref)${recorte}) AS total
        FROM meses m
       ORDER BY 1`,
-    [primeiroMes, fim]
+    parametros
   );
 }
 

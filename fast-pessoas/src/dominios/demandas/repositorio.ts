@@ -4,6 +4,7 @@ import { TipoVinculo } from "../colaboradores/esquemas";
 import {
   FiltroDemandas,
   FluxoDemanda,
+  ModoTransferencia,
   NivelAprovacao,
   StatusDemanda,
   StatusEtapa,
@@ -680,6 +681,27 @@ export async function listarEtapas(
   return linhas.map(paraEtapa);
 }
 
+/**
+ * Quem decidiu (aprovou) a etapa do LÍDER desta demanda. O nível da diretoria
+ * não pode ser decidido pela mesma pessoa (4 olhos) — e o tipo público
+ * EtapaAprovacao não expõe o id do decisor, por isso a consulta dedicada.
+ */
+export async function decisorDaEtapaLider(
+  cliente: PoolClient,
+  demandaId: number
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ decisor_usuario_id: string | null }>(
+    `SELECT decisor_usuario_id
+       FROM rh.etapa_aprovacao_demanda
+      WHERE demanda_id = $1 AND nivel = 'lider' AND status = 'aprovada'
+      ORDER BY ordem
+      LIMIT 1`,
+    [demandaId]
+  );
+  const id = rows[0]?.decisor_usuario_id;
+  return id === undefined || id === null ? null : Number(id);
+}
+
 /** Etapas de várias demandas de uma vez (fila do líder / da diretoria). */
 export async function listarEtapasDeVarias(
   demandaIds: number[]
@@ -821,6 +843,11 @@ export interface Movimentacao {
    */
   gestor_destino_colaborador_id: number | null;
   gestor_destino_nome: string | null;
+  /**
+   * Modo da transferência (0065). 'continuidade' = mesmo empregador, o contrato
+   * segue no mesmo vínculo; 'rescisao' = encerra e reabre. null nos demais tipos.
+   */
+  modo_transferencia: ModoTransferencia | null;
   /** Preenchido na aplicação do efeito: o vínculo criado na empresa destino. */
   vinculo_destino_id: number | null;
   vinculo_destino_matricula: string | null;
@@ -863,6 +890,7 @@ interface LinhaMovimentacao extends Record<string, unknown> {
   tipo_vinculo_destino: TipoVinculo | null;
   gestor_destino_colaborador_id: string | null;
   gestor_destino_nome: string | null;
+  modo_transferencia: ModoTransferencia | null;
   vinculo_destino_id: string | null;
   vinculo_destino_matricula: string | null;
   data_pretendida: string;
@@ -935,7 +963,7 @@ const SELECT_MOVIMENTACAO = `
          (SELECT ev.nome_fantasia FROM rh.empresa_grupo_versao ev
            WHERE ev.empresa_id = m.empresa_destino_id AND ev.status = 'ativa')
            AS empresa_destino,
-         m.matricula_destino, m.tipo_vinculo_destino,
+         m.matricula_destino, m.tipo_vinculo_destino, m.modo_transferencia,
          m.gestor_destino_colaborador_id,
          (SELECT g.nome_completo FROM rh.colaborador g
            WHERE g.id = m.gestor_destino_colaborador_id) AS gestor_destino_nome,
@@ -977,6 +1005,7 @@ function paraMovimentacao(linha: LinhaMovimentacao): Movimentacao {
       linha.gestor_destino_colaborador_id
     ),
     gestor_destino_nome: linha.gestor_destino_nome,
+    modo_transferencia: linha.modo_transferencia,
     vinculo_destino_id: numeroOuNulo(linha.vinculo_destino_id),
     vinculo_destino_matricula: linha.vinculo_destino_matricula,
     data_pretendida: linha.data_pretendida,
@@ -1033,6 +1062,7 @@ export async function inserirMovimentacao(
     matricula_destino: string | null;
     tipo_vinculo_destino: TipoVinculo | null;
     gestor_destino_colaborador_id: number | null;
+    modo_transferencia: ModoTransferencia | null;
     salario_proposto: number | null;
     faixa_min: number | null;
     faixa_max: number | null;
@@ -1047,11 +1077,11 @@ export async function inserirMovimentacao(
        (demanda_id, tipo, colaborador_id, cargo_destino_id,
         estabelecimento_destino_id, centro_custo_destino_id, empresa_destino_id,
         matricula_destino, tipo_vinculo_destino,
-        gestor_destino_colaborador_id, salario_proposto,
+        gestor_destino_colaborador_id, modo_transferencia, salario_proposto,
         faixa_min, faixa_max, dentro_faixa, justificativa_excecao,
         data_pretendida, justificativa)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-             $16, $17)
+             $16, $17, $18)
      RETURNING id`,
     [
       dados.demanda_id,
@@ -1064,6 +1094,7 @@ export async function inserirMovimentacao(
       dados.matricula_destino,
       dados.tipo_vinculo_destino,
       dados.gestor_destino_colaborador_id,
+      dados.modo_transferencia,
       dados.salario_proposto,
       dados.faixa_min,
       dados.faixa_max,
@@ -1142,6 +1173,23 @@ export async function empresaAtiva(
     [empresaId]
   );
   return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+/**
+ * As duas empresas do grupo têm a MESMA raiz de CNPJ (mesmo empregador,
+ * matriz↔filial)? É a régua que decide se cabe continuidade (0065). Falso se
+ * falta CNPJ em algum lado — sem número não se prova a raiz.
+ */
+export async function mesmaRaizCnpj(
+  cliente: PoolClient,
+  empresaA: number,
+  empresaB: number
+): Promise<boolean> {
+  const { rows } = await cliente.query<{ mesma: boolean | null }>(
+    `SELECT rh.mesma_raiz_cnpj($1, $2) AS mesma`,
+    [empresaA, empresaB]
+  );
+  return rows[0]?.mesma === true;
 }
 
 /**
@@ -1542,6 +1590,8 @@ export interface OpcaoColaborador {
   nome_completo: string;
   cargo_atual: string | null;
   unidade_atual: string | null;
+  /** CNPJ da empresa de registro vigente — a tela deriva a raiz (continuidade). */
+  cnpj_atual: string | null;
 }
 
 /**
@@ -1565,6 +1615,7 @@ export async function listarAlvosPossiveis(
     nome_completo: string;
     cargo_atual: string | null;
     unidade_atual: string | null;
+    cnpj_atual: string | null;
   }>(
     `SELECT c.id, c.nome_completo,
             (SELECT cv.nome
@@ -1578,7 +1629,12 @@ export async function listarAlvosPossiveis(
                  ON ev.estabelecimento_id = l.estabelecimento_id
                 AND ev.status = 'ativa'
               WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL)
-              AS unidade_atual
+              AS unidade_atual,
+            (SELECT eg.cnpj
+               FROM rh.lotacao l
+               JOIN rh.empresa_grupo eg ON eg.id = l.empresa_id
+              WHERE l.colaborador_id = c.id AND l.fim_vigencia IS NULL)
+              AS cnpj_atual
        FROM rh.colaborador c
       WHERE c.status = 'ativo' ${filtro}
       ORDER BY c.nome_completo`,

@@ -5,6 +5,7 @@ import {
   MotivoRequisicao,
   OrigemCandidato,
   RecomendacaoParecer,
+  ResultadoPesquisaSocial,
   StatusCandidatura,
   StatusOferta,
   StatusRequisicao,
@@ -169,6 +170,255 @@ export async function buscarEtapasAtivas(
 ): Promise<EtapaAtiva[]> {
   const { rows } = await cliente.query<LinhaEtapa>(SQL_ETAPAS_ATIVAS);
   return rows.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+export interface EtapaDoModelo {
+  /** id da versão de etapa (rh.etapa_selecao_versao) que a candidatura referencia. */
+  etapa_selecao_versao_id: number;
+  tipo: string;
+  nome: string;
+  /** ordem DENTRO do modelo (não a ordem global do catálogo). */
+  ordem: number;
+}
+
+/**
+ * As etapas de um modelo de processo (0076), na ordem do modelo. É por aqui que
+ * a candidatura anda desde o Estágio 2 — não mais pela lista global viva.
+ */
+export async function buscarEtapasDoModelo(
+  cliente: PoolClient,
+  modeloVersaoId: number
+): Promise<EtapaDoModelo[]> {
+  const { rows } = await cliente.query<{
+    etapa_selecao_versao_id: string;
+    tipo: string;
+    nome: string;
+    ordem: number;
+  }>(
+    `SELECT me.etapa_selecao_versao_id, e.tipo, e.nome, me.ordem
+       FROM rh.modelo_selecao_etapa me
+       JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id
+      WHERE me.modelo_versao_id = $1
+      ORDER BY me.ordem`,
+    [modeloVersaoId]
+  );
+  return rows.map((linha) => ({
+    ...linha,
+    etapa_selecao_versao_id: Number(linha.etapa_selecao_versao_id),
+  }));
+}
+
+/**
+ * As etapas de um modelo, na forma que o kanban consome (id = a versão de etapa
+ * que a candidatura referencia; ordem = a ordem DENTRO do modelo). Versão de
+ * POOL (fora de transação) do `buscarEtapasDoModelo` — é o par de LEITURA do
+ * pipeline: a escrita anda pelo modelo (servico), o desenho das colunas também.
+ */
+export async function listarEtapasDoModelo(
+  modeloVersaoId: number
+): Promise<EtapaAtiva[]> {
+  const linhas = await consultar<LinhaEtapa>(
+    `SELECT me.etapa_selecao_versao_id AS id, e.tipo, e.nome, me.ordem
+       FROM rh.modelo_selecao_etapa me
+       JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id
+      WHERE me.modelo_versao_id = $1
+      ORDER BY me.ordem`,
+    [modeloVersaoId]
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+/** O modelo de processo PADRÃO (o GERAL) ativo — default da vaga nova. */
+export async function buscarModeloPadrao(
+  cliente: PoolClient
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `SELECT id FROM rh.modelo_selecao_versao
+      WHERE padrao AND status = 'ativa' LIMIT 1`
+  );
+  return rows.length ? Number(rows[0].id) : null;
+}
+
+// ------------------------------------------------------------------ administração dos modelos de processo
+
+export interface ModeloResumo {
+  id: number;
+  nome: string;
+  padrao: boolean;
+  status: string;
+  /** Versão anterior que este modelo reformulou — o fio da série (0076). */
+  continua_de: number | null;
+  inicio_vigencia: string | null;
+  fim_vigencia: string | null;
+  etapas: { id: number; nome: string; tipo: string; ordem: number }[];
+  /** Quantas vagas congelaram esta versão do modelo. */
+  vagas_usando: number;
+}
+
+interface LinhaModelo extends Record<string, unknown> {
+  id: string;
+  nome: string;
+  padrao: boolean;
+  status: string;
+  continua_de: string | null;
+  inicio_vigencia: string | null;
+  fim_vigencia: string | null;
+  vagas_usando: number;
+  etapas: { id: number; nome: string; tipo: string; ordem: number }[];
+}
+
+const SELECT_MODELOS = `
+  SELECT m.id, m.nome, m.padrao, m.status, m.continua_de,
+         m.inicio_vigencia::text AS inicio_vigencia,
+         m.fim_vigencia::text AS fim_vigencia,
+         (SELECT count(*) FROM rh.vaga v WHERE v.modelo_versao_id = m.id)::int
+           AS vagas_usando,
+         COALESCE(
+           json_agg(
+             json_build_object('id', me.etapa_selecao_versao_id,
+                               'nome', e.nome, 'tipo', e.tipo, 'ordem', me.ordem)
+             ORDER BY me.ordem
+           ) FILTER (WHERE me.id IS NOT NULL),
+           '[]'
+         ) AS etapas
+    FROM rh.modelo_selecao_versao m
+    LEFT JOIN rh.modelo_selecao_etapa me ON me.modelo_versao_id = m.id
+    LEFT JOIN rh.etapa_selecao_versao e ON e.id = me.etapa_selecao_versao_id`;
+
+function paraModelo(linha: LinhaModelo): ModeloResumo {
+  return {
+    ...linha,
+    id: Number(linha.id),
+    continua_de: linha.continua_de === null ? null : Number(linha.continua_de),
+  };
+}
+
+/** Os modelos ATIVOS (o GERAL + os alternativos) com suas etapas e uso. */
+export async function listarModelos(): Promise<ModeloResumo[]> {
+  const linhas = await consultar<LinhaModelo>(
+    `${SELECT_MODELOS}
+      WHERE m.status = 'ativa'
+      GROUP BY m.id
+      ORDER BY m.padrao DESC, m.nome`
+  );
+  return linhas.map(paraModelo);
+}
+
+/**
+ * Os modelos ENCERRADOS — o histórico da série (reformulados apontados por
+ * continua_de do sucessor, e aposentados sem substituto), mais novo primeiro.
+ */
+export async function listarModelosEncerrados(): Promise<ModeloResumo[]> {
+  const linhas = await consultar<LinhaModelo>(
+    `${SELECT_MODELOS}
+      WHERE m.status = 'encerrada'
+      GROUP BY m.id
+      ORDER BY m.fim_vigencia DESC, m.id DESC`
+  );
+  return linhas.map(paraModelo);
+}
+
+export interface ModeloParaMutacao {
+  id: number;
+  nome: string;
+  padrao: boolean;
+  status: string;
+}
+
+/** Tranca a versão do modelo para reformular/aposentar (FOR UPDATE). */
+export async function buscarModeloParaMutacao(
+  cliente: PoolClient,
+  id: number
+): Promise<ModeloParaMutacao | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    nome: string;
+    padrao: boolean;
+    status: string;
+  }>(
+    `SELECT id, nome, padrao, status
+       FROM rh.modelo_selecao_versao
+      WHERE id = $1
+      FOR UPDATE`,
+    [id]
+  );
+  return rows.length ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
+/** Encerra um modelo ATIVO. GREATEST protege o CHECK fim >= início. */
+export async function encerrarModelo(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.modelo_selecao_versao
+        SET status = 'encerrada',
+            fim_vigencia = GREATEST(inicio_vigencia, rh.hoje())
+      WHERE id = $1 AND status = 'ativa'`,
+    [id]
+  );
+}
+
+/**
+ * Um modelo ASSINÁVEL por uma vaga nova: precisa existir e estar ATIVO. Devolve
+ * null quando não serve (inexistente, rascunho ou encerrado) — o serviço traduz.
+ */
+export async function buscarModeloAtivo(
+  cliente: PoolClient,
+  id: number
+): Promise<number | null> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `SELECT id FROM rh.modelo_selecao_versao
+      WHERE id = $1 AND status = 'ativa'`,
+    [id]
+  );
+  return rows.length ? Number(rows[0].id) : null;
+}
+
+/** O nome de um modelo — para o rastro de auditoria da vaga (eixo 8). */
+export async function buscarNomeModelo(
+  cliente: PoolClient,
+  id: number
+): Promise<string | null> {
+  const { rows } = await cliente.query<{ nome: string }>(
+    `SELECT nome FROM rh.modelo_selecao_versao WHERE id = $1`,
+    [id]
+  );
+  return rows.length ? rows[0].nome : null;
+}
+
+/**
+ * Cria uma versão de modelo já ATIVA e devolve o id. Modelo novo nasce com
+ * padrao=false e sem continuidade; a REFORMULAÇÃO passa continua_de (o fio da
+ * série) e herda o padrao da anterior — na mesma transação que a encerra, por
+ * causa do índice de um-padrão-ativo (0076, decisão G2).
+ */
+export async function inserirModelo(
+  cliente: PoolClient,
+  dados: { nome: string; padrao: boolean; continua_de: number | null }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.modelo_selecao_versao (nome, padrao, status, inicio_vigencia, continua_de)
+     VALUES ($1, $2, 'ativa', rh.hoje(), $3)
+     RETURNING id`,
+    [dados.nome, dados.padrao, dados.continua_de]
+  );
+  return Number(rows[0].id);
+}
+
+/** Grava a seleção e a ordem de etapas do modelo (ordem = posição na lista). */
+export async function inserirEtapasNoModelo(
+  cliente: PoolClient,
+  modeloVersaoId: number,
+  etapaIds: number[]
+): Promise<void> {
+  const ordens = etapaIds.map((_, indice) => indice + 1);
+  await cliente.query(
+    `INSERT INTO rh.modelo_selecao_etapa (modelo_versao_id, etapa_selecao_versao_id, ordem)
+     SELECT $1::bigint, t.etapa_id, t.ordem
+       FROM unnest($2::bigint[], $3::int[]) AS t(etapa_id, ordem)`,
+    [modeloVersaoId, etapaIds, ordens]
+  );
 }
 
 // ------------------------------------------------------------------ requisição de vaga
@@ -341,6 +591,11 @@ export interface VagaResumo {
   status: StatusVaga;
   candidaturas_ativas: number;
   criado_em: string;
+  /** Modelo de processo CONGELADO na abertura (0077). O kanban desenha as
+   *  colunas pelas etapas deste modelo, não pela lista global viva. */
+  modelo_versao_id: number;
+  /** Nome do modelo congelado — a tela mostra por qual processo a vaga corre. */
+  modelo_nome: string;
 }
 
 interface LinhaVaga extends Record<string, unknown> {
@@ -355,12 +610,15 @@ interface LinhaVaga extends Record<string, unknown> {
   prazo_alvo: string;
   dias_ate_prazo: number;
   status: StatusVaga;
+  modelo_versao_id: string;
+  modelo_nome: string;
   candidaturas_ativas: number;
   criado_em: string;
 }
 
 const SELECT_VAGA = `
   SELECT v.id, v.requisicao_id, v.titulo, v.status, v.criado_em,
+         v.modelo_versao_id, m.nome AS modelo_nome,
          v.faixa_min::text AS faixa_min, v.faixa_max::text AS faixa_max,
          v.prazo_alvo::text AS prazo_alvo,
          (v.prazo_alvo - ${HOJE_SP})::int AS dias_ate_prazo,
@@ -371,6 +629,7 @@ const SELECT_VAGA = `
     FROM rh.vaga v
     JOIN rh.requisicao_vaga r ON r.id = v.requisicao_id
     JOIN rh.cargo_versao cv ON cv.id = r.cargo_versao_id
+    JOIN rh.modelo_selecao_versao m ON m.id = v.modelo_versao_id
     LEFT JOIN rh.estabelecimento_versao ev ON ev.id = r.estabelecimento_versao_id`;
 
 function paraVaga(linha: LinhaVaga): VagaResumo {
@@ -381,6 +640,7 @@ function paraVaga(linha: LinhaVaga): VagaResumo {
     solicitante_usuario_id: Number(linha.solicitante_usuario_id),
     faixa_min: Number(linha.faixa_min),
     faixa_max: Number(linha.faixa_max),
+    modelo_versao_id: Number(linha.modelo_versao_id),
   };
 }
 
@@ -417,11 +677,12 @@ export async function inserirVaga(
     faixa_min: number;
     faixa_max: number;
     prazo_alvo: string;
+    modelo_versao_id: number;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
-    `INSERT INTO rh.vaga (requisicao_id, titulo, faixa_min, faixa_max, prazo_alvo)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO rh.vaga (requisicao_id, titulo, faixa_min, faixa_max, prazo_alvo, modelo_versao_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id`,
     [
       dados.requisicao_id,
@@ -429,6 +690,7 @@ export async function inserirVaga(
       dados.faixa_min,
       dados.faixa_max,
       dados.prazo_alvo,
+      dados.modelo_versao_id,
     ]
   );
   return Number(rows[0].id);
@@ -440,6 +702,7 @@ export interface VagaParaMutacao {
   status: StatusVaga;
   faixa_min: number;
   faixa_max: number;
+  modelo_versao_id: number;
 }
 
 export async function buscarVagaParaMutacao(
@@ -452,9 +715,11 @@ export async function buscarVagaParaMutacao(
     status: StatusVaga;
     faixa_min: string;
     faixa_max: string;
+    modelo_versao_id: string;
   }>(
     `SELECT id, titulo, status,
-            faixa_min::text AS faixa_min, faixa_max::text AS faixa_max
+            faixa_min::text AS faixa_min, faixa_max::text AS faixa_max,
+            modelo_versao_id
        FROM rh.vaga
       WHERE id = $1
       FOR UPDATE`,
@@ -467,6 +732,7 @@ export async function buscarVagaParaMutacao(
     status: rows[0].status,
     faixa_min: Number(rows[0].faixa_min),
     faixa_max: Number(rows[0].faixa_max),
+    modelo_versao_id: Number(rows[0].modelo_versao_id),
   };
 }
 
@@ -479,6 +745,34 @@ export async function atualizarStatusVaga(
     id,
     status,
   ]);
+}
+
+/**
+ * TODAS as candidaturas da vaga, encerradas incluídas: candidatura encerrada
+ * também é história ancorada nas etapas do modelo congelado — trocar o modelo
+ * depois dela reescreveria por qual processo aquela pessoa passou.
+ */
+export async function contarCandidaturasDaVaga(
+  cliente: PoolClient,
+  vagaId: number
+): Promise<number> {
+  const { rows } = await cliente.query<{ total: number }>(
+    `SELECT COUNT(*)::int AS total FROM rh.candidatura WHERE vaga_id = $1`,
+    [vagaId]
+  );
+  return rows[0].total;
+}
+
+/** Troca o modelo congelado — o serviço garante vaga aberta sem candidatura. */
+export async function atualizarModeloDaVaga(
+  cliente: PoolClient,
+  id: number,
+  modeloVersaoId: number
+): Promise<void> {
+  await cliente.query(
+    "UPDATE rh.vaga SET modelo_versao_id = $2 WHERE id = $1",
+    [id, modeloVersaoId]
+  );
 }
 
 // ------------------------------------------------------------------ candidato (titular externo)
@@ -572,6 +866,11 @@ export interface CandidaturaKanban {
   /** Dado sensível (salário) — o serviço remove de quem não pode ver. */
   oferta_valor: number | null;
   oferta_dentro_banda: boolean | null;
+  /** Desfecho da pesquisa social (G3:a) — o serviço remove de quem não tem
+   *  rs.gerir; null também quando não há desfecho (ou já expurgado). */
+  pesquisa_social_resultado: ResultadoPesquisaSocial | null;
+  /** Há anexo no GED? — o serviço remove (null) de quem não tem rs.gerir. */
+  pesquisa_social_tem_anexo: boolean | null;
   criado_em: string;
 }
 
@@ -592,6 +891,8 @@ export async function listarCandidaturasDaVaga(
     oferta_status: StatusOferta | null;
     oferta_valor: string | null;
     oferta_dentro_banda: boolean | null;
+    pesquisa_social_resultado: ResultadoPesquisaSocial | null;
+    pesquisa_social_tem_anexo: boolean;
     criado_em: string;
   }>(
     `SELECT ca.id, ca.candidato_id, ca.status, ca.criado_em,
@@ -602,11 +903,14 @@ export async function listarCandidaturasDaVaga(
             (SELECT COUNT(*) FROM rh.parecer_selecao p
               WHERE p.candidatura_id = ca.id)::int AS total_pareceres,
             o.status AS oferta_status, o.valor::text AS oferta_valor,
-            o.dentro_banda AS oferta_dentro_banda
+            o.dentro_banda AS oferta_dentro_banda,
+            ps.resultado AS pesquisa_social_resultado,
+            (ps.documento_id IS NOT NULL) AS pesquisa_social_tem_anexo
        FROM rh.candidatura ca
        JOIN rh.candidato c ON c.id = ca.candidato_id
        JOIN rh.etapa_selecao_versao e ON e.id = ca.etapa_atual_id
        LEFT JOIN rh.oferta o ON o.candidatura_id = ca.id
+       LEFT JOIN rh.pesquisa_social ps ON ps.candidatura_id = ca.id
        LEFT JOIN LATERAL (
          SELECT m.motivo_catalogo
            FROM rh.movimentacao_candidatura m
@@ -657,6 +961,8 @@ export interface CandidaturaParaMutacao {
   etapa_nome: string;
   etapa_ordem: number;
   etapa_tipo: string;
+  /** Modelo de processo congelado na vaga — por onde a candidatura anda (0077). */
+  modelo_versao_id: number;
 }
 
 export async function buscarCandidaturaParaMutacao(
@@ -679,10 +985,12 @@ export async function buscarCandidaturaParaMutacao(
     etapa_nome: string;
     etapa_ordem: number;
     etapa_tipo: string;
+    modelo_versao_id: string;
   }>(
     `SELECT ca.id, ca.vaga_id, ca.status, ca.etapa_atual_id, ca.candidato_id,
             v.titulo AS vaga_titulo, v.status AS vaga_status,
             v.faixa_min::text AS faixa_min, v.faixa_max::text AS faixa_max,
+            v.modelo_versao_id,
             r.solicitante_usuario_id,
             c.nome AS candidato_nome, c.email AS candidato_email,
             e.nome AS etapa_nome, e.ordem AS etapa_ordem, e.tipo AS etapa_tipo
@@ -705,6 +1013,7 @@ export async function buscarCandidaturaParaMutacao(
     solicitante_usuario_id: Number(rows[0].solicitante_usuario_id),
     candidato_id: Number(rows[0].candidato_id),
     etapa_atual_id: Number(rows[0].etapa_atual_id),
+    modelo_versao_id: Number(rows[0].modelo_versao_id),
   };
 }
 
@@ -950,6 +1259,172 @@ export async function responderOferta(
   );
 }
 
+// ------------------------------------------------------------------ pesquisa social (#13c, G3:a)
+
+export interface PesquisaSocialLinha {
+  id: number;
+  candidatura_id: number;
+  resultado: ResultadoPesquisaSocial | null;
+  documento_id: number | null;
+  expurgado_em: string | null;
+}
+
+/** O desfecho da candidatura (0..1), DENTRO da transação de mutação. */
+export async function buscarPesquisaSocial(
+  cliente: PoolClient,
+  candidaturaId: number
+): Promise<PesquisaSocialLinha | null> {
+  const { rows } = await cliente.query<{
+    id: string;
+    candidatura_id: string;
+    resultado: ResultadoPesquisaSocial | null;
+    documento_id: string | null;
+    expurgado_em: string | null;
+  }>(
+    `SELECT id, candidatura_id, resultado, documento_id, expurgado_em
+       FROM rh.pesquisa_social
+      WHERE candidatura_id = $1`,
+    [candidaturaId]
+  );
+  if (rows.length === 0) return null;
+  return {
+    id: Number(rows[0].id),
+    candidatura_id: Number(rows[0].candidatura_id),
+    resultado: rows[0].resultado,
+    documento_id:
+      rows[0].documento_id === null ? null : Number(rows[0].documento_id),
+    expurgado_em: rows[0].expurgado_em,
+  };
+}
+
+export async function inserirPesquisaSocial(
+  cliente: PoolClient,
+  dados: {
+    candidatura_id: number;
+    resultado: ResultadoPesquisaSocial;
+    documento_id: number | null;
+    registrado_por: number;
+  }
+): Promise<number> {
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.pesquisa_social
+       (candidatura_id, resultado, documento_id, registrado_por)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id`,
+    [
+      dados.candidatura_id,
+      dados.resultado,
+      dados.documento_id,
+      dados.registrado_por,
+    ]
+  );
+  return Number(rows[0].id);
+}
+
+export interface AnexoPesquisaSocial {
+  documento_id: number;
+  nome_arquivo: string;
+  mime: string;
+}
+
+/**
+ * Metadados do anexo para o download (fora de transação). Null quando não há
+ * pesquisa, não há anexo ou o desfecho já foi expurgado — para quem baixa, os
+ * três casos são o mesmo 404.
+ */
+export async function buscarAnexoPesquisaSocial(
+  candidaturaId: number
+): Promise<AnexoPesquisaSocial | null> {
+  const linhas = await consultar<{
+    documento_id: string;
+    nome_arquivo: string;
+    mime: string;
+  }>(
+    `SELECT ps.documento_id, d.nome_arquivo, d.mime
+       FROM rh.pesquisa_social ps
+       JOIN rh.documento d ON d.id = ps.documento_id
+      WHERE ps.candidatura_id = $1 AND ps.documento_id IS NOT NULL`,
+    [candidaturaId]
+  );
+  if (linhas.length === 0) return null;
+  return {
+    documento_id: Number(linhas[0].documento_id),
+    nome_arquivo: linhas[0].nome_arquivo,
+    mime: linhas[0].mime,
+  };
+}
+
+export interface PesquisaParaExpurgo {
+  id: number;
+  candidatura_id: number;
+  documento_id: number | null;
+}
+
+/**
+ * As pesquisas sociais que completaram a janela de retenção (G3:a): candidatura
+ * DESCARTADA (reprovada ou desistiu — os dois desfechos negativos) cuja data de
+ * descarte, no dia civil de São Paulo, é ANTERIOR OU IGUAL ao corte. A data de
+ * descarte é a da movimentação que gravou o status final (histórico oficial,
+ * append-only) — não o atualizado_em, que qualquer toque mexeria. FOR UPDATE:
+ * o expurgo apaga documento e anonimiza na mesma transação.
+ */
+export async function listarPesquisasParaExpurgo(
+  cliente: PoolClient,
+  corteIso: string
+): Promise<PesquisaParaExpurgo[]> {
+  const { rows } = await cliente.query<{
+    id: string;
+    candidatura_id: string;
+    documento_id: string | null;
+  }>(
+    `SELECT ps.id, ps.candidatura_id, ps.documento_id
+       FROM rh.pesquisa_social ps
+       JOIN rh.candidatura ca ON ca.id = ps.candidatura_id
+      WHERE ps.expurgado_em IS NULL
+        AND ca.status IN ('reprovada', 'desistiu')
+        AND (SELECT max(m.em AT TIME ZONE 'America/Sao_Paulo')::date
+               FROM rh.movimentacao_candidatura m
+              WHERE m.candidatura_id = ca.id
+                AND m.novo_status IN ('reprovada', 'desistiu')) <= $1::date
+      ORDER BY ps.id
+      FOR UPDATE OF ps`,
+    [corteIso]
+  );
+  return rows.map((linha) => ({
+    id: Number(linha.id),
+    candidatura_id: Number(linha.candidatura_id),
+    documento_id:
+      linha.documento_id === null ? null : Number(linha.documento_id),
+  }));
+}
+
+/** Anonimiza o desfecho: resultado e anexo zerados, expurgado_em carimbado. */
+export async function expurgarPesquisa(
+  cliente: PoolClient,
+  id: number
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.pesquisa_social
+        SET resultado = NULL, documento_id = NULL, expurgado_em = now()
+      WHERE id = $1`,
+    [id]
+  );
+}
+
+/**
+ * Apaga a LINHA do documento no GED — o conteúdo (BYTEA) vai junto. A interface
+ * de armazenamento do GED (guardar/lerConteudo) não tem remoção de propósito:
+ * apagar documento é excepcional, e aqui é obrigação legal do expurgo (G3:a).
+ * Só o expurgo chama; o vínculo em rh.pesquisa_social é zerado ANTES, na mesma
+ * transação (a FK barraria a ordem inversa).
+ */
+export async function apagarDocumentoDoExpurgo(
+  cliente: PoolClient,
+  documentoId: number
+): Promise<void> {
+  await cliente.query("DELETE FROM rh.documento WHERE id = $1", [documentoId]);
+}
+
 // ------------------------------------------------------------------ indicador
 
 /**
@@ -971,4 +1446,81 @@ export async function apurarVagasNoPrazo(): Promise<number | null> {
   const total = Number(linhas[0].total);
   if (total === 0) return null;
   return Math.round((Number(linhas[0].no_prazo) / total) * 1000) / 10;
+}
+
+export interface TempoPorEtapa {
+  /** Identidade do grupo — o CARGO (eixo 2), nunca o nome da versão. */
+  cargo_id: number;
+  /** Nome de exibição: a versão MAIS RECENTE do cargo. */
+  cargo_nome: string;
+  etapa_nome: string;
+  /** Ordem do catálogo — só para a tela listar as etapas na ordem natural. */
+  etapa_ordem: number;
+  /** Mediana do tempo parado na etapa, em dias (fração de dia incluída). */
+  mediana_dias: number;
+  /** Quantos intervalos fechados sustentam a mediana. */
+  amostras: number;
+}
+
+/**
+ * Mediana (percentile_cont) do tempo que a candidatura passa em CADA etapa,
+ * por CARGO — nunca por vaga.titulo (título é texto livre; o cargo é a
+ * identidade estável) — e por ETAPA DO CATÁLOGO (nome: versões da mesma etapa
+ * e posições diferentes entre modelos somam no mesmo balde).
+ *
+ * A identidade do grupo é cv.cargo_id, não cv.nome (eixo 2): dois cargos
+ * homônimos não se fundem num balde só, e renomear o cargo (versão nova) não
+ * parte o histórico em dois. O nome que sai é o da versão MAIS RECENTE do
+ * cargo — só exibição.
+ *
+ * O intervalo é o par de movimentações consecutivas da MESMA candidatura
+ * (índice candidatura+em da 0012): entrar na etapa (para_etapa_id) abre;
+ * a movimentação seguinte — avanço OU desfecho — fecha. Candidaturas abertas
+ * e encerradas contribuem igualmente com seus intervalos JÁ FECHADOS; a etapa
+ * onde alguém ainda está parado não tem dT e fica fora (mediana de tempo
+ * decorrido misturaria processo vivo com processo concluído).
+ */
+export async function apurarTempoPorEtapa(): Promise<TempoPorEtapa[]> {
+  const linhas = await consultar<{
+    cargo_id: string;
+    cargo_nome: string;
+    etapa_nome: string;
+    etapa_ordem: number;
+    mediana_dias: string;
+    amostras: number;
+  }>(
+    `WITH passos AS (
+       SELECT m.candidatura_id, m.para_etapa_id, m.em,
+              LEAD(m.em) OVER (
+                PARTITION BY m.candidatura_id ORDER BY m.em, m.id
+              ) AS proxima_em
+         FROM rh.movimentacao_candidatura m
+     )
+     SELECT cv.cargo_id,
+            (SELECT cv2.nome
+               FROM rh.cargo_versao cv2
+              WHERE cv2.cargo_id = cv.cargo_id
+              ORDER BY cv2.inicio_vigencia DESC, cv2.id DESC
+              LIMIT 1) AS cargo_nome,
+            e.nome AS etapa_nome,
+            MIN(e.ordem)::int AS etapa_ordem,
+            (percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY EXTRACT(EPOCH FROM (p.proxima_em - p.em))
+             ) / 86400)::text AS mediana_dias,
+            COUNT(*)::int AS amostras
+       FROM passos p
+       JOIN rh.etapa_selecao_versao e ON e.id = p.para_etapa_id
+       JOIN rh.candidatura ca ON ca.id = p.candidatura_id
+       JOIN rh.vaga v ON v.id = ca.vaga_id
+       JOIN rh.requisicao_vaga r ON r.id = v.requisicao_id
+       JOIN rh.cargo_versao cv ON cv.id = r.cargo_versao_id
+      WHERE p.para_etapa_id IS NOT NULL AND p.proxima_em IS NOT NULL
+      GROUP BY cv.cargo_id, e.nome
+      ORDER BY cargo_nome, cv.cargo_id, etapa_ordem`
+  );
+  return linhas.map((linha) => ({
+    ...linha,
+    cargo_id: Number(linha.cargo_id),
+    mediana_dias: Number(linha.mediana_dias),
+  }));
 }

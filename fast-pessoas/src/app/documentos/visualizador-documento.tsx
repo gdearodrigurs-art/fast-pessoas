@@ -1,10 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   modoDeVisualizacao,
   rotuloDeMime,
 } from "@/dominios/documentos/esquemas";
+import {
+  alturaEstimadaPdf,
+  contarPaginasPdf,
+} from "@/dominios/documentos/paginas-pdf";
+import { chegouAoFim, conteudoRenderizado } from "./rolagem-ciencia";
 import estilos from "./page.module.css";
 
 /**
@@ -33,20 +38,36 @@ export interface DocumentoParaVer {
   sensivel: boolean;
 }
 
+/**
+ * Modo CIÊNCIA (decisão B5, docs/20): o visualizador rastreia a ROLAGEM e o
+ * botão de ciência só habilita ao chegar ao fim do documento. O chamador liga
+ * o modo quando o documento exige ciência e o usuário está pendente.
+ */
+export interface ModoCiencia {
+  /** Chamado após a ciência registrada com sucesso (dada_em ISO). */
+  aoRegistrar: (dadaEm: string) => void;
+  /** Chamado após a recusa registrada com sucesso (recusada_em ISO). */
+  aoRecusar: (recusadaEm: string) => void;
+  /** O usuário já recusou esta versão (pode, ainda assim, dar ciência). */
+  jaRecusou: boolean;
+}
+
 type Conteudo =
   | { estado: "carregando" }
   | { estado: "erro"; mensagem: string }
   | { estado: "texto"; texto: string }
-  | { estado: "pdf"; url: string }
+  | { estado: "pdf"; url: string; alturaPx: number }
   | { estado: "imagem"; url: string }
   | { estado: "nao_exibivel" };
 
 export function VisualizadorDocumento({
   documento,
   aoFechar,
+  ciencia,
 }: {
   documento: DocumentoParaVer;
   aoFechar: () => void;
+  ciencia?: ModoCiencia;
 }) {
   const { id, mime } = documento;
 
@@ -58,6 +79,42 @@ export function VisualizadorDocumento({
       ? { estado: "nao_exibivel" }
       : { estado: "carregando" }
   );
+
+  const corpoRef = useRef<HTMLDivElement>(null);
+  const [leuAteOFim, setLeuAteOFim] = useState(false);
+  const [registrando, setRegistrando] = useState(false);
+  const [erroCiencia, setErroCiencia] = useState<string | null>(null);
+
+  // O rastreio da rolagem (B5): a decisão é pura e mora em rolagem-ciencia.ts.
+  // Só se mede conteúdo RENDERIZADO — "carregando" e "erro" não têm overflow, e
+  // medi-los marcava "leu até o fim" antes de existir documento na tela.
+  const verificarFim = useCallback(() => {
+    const corpo = corpoRef.current;
+    if (!corpo) return;
+    if (!conteudoRenderizado(conteudo.estado)) return;
+    if (chegouAoFim(corpo)) {
+      setLeuAteOFim(true);
+    }
+  }, [conteudo.estado]);
+
+  // A marca não sobrevive à troca de ESTADO do conteúdo: o "fim" medido num
+  // conteúdo não vale para o que entra no lugar dele (padrão "ajustar estado
+  // durante o render", react.dev/you-might-not-need-an-effect). Troca de
+  // DOCUMENTO nem precisa disso: o chamador remonta com key={documento.id}.
+  const [estadoMedido, setEstadoMedido] = useState(conteudo.estado);
+  if (estadoMedido !== conteudo.estado) {
+    setEstadoMedido(conteudo.estado);
+    setLeuAteOFim(false);
+  }
+
+  // Conteúdo que coube inteiro sem rolagem também conta como lido até o fim —
+  // senão o botão nunca habilitaria num comunicado de três linhas. O timeout
+  // deixa o layout assentar (iframe do PDF com a altura estimada aplicada).
+  useEffect(() => {
+    if (!ciencia || !conteudoRenderizado(conteudo.estado)) return;
+    const temporizador = setTimeout(verificarFim, 150);
+    return () => clearTimeout(temporizador);
+  }, [ciencia, conteudo, verificarFim]);
 
   useEffect(() => {
     const modo = modoDeVisualizacao(mime);
@@ -88,16 +145,29 @@ export function VisualizadorDocumento({
           if (ativo) setConteudo({ estado: "texto", texto });
           return;
         }
-        const corpo = await resposta.blob();
+        const bytes = await resposta.arrayBuffer();
         // O tipo vem do metadado guardado no servidor, nunca de palpite do
         // navegador sobre o conteúdo.
-        urlObjeto = URL.createObjectURL(new Blob([corpo], { type: mime }));
+        urlObjeto = URL.createObjectURL(new Blob([bytes], { type: mime }));
         if (!ativo) {
           URL.revokeObjectURL(urlObjeto);
           urlObjeto = null;
           return;
         }
-        setConteudo({ estado: modo, url: urlObjeto });
+        if (modo === "pdf") {
+          // O visualizador nativo de PDF engole a rolagem interna do iframe;
+          // para o rastreio (B5) funcionar, o iframe ganha a ALTURA ESTIMADA
+          // do documento inteiro e a rolagem volta a ser do contêiner de fora.
+          const paginas = contarPaginasPdf(new Uint8Array(bytes));
+          const largura = corpoRef.current?.clientWidth ?? 800;
+          setConteudo({
+            estado: "pdf",
+            url: urlObjeto,
+            alturaPx: alturaEstimadaPdf(paginas, largura),
+          });
+          return;
+        }
+        setConteudo({ estado: "imagem", url: urlObjeto });
       } catch {
         if (ativo) {
           setConteudo({
@@ -121,6 +191,60 @@ export function VisualizadorDocumento({
     window.addEventListener("keydown", aoTeclar);
     return () => window.removeEventListener("keydown", aoTeclar);
   }, [aoFechar]);
+
+  async function confirmarCiencia() {
+    if (!ciencia) return;
+    setErroCiencia(null);
+    setRegistrando(true);
+    try {
+      const resposta = await fetch(`/api/documentos/${id}/ciencia`, {
+        method: "POST",
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        ciencia.aoRegistrar(
+          (dados.ciencia?.dada_em as string | undefined) ??
+            new Date().toISOString()
+        );
+      } else {
+        setErroCiencia(dados.erro ?? "Não foi possível registrar a ciência.");
+      }
+    } catch {
+      setErroCiencia("Falha de conexão. Tente novamente.");
+    } finally {
+      setRegistrando(false);
+    }
+  }
+
+  async function recusar() {
+    if (!ciencia) return;
+    const motivo = window.prompt(
+      "Recusar a ciência deste documento?\n\nA recusa fica registrada com data, hora e a versão exata do arquivo, e NÃO desbloqueia a pendência. Motivo (opcional):"
+    );
+    if (motivo === null) return; // cancelou
+    setErroCiencia(null);
+    setRegistrando(true);
+    try {
+      const resposta = await fetch(`/api/documentos/${id}/recusa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(motivo.trim() ? { motivo: motivo.trim() } : {}),
+      });
+      const dados = await resposta.json().catch(() => ({}));
+      if (resposta.ok) {
+        ciencia.aoRecusar(
+          (dados.recusa?.recusada_em as string | undefined) ??
+            new Date().toISOString()
+        );
+      } else {
+        setErroCiencia(dados.erro ?? "Não foi possível registrar a recusa.");
+      }
+    } catch {
+      setErroCiencia("Falha de conexão. Tente novamente.");
+    } finally {
+      setRegistrando(false);
+    }
+  }
 
   return (
     <div
@@ -159,7 +283,11 @@ export function VisualizadorDocumento({
           </button>
         </div>
 
-        <div className={estilos.corpoVisualizador}>
+        <div
+          className={estilos.corpoVisualizador}
+          ref={corpoRef}
+          onScroll={ciencia ? verificarFim : undefined}
+        >
           {conteudo.estado === "carregando" && (
             <p className={estilos.subtitulo}>Abrindo documento…</p>
           )}
@@ -175,7 +303,9 @@ export function VisualizadorDocumento({
           {conteudo.estado === "pdf" && (
             <iframe
               className={estilos.quadroPdf}
-              src={conteudo.url}
+              // Toolbar fora e ajuste à largura: a rolagem fica no contêiner.
+              src={`${conteudo.url}#toolbar=0&navpanes=0&view=FitH`}
+              style={ciencia ? { height: `${conteudo.alturaPx}px` } : undefined}
               title={`Documento: ${documento.titulo}`}
             />
           )}
@@ -188,6 +318,7 @@ export function VisualizadorDocumento({
               className={estilos.imagemVisualizada}
               src={conteudo.url}
               alt={`Documento: ${documento.titulo}`}
+              onLoad={ciencia ? verificarFim : undefined}
             />
           )}
 
@@ -198,6 +329,55 @@ export function VisualizadorDocumento({
             </p>
           )}
         </div>
+
+        {ciencia && conteudo.estado !== "nao_exibivel" && (
+          <div className={estilos.rodapeCiencia}>
+            {erroCiencia && <p className={estilos.erro}>{erroCiencia}</p>}
+            <p className={estilos.avisoRolagem}>
+              {leuAteOFim
+                ? "Você chegou ao fim do documento."
+                : "Role o documento até o fim para habilitar a ciência."}
+              {ciencia.jaRecusou &&
+                " Você recusou esta versão — dar ciência agora regulariza a pendência."}
+            </p>
+            <div className={estilos.acoesCiencia}>
+              {!ciencia.jaRecusou && (
+                <button
+                  className={estilos.botaoLinha}
+                  type="button"
+                  disabled={registrando}
+                  onClick={recusar}
+                >
+                  Recusar
+                </button>
+              )}
+              <button
+                className={estilos.botao}
+                type="button"
+                disabled={!leuAteOFim || registrando}
+                onClick={confirmarCiencia}
+                title={
+                  leuAteOFim
+                    ? undefined
+                    : "O botão habilita ao chegar ao fim do documento"
+                }
+              >
+                {registrando
+                  ? "Registrando…"
+                  : "Li até o fim — confirmar ciência"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {ciencia && conteudo.estado === "nao_exibivel" && (
+          <div className={estilos.rodapeCiencia}>
+            <p className={estilos.avisoRolagem}>
+              Este formato não abre no navegador e a ciência exige leitura até
+              o fim — peça ao DP a publicação em PDF ou texto.
+            </p>
+          </div>
+        )}
 
         <div className={estilos.acoesDialogo}>
           <a

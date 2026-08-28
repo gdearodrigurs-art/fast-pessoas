@@ -1,13 +1,10 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelAfastamentos } from "./painel-afastamentos";
 
 export default async function PaginaAfastamentos() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   // Flags só de NAVEGAÇÃO: a API reconfere a permissão em toda chamada e é
   // ela quem decide o formato do payload (dado de saúde ausente sem a chave).
   const linhas = await consultar<{

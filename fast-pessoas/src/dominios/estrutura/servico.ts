@@ -78,6 +78,12 @@ export async function criarEmpresa(
 ): Promise<void> {
   try {
     await comTransacao(sessao.usuario_id, async (cliente) => {
+      // A versão nasce 'ativa' e o seletor lê por status: sem esta trava a
+      // empresa com início futuro aparecia HOJE (status-lido vs data-lida). E
+      // pior, ficava travada contra renomeação até a data chegar (o guard da
+      // nova versão exige início > o da ativa E <= hoje, impossível). A edição
+      // já chama isto; a criação também precisa.
+      await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
       const empresaId = await inserirEmpresa(cliente, dados.cnpj ?? null);
       const versaoId = await inserirVersaoEmpresa(cliente, {
         empresa_id: empresaId,
@@ -184,6 +190,16 @@ export async function criarVersaoEmpresa(
         "cnpj"
       );
     }
+    // Duas renomeações concorrentes do MESMO registro: em READ COMMITTED a
+    // segunda não enxerga a versão ativa recém-inserida (fora do snapshot),
+    // pula o encerramento e insere uma segunda 'ativa'. O índice parcial barra
+    // (integridade preservada), mas o erro cru virava 500 — aqui vira 409.
+    if (violacaoUnica(erro) === "empresa_grupo_versao_uma_ativa") {
+      throw new ErroHttp(
+        409,
+        "Outra renomeação desta empresa acabou de acontecer — recarregue e refaça."
+      );
+    }
     throw erro;
   }
 }
@@ -233,6 +249,9 @@ export async function criarCentroCusto(
           "empresa_id"
         );
       }
+      // Mesma regra da empresa e da nova versão: a versão nasce 'ativa' e o
+      // seletor lê por status, então início no futuro não pode passar na criação.
+      await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
       const centroId = await inserirCentroCusto(cliente, {
         empresa_id: dados.empresa_id,
         codigo: dados.codigo,
@@ -280,49 +299,62 @@ export async function criarVersaoCentroCusto(
   centroCustoId: number,
   dados: NovaVersaoCentroCusto
 ): Promise<void> {
-  await comTransacao(sessao.usuario_id, async (cliente) => {
-    const centro = await buscarCentroCusto(cliente, centroCustoId);
-    if (!centro) throw new ErroHttp(404, "Centro de custo não encontrado.");
-    await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
-    const ativa = await buscarVersaoCentroCustoAtiva(
-      cliente,
-      centroCustoId,
-      true
-    );
-    if (ativa) {
-      if (dados.inicio_vigencia <= ativa.inicio_vigencia) {
-        throw new ErroHttpCampo(
-          400,
-          `Início deve ser posterior à vigência atual (${formatarData(ativa.inicio_vigencia)}).`,
-          "inicio_vigencia"
+  try {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      const centro = await buscarCentroCusto(cliente, centroCustoId);
+      if (!centro) throw new ErroHttp(404, "Centro de custo não encontrado.");
+      await exigirVigenciaNaoFutura(cliente, dados.inicio_vigencia);
+      const ativa = await buscarVersaoCentroCustoAtiva(
+        cliente,
+        centroCustoId,
+        true
+      );
+      if (ativa) {
+        if (dados.inicio_vigencia <= ativa.inicio_vigencia) {
+          throw new ErroHttpCampo(
+            400,
+            `Início deve ser posterior à vigência atual (${formatarData(ativa.inicio_vigencia)}).`,
+            "inicio_vigencia"
+          );
+        }
+        await encerrarVersaoCentroCusto(
+          cliente,
+          ativa.id,
+          dados.inicio_vigencia
         );
       }
-      await encerrarVersaoCentroCusto(
-        cliente,
-        ativa.id,
-        dados.inicio_vigencia
+      const versaoId = await inserirVersaoCentroCusto(cliente, {
+        centro_custo_id: centroCustoId,
+        nome: dados.nome,
+        inicio_vigencia: dados.inicio_vigencia,
+      });
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "rh.centro_custo_versao",
+        registroId: String(versaoId),
+        diff: {
+          Nome: { de: ativa?.nome ?? null, para: dados.nome },
+          "Início da vigência": {
+            de: ativa ? formatarData(ativa.inicio_vigencia) : null,
+            para: formatarData(dados.inicio_vigencia),
+          },
+        },
+      });
+    });
+  } catch (erro) {
+    // Mesma corrida de renomeação da empresa: o índice parcial uma_ativa barra
+    // a segunda 'ativa' concorrente (integridade preservada); aqui o erro cru
+    // vira 409 em vez de 500.
+    if (violacaoUnica(erro) === "centro_custo_versao_uma_ativa") {
+      throw new ErroHttp(
+        409,
+        "Outra renomeação deste centro de custo acabou de acontecer — recarregue e refaça."
       );
     }
-    const versaoId = await inserirVersaoCentroCusto(cliente, {
-      centro_custo_id: centroCustoId,
-      nome: dados.nome,
-      inicio_vigencia: dados.inicio_vigencia,
-    });
-    await registrarAlteracao(cliente, {
-      usuarioId: sessao.usuario_id,
-      papel: sessao.papel,
-      acao: "criacao",
-      tabela: "rh.centro_custo_versao",
-      registroId: String(versaoId),
-      diff: {
-        Nome: { de: ativa?.nome ?? null, para: dados.nome },
-        "Início da vigência": {
-          de: ativa ? formatarData(ativa.inicio_vigencia) : null,
-          para: formatarData(dados.inicio_vigencia),
-        },
-      },
-    });
-  });
+    throw erro;
+  }
 }
 
 export async function definirCentroCustoInativo(

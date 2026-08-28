@@ -9,6 +9,7 @@ import {
   RegistroAfastamento,
   ROTULO_GENERICO,
   ROTULOS_TIPO_AFASTAMENTO,
+  tipoAfastamentoEhClinico,
   TipoAfastamento,
 } from "./esquemas";
 import {
@@ -111,24 +112,54 @@ export async function listarAfastamentos(
     };
   });
 
-  // Trilha de leitura: um registro por afastamento cujo detalhe foi decifrado.
-  const idsComDetalhe = linhas
-    .filter((linha) => linha.dados_saude_cifrados !== null)
-    .map((linha) => String(linha.id));
-  if (idsComDetalhe.length > 0) {
+  // Trilha de leitura (eixo 8): um registro por afastamento DEVOLVIDO com tipo
+  // clínico — não só os que têm detalhe cifrado. O payload entrega o `tipo` de
+  // toda linha, e um tipo clínico já revela a condição de saúde do colaborador;
+  // amarrar a trilha à existência do cifrado deixava passar o afastamento
+  // clínico sem texto livre (cifrado null), devolvido revelando a condição SEM
+  // rastro. A trilha se amarra ao dado devolvido, não ao campo cifrado (mesma
+  // régua do SST: um registro por ASO/CAT devolvido).
+  const trilha = entradasTrilhaAfastamento(sessao.usuario_id, afastamentos);
+  if (trilha.length > 0) {
     await comTransacao(sessao.usuario_id, async (cliente) => {
-      for (const registroId of idsComDetalhe) {
-        await registrarLeituraSensivel(cliente, {
-          usuarioId: sessao.usuario_id,
-          chavePermissao: CHAVE_SAUDE_VER,
-          recurso: RECURSO_SAUDE,
-          registroId,
-        });
+      for (const entrada of trilha) {
+        await registrarLeituraSensivel(cliente, entrada);
       }
     });
   }
 
   return { com_saude: true, afastamentos };
+}
+
+export interface EntradaTrilhaAfastamento {
+  usuarioId: number;
+  chavePermissao: string;
+  recurso: string;
+  registroId: string;
+}
+
+/**
+ * A trilha do afastamento: **uma linha por afastamento devolvido com tipo
+ * CLÍNICO**, sempre — e não só quando há campo cifrado. O `tipo` clínico já
+ * conta a condição de saúde do colaborador (por isso a visão sem a chave o
+ * esconde atrás de ROTULO_GENERICO), então devolvê-lo é ler saúde de terceiro.
+ * Amarrar a trilha ao dado DEVOLVIDO (o tipo), e não à existência de um
+ * cifrado, é o ponto do eixo 8 — igual à régua da CAT/ASO no SST.
+ *
+ * Puro de propósito: é o que a suíte consegue provar sem abrir banco.
+ */
+export function entradasTrilhaAfastamento(
+  usuarioId: number,
+  afastamentos: { id: number; tipo: TipoAfastamento }[]
+): EntradaTrilhaAfastamento[] {
+  return afastamentos
+    .filter((afastamento) => tipoAfastamentoEhClinico(afastamento.tipo))
+    .map((afastamento) => ({
+      usuarioId,
+      chavePermissao: CHAVE_SAUDE_VER,
+      recurso: RECURSO_SAUDE,
+      registroId: String(afastamento.id),
+    }));
 }
 
 export async function registrarAfastamento(

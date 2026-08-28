@@ -360,6 +360,26 @@ export function DetalheDesligamento({ id }: { id: number }) {
 
             <section className={estilos.bloco}>
               <h2>Devoluções (EPIs e ativos)</h2>
+              {detalhe.pendencias_devolucao.length > 0 && (
+                <div className={comum.avisoTrava}>
+                  <b>
+                    {detalhe.pendencias_devolucao.length} item(ns) ainda com o
+                    colaborador
+                  </b>{" "}
+                  pelos registros de entrega (EPI e patrimônio) — a devolução
+                  se registra na ficha (patrimônio) ou no painel de SST (EPI).
+                  O aviso não trava o encerramento.
+                  <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                    {detalhe.pendencias_devolucao.map((pendencia, indice) => (
+                      <li key={`${pendencia.origem}-${indice}`}>
+                        {pendencia.origem === "epi" ? "EPI" : "Patrimônio"}:{" "}
+                        {pendencia.descricao} (qtd {pendencia.quantidade}) —
+                        entregue em {formatarData(pendencia.data_entrega)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {detalhe.itens.length === 0 ? (
                 <p className={estilos.vazio}>
                   Nenhum item de devolução registrado.

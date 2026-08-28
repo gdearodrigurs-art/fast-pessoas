@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelCliente } from "./painel-cliente";
 
 async function temPermissao(
@@ -15,16 +15,15 @@ async function temPermissao(
 }
 
 export default async function PaginaPainelClima() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   if (!(await temPermissao(sessao.usuario_id, "clima.agregado.ver"))) {
     redirect("/");
   }
-  const veIndividual = await temPermissao(
-    sessao.usuario_id,
-    "clima.resposta.individual.ver"
+  const [veIndividual, podePerguntas] = await Promise.all([
+    temPermissao(sessao.usuario_id, "clima.resposta.individual.ver"),
+    temPermissao(sessao.usuario_id, "clima.pergunta.administrar"),
+  ]);
+  return (
+    <PainelCliente veIndividual={veIndividual} podePerguntas={podePerguntas} />
   );
-  return <PainelCliente veIndividual={veIndividual} />;
 }

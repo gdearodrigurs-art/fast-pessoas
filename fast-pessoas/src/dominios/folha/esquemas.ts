@@ -149,15 +149,49 @@ export const CODIGO_HE_100 = "1102";
 export const CODIGO_ADICIONAL_NOTURNO = "1103";
 export const CODIGO_FALTAS = "1201";
 export const CODIGO_DSR_FALTAS = "1202";
+// Desconto de suspensão disciplinar (D2:a, migração 0100) — automática: o
+// motor a emite sozinho lendo rh.medida_disciplinar; lançar variável é erro.
+export const CODIGO_DESCONTO_SUSPENSAO = "1203";
 export const CODIGO_INSS = "2001";
 export const CODIGO_IRRF = "2002";
 export const CODIGO_DESCONTO_BENEFICIO = "2101";
 export const CODIGO_FGTS = "3001";
 
+// Códigos do MOTOR DE FÉRIAS (calculo-ferias.ts). 0136/0137 são os códigos
+// REAIS da folha da Fast (docs/18 §2b/§5 — planilha do Diego) e nascem na
+// migração 0092; 1401 é o abono pecuniário da 0028 (o terço do abono vai na
+// mesma rubrica — interpretação registrada lá, a conferir com o DP).
+export const CODIGO_FERIAS = "0136";
+export const CODIGO_ADICIONAL_FERIAS = "0137";
+export const CODIGO_ABONO_PECUNIARIO = "1401";
+
+// Códigos do MOTOR DE 13º (calculo-13.ts), migração 0094. 0138 é o código REAL
+// da folha da Fast (docs/18 §2e — planilha do Diego); 1601/1602/2003/2004 são
+// PLACEHOLDERS no esquema-exemplo da casa, porque a planilha não dá o código
+// real inequívoco dessas verbas (pendência #19) — a adoção dos reais vai junto
+// dos importadores, com as demais duplicatas (docs/18 §2a).
+export const CODIGO_DECIMO = "0138";
+export const CODIGO_ADIANTAMENTO_DECIMO = "1601";
+export const CODIGO_DESCONTO_ADIANTAMENTO_DECIMO = "1602";
+export const CODIGO_INSS_DECIMO = "2003";
+export const CODIGO_IRRF_DECIMO = "2004";
+
+// Códigos do MOTOR DE RESCISÃO (calculo-rescisao.ts), migração 0097. Os três
+// são PLACEHOLDERS no esquema-exemplo da casa (1xxx remuneração), porque a
+// planilha do Diego cita as verbas rescisórias num intervalo ambíguo
+// ("0078/0002/0015", docs/18 §2e) — a adoção dos reais vai junto dos
+// importadores, com as demais duplicatas (docs/18 §2a). As férias INDENIZADAS
+// da rescisão saem pelas mesmas 0136/0137 (decisão registrada na 0092) e o 13º
+// proporcional pelas 0138/1602/2003/2004 (0094, reuso do motor de 13º).
+export const CODIGO_SALDO_SALARIO = "1701";
+export const CODIGO_AVISO_INDENIZADO = "1702";
+export const CODIGO_MULTA_FGTS = "1703";
+
 /** Rubricas que o motor gera sozinho — lançar variável nelas é erro. */
 export const CODIGOS_AUTOMATICOS: readonly string[] = [
   CODIGO_SALARIO_BASE,
   CODIGO_DSR_FALTAS,
+  CODIGO_DESCONTO_SUSPENSAO,
   CODIGO_INSS,
   CODIGO_IRRF,
   CODIGO_FGTS,
@@ -166,9 +200,13 @@ export const CODIGOS_AUTOMATICOS: readonly string[] = [
 /**
  * Rubricas que o sistema procura PELO CÓDIGO: as automáticas do motor mais as
  * que a importação do ponto (HE 50/100, adicional noturno, faltas) e o desconto
- * de benefício lançam sozinhas. Encerrar qualquer uma derruba o cálculo da
- * competência inteira ou a importação — o encerramento recusa, e a tela nem
- * oferece o botão.
+ * de benefício lançam sozinhas — e as do MOTOR DE FÉRIAS (calculo-ferias.ts),
+ * que resolve 0136/0137/1401 pelo código, as do MOTOR DE 13º (calculo-13.ts),
+ * que resolve 0138/1601/1602/2003/2004, e as do MOTOR DE RESCISÃO
+ * (calculo-rescisao.ts), que resolve 1701/1702/1703. Encerrar qualquer uma
+ * derruba o cálculo da competência inteira, a importação ou a prévia/folha de
+ * férias, de 13º e de rescisão — o encerramento recusa, e a tela nem oferece o
+ * botão.
  */
 export const CODIGOS_DO_MOTOR: readonly string[] = [
   ...CODIGOS_AUTOMATICOS,
@@ -177,6 +215,17 @@ export const CODIGOS_DO_MOTOR: readonly string[] = [
   CODIGO_ADICIONAL_NOTURNO,
   CODIGO_FALTAS,
   CODIGO_DESCONTO_BENEFICIO,
+  CODIGO_FERIAS,
+  CODIGO_ADICIONAL_FERIAS,
+  CODIGO_ABONO_PECUNIARIO,
+  CODIGO_DECIMO,
+  CODIGO_ADIANTAMENTO_DECIMO,
+  CODIGO_DESCONTO_ADIANTAMENTO_DECIMO,
+  CODIGO_INSS_DECIMO,
+  CODIGO_IRRF_DECIMO,
+  CODIGO_SALDO_SALARIO,
+  CODIGO_AVISO_INDENIZADO,
+  CODIGO_MULTA_FGTS,
 ];
 
 const esquemaDinheiro = z
@@ -464,6 +513,31 @@ export const esquemaNovosParametrosFolha = z.object({
 });
 
 export type NovosParametrosFolha = z.infer<typeof esquemaNovosParametrosFolha>;
+
+// ------------------------------------------------------------------ OLAC — de-para conta contábil (E3:a)
+
+/**
+ * Conta contábil é TEXTO LIVRE de propósito: o plano de contas é da
+ * contabilidade ("3.1.1.01.001"), não nosso — validar máscara aqui quebraria
+ * no primeiro plano de contas diferente.
+ */
+export const esquemaNovaContaContabil = z.object({
+  rubrica_id: z.number().int().positive(),
+  conta_contabil: z
+    .string({ error: "Informe a conta contábil" })
+    .trim()
+    .min(1, "Informe a conta contábil")
+    .max(60, "Conta contábil acima do limite"),
+  inicio_vigencia: esquemaData,
+});
+
+export type NovaContaContabil = z.infer<typeof esquemaNovaContaContabil>;
+
+export const esquemaEncerrarContaContabil = z.object({
+  fim_vigencia: esquemaData,
+});
+
+export type EncerrarContaContabil = z.infer<typeof esquemaEncerrarContaContabil>;
 
 // ------------------------------------------------------------------ suite de casos de teste
 

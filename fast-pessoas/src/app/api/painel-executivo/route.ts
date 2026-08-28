@@ -1,5 +1,9 @@
 import { montarPainelExecutivo } from "@/dominios/painel-executivo/servico";
 import { CHAVE_PAINEL } from "@/dominios/painel-executivo/esquemas";
+import {
+  esquemaFiltroEstrutura,
+  lerFiltroEstrutura,
+} from "@/dominios/estrutura/esquemas";
 import { responderErro } from "@/lib/http";
 import { exigirPermissao } from "@/lib/sessao";
 
@@ -12,11 +16,25 @@ import { exigirPermissao } from "@/lib/sessao";
  * devolve o card bloqueado (sem campo de valor) para quem não a tem. Fazer isso
  * no serviço, e não aqui, garante que qualquer outro consumidor futuro desta
  * função herde o mesmo bloqueio.
+ *
+ * O recorte por registro / lotação / centro de custo vem na query string, com o
+ * MESMO esquema da lista de colaboradores (esquemaFiltroEstrutura). Ausente =
+ * empresa inteira. Mesmo padrão de app/api/colaboradores/route.ts.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const sessao = await exigirPermissao(CHAVE_PAINEL);
-    return Response.json(await montarPainelExecutivo(sessao));
+    const parametros = new URL(request.url).searchParams;
+    const analise = esquemaFiltroEstrutura.safeParse(
+      lerFiltroEstrutura(parametros)
+    );
+    if (!analise.success) {
+      return Response.json(
+        { erro: analise.error.issues[0]?.message ?? "Filtro inválido" },
+        { status: 400 }
+      );
+    }
+    return Response.json(await montarPainelExecutivo(sessao, analise.data));
   } catch (erro) {
     return responderErro(erro);
   }

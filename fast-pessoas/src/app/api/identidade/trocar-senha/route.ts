@@ -1,12 +1,25 @@
 import { NextResponse } from "next/server";
 import { esquemaTrocaSenha } from "../../../../dominios/identidade/esquemas";
 import { trocarSenha } from "../../../../dominios/identidade/servico";
-import { lerSessao } from "../../../../lib/sessao";
+import { responderErro } from "../../../../lib/http";
+import { garantirUsuarioAtivo, lerSessao } from "../../../../lib/sessao";
 
+/**
+ * A guarda fica em lerSessao + garantirUsuarioAtivo (A7), e NÃO em
+ * exigirSessao: esta rota precisa aceitar a sessão pendente_2fa (trocar a
+ * senha temporária vem ANTES de configurar o 2FA — o proxy a lista em
+ * ROTAS_PENDENTE_2FA). O que faltava era a reconferência de usuario.ativo:
+ * um desativado seguia trocando a própria senha pelo JWT de até 8h.
+ */
 export async function POST(pedido: Request) {
   const sessao = await lerSessao();
   if (!sessao) {
     return NextResponse.json({ erro: "Não autenticado" }, { status: 401 });
+  }
+  try {
+    await garantirUsuarioAtivo(sessao.usuario_id);
+  } catch (erro) {
+    return responderErro(erro);
   }
 
   const corpo = await pedido.json().catch(() => null);

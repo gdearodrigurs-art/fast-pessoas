@@ -7,8 +7,9 @@ const DATA = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Fila de intercorrências. O ALCANCE é do serviço, não da query: quem tem
- * `ponto.administrar` vê a empresa toda; o gestor vê apenas quem está na sua
- * relação vigente. Não há parâmetro de colaborador aqui de propósito — quem
+ * `ponto.administrar` vê a empresa toda; o gestor vê apenas a sua sub-árvore
+ * (liderados diretos e indiretos, decisão A2:a). Não há parâmetro de
+ * colaborador aqui de propósito — quem
  * quer uma pessoa específica abre o espelho dela, que confere o alcance.
  */
 export async function GET(request: Request) {

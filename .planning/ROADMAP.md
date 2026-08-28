@@ -35,13 +35,13 @@ Já committado e verificado (`npm test` verde, `npm run lint` limpo). Contexto, 
 
 </details>
 
-- [ ] **Phase 1: Padrão Modelo** - Catálogo → modelo → regra aplicado a admissão, recrutamento, clima e avaliação (cobre L1+L2)
-- [ ] **Phase 2: Folha — três visões e OLAC** - Conferência por provento/pessoa/centro de custo e espelhamento com a contabilidade externa por arquivo (Onda J)
-- [ ] **Phase 3: Disciplinar + Posse** - Medidas disciplinares, ciclo de documento com testemunhas (resolve a ciência do Código de Conduta) e custódia de ativos
-- [ ] **Phase 4: Visibilidade em camadas** - Salário pela sub-árvore recursiva do organograma, permissão por registro, campos cadastrais e ficha pública (Onda K)
-- [ ] **Phase 5: Painel executivo — filtro lateral** - Filtro honesto nas 24 consultas, respeitando o piso de anonimato
-- [ ] **Phase 6: Pesquisa com público-alvo** - Selecionar quem responde e medir adesão sobre o público-alvo (Onda M)
-- [ ] **Phase 7: Uso real** - Importadores de carga inicial e preparação de go-live (Onda N)
+- [x] **Phase 1: Padrão Modelo** - CONCLUÍDA 2026-08-14 (4/4 fatias: admissão 0058 · avaliação por cargo 0074 · clima 0075 · recrutamento 0076–0078)
+- [ ] **Phase 2: Folha — três visões e OLAC** - PARCIAL: três visões concluídas (`7cb36ba`); falta OLAC (decisões E1–E4 tomadas em docs/20 — layout do arquivo é NOSSO)
+- [ ] **Phase 3: Disciplinar + Posse** - PARCIAL: Disciplinar (`0a4671c`) e Posse (`65830fc`) concluídos; falta o ciclo de ciência do Código de Conduta (COND-01)
+- [ ] **Phase 4: Visibilidade em camadas** - Salário pela sub-árvore do organograma, permissão por registro, campos cadastrais e ficha pública (Onda K) — decisões A1–A7 tomadas em docs/20
+- [x] **Phase 5: Painel executivo — filtro lateral** - CONCLUÍDA (`fa13864`)
+- [x] **Phase 6: Pesquisa com público-alvo** - CONCLUÍDA (`58af664`)
+- [ ] **Phase 7: Uso real** - Importadores de carga inicial e preparação de go-live (Onda N) — decisões F1/F2 tomadas; layouts de planilha pendentes (dono)
 
 ## Phase Details
 
@@ -133,10 +133,14 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Padrão Modelo | 0/TBD | Not started | - |
-| 2. Folha — três visões e OLAC | 0/TBD | Not started | - |
-| 3. Disciplinar + Posse | 0/TBD | Not started | - |
-| 4. Visibilidade em camadas | 0/TBD | Not started | - |
-| 5. Painel executivo — filtro lateral | 0/TBD | Not started | - |
-| 6. Pesquisa com público-alvo | 0/TBD | Not started | - |
+| 1. Padrão Modelo | 4/4 | **Complete** | 2026-08-14 |
+| 2. Folha — três visões e OLAC | 1/2 | Partial (falta OLAC) | - |
+| 3. Disciplinar + Posse | 2/3 | Partial (falta Conduta) | - |
+| 4. Visibilidade em camadas | 0/4 | Em execução (cadeia Onda 1) | - |
+| 5. Painel executivo — filtro lateral | 1/1 | **Complete** | 2026-08-14 |
+| 6. Pesquisa com público-alvo | 1/1 | **Complete** | 2026-08-14 |
 | 7. Uso real | 0/TBD | Not started | - |
+
+> **2026-08-24 — cadeia de execução ativa:** o restante (OLAC · Conduta · Visibilidade · carga
+> inicial · follow-ups · motor de folha) roda pela cadeia de 4 ondas com agentes paralelos.
+> Decisões do dono (22/22) em `docs/20-decisoes-para-a-cadeia.md`.

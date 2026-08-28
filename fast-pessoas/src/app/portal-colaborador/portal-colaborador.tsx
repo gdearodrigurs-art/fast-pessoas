@@ -31,6 +31,47 @@ interface BlocoPonto {
   espelho_href?: string;
 }
 
+/**
+ * Contrato de GET /api/posse/minhas (domínio de posse; a porta é
+ * documento.ver, a ciência é do titular). Espelho de PosseLinha sem os campos
+ * de identificação do colaborador — aqui tudo é do próprio.
+ */
+interface ItemMinhaPosse {
+  id: number;
+  categoria_nome: string;
+  descricao: string;
+  quantidade: number;
+  numero_serie: string | null;
+  data_entrega: string;
+  termo_documento_id: number | null;
+  termo_titulo: string | null;
+  ciencia_registrada: boolean;
+  devolvido_em: string | null;
+}
+
+/**
+ * Contrato de GET /api/documentos/pendencias/minhas (ciclo de ciência, 0086).
+ * O mesmo payload alimenta o gate da Onda 2; aqui é só o cartão de aviso.
+ */
+interface PendenciaCiencia {
+  documento_id: number;
+  titulo: string;
+  bloqueante: boolean;
+  data_limite: string | null;
+  vencida: boolean;
+  bloqueia: boolean;
+}
+interface TestemunhoPendenteCartao {
+  ato_id: number;
+  documento_titulo: string;
+  pessoa_nome: string;
+}
+interface BlocoCiencias {
+  bloqueada: boolean;
+  pendencias: PendenciaCiencia[];
+  testemunhos: TestemunhoPendenteCartao[];
+}
+
 interface Visao {
   pode: {
     ferias: boolean;
@@ -589,7 +630,15 @@ function CartaoDependentes({
                 className={estilos.ligacao}
                 type="button"
                 disabled={enviando}
-                onClick={() => remover(dependente.id)}
+                onClick={() => {
+                  // Mesma confirmação nomeada do painel do DP: o DELETE
+                  // recalcula a folha em silêncio, não pode disparar sem aviso.
+                  if (
+                    window.confirm(`Remover o dependente ${dependente.nome}?`)
+                  ) {
+                    void remover(dependente.id);
+                  }
+                }}
               >
                 remover
               </button>
@@ -723,6 +772,345 @@ function CartaoDocumentos({ bloco }: { bloco: BlocoDocumentos }) {
           </ul>
         </>
       )}
+    </section>
+  );
+}
+
+function LinhaMinhaPosse({
+  item,
+  emCurso,
+  aoDarCiencia,
+}: {
+  item: ItemMinhaPosse;
+  emCurso: boolean;
+  aoDarCiencia: (itemId: number) => void;
+}) {
+  const cienciaPendente =
+    item.termo_documento_id !== null && !item.ciencia_registrada;
+  return (
+    <li
+      className={
+        cienciaPendente
+          ? `${estilos.itemLista} ${estilos.itemListaAcao}`
+          : estilos.itemLista
+      }
+    >
+      <p>{item.descricao}</p>
+      <span className={estilos.metaItem}>
+        {item.categoria_nome} · qtd {item.quantidade}
+        {item.numero_serie ? ` · nº ${item.numero_serie}` : ""} · entregue em{" "}
+        {formatarData(item.data_entrega)} ·{" "}
+        {item.devolvido_em
+          ? `devolvido em ${formatarInstante(item.devolvido_em)}`
+          : "em uso"}
+      </span>
+      <span className={estilos.metaItem}>
+        Termo:{" "}
+        {item.termo_documento_id !== null ? (
+          <a
+            className={estilos.ligacao}
+            href={`/api/documentos/${item.termo_documento_id}/download`}
+          >
+            {item.termo_titulo ?? `#${item.termo_documento_id}`}
+          </a>
+        ) : (
+          "sem termo no GED"
+        )}
+        {" · "}
+        {item.ciencia_registrada
+          ? "ciência registrada"
+          : item.termo_documento_id !== null
+            ? "ciência pendente"
+            : "sem termo, sem ciência"}
+      </span>
+      {cienciaPendente && (
+        <span>
+          <button
+            className={estilos.ligacao}
+            type="button"
+            disabled={emCurso}
+            onClick={() => aoDarCiencia(item.id)}
+            title="Aceite eletrônico: a ciência é dada sobre o termo no GED (hash da versão no momento)"
+          >
+            {emCurso ? "Registrando…" : "Dar ciência"}
+          </button>
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Minha posse de patrimônio — a superfície do TITULAR (pendência 16.1): o
+ * botão "Dar ciência" da ficha só alcança quem tem rh.posse.ver, que o
+ * funcionário típico não tem. Busca o próprio dado (/api/posse/minhas, porta
+ * documento.ver) com fetch tolerante, molde BlocoPosseFicha: 403 => o cartão
+ * some (ausência legítima da chave); lista vazia => some (nada em posse);
+ * 5xx/timeout/rede => erro visível + "tentar novamente" — esconder ali seria
+ * falso-negativo. Falha aqui NÃO derruba o portal.
+ */
+function CartaoMinhaPosse() {
+  const [itens, setItens] = useState<ItemMinhaPosse[] | null>(null);
+  const [visivel, setVisivel] = useState(true);
+  const [erroCarregar, setErroCarregar] = useState<string | null>(null);
+  const [cienciaEmCurso, setCienciaEmCurso] = useState<number | null>(null);
+  const [erroAcao, setErroAcao] = useState<string | null>(null);
+
+  const recarregar = useCallback(async () => {
+    try {
+      const resposta = await fetch("/api/posse/minhas", { cache: "no-store" });
+      if (resposta.status === 403) {
+        // Só o 403 esconde: ausência legítima da chave documento.ver.
+        setVisivel(false);
+        return;
+      }
+      if (!resposta.ok) {
+        setErroCarregar("Não foi possível carregar. Tente novamente.");
+        return;
+      }
+      const dados = (await resposta.json().catch(() => ({}))) as {
+        itens?: ItemMinhaPosse[];
+      };
+      setErroCarregar(null);
+      setItens(dados.itens ?? []);
+    } catch {
+      setErroCarregar("Falha de conexão. Tente novamente.");
+    }
+  }, []);
+
+  useEffect(() => {
+    let ativo = true;
+    void (async () => {
+      if (!ativo) return;
+      await recarregar();
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [recarregar]);
+
+  async function darCiencia(itemId: number) {
+    setErroAcao(null);
+    setCienciaEmCurso(itemId);
+    try {
+      const resposta = await fetch(`/api/posse/${itemId}/ciencia`, {
+        method: "POST",
+      });
+      if (!resposta.ok) {
+        const dados = (await resposta.json().catch(() => ({}))) as {
+          erro?: string;
+        };
+        setErroAcao(dados.erro ?? "Não foi possível registrar a ciência.");
+        if (resposta.status === 409) {
+          // Duplo clique ou corrida: já registrada — recarrega para refletir.
+          await recarregar();
+        }
+        return;
+      }
+      await recarregar();
+    } catch {
+      setErroAcao("Falha de conexão. Tente novamente.");
+    } finally {
+      setCienciaEmCurso(null);
+    }
+  }
+
+  if (!visivel) return null;
+
+  // Carregando sem erro: o cartão ainda não tem o que dizer — não ocupa lugar.
+  if (itens === null && erroCarregar === null) return null;
+
+  if (itens === null) {
+    return (
+      <section className={estilos.cartao}>
+        <h2>Minha posse de patrimônio</h2>
+        <p className={estilos.erro}>{erroCarregar}</p>
+        <button
+          className={estilos.ligacao}
+          type="button"
+          onClick={() => {
+            setErroCarregar(null);
+            void recarregar();
+          }}
+        >
+          Tentar novamente
+        </button>
+      </section>
+    );
+  }
+
+  // Sem item nenhum (nem devolvido): cartão fora — molde "Minhas entregas de
+  // EPI" do painel de SST; ausência de dado não é erro.
+  if (itens.length === 0) return null;
+
+  const aguardandoCiencia = itens.filter(
+    (item) => item.termo_documento_id !== null && !item.ciencia_registrada
+  );
+  const emUso = itens.filter((item) => item.devolvido_em === null);
+
+  return (
+    <section className={estilos.cartao}>
+      <h2>Minha posse de patrimônio</h2>
+      <div className={estilos.cartoesResumo}>
+        <div
+          className={
+            aguardandoCiencia.length > 0
+              ? `${estilos.cartaoResumo} ${estilos.cartaoResumoAcao}`
+              : estilos.cartaoResumo
+          }
+        >
+          <strong>{aguardandoCiencia.length}</strong>
+          <span>Aguardam sua ciência</span>
+        </div>
+        <div className={estilos.cartaoResumo}>
+          <strong>{emUso.length}</strong>
+          <span>Em posse com você</span>
+        </div>
+      </div>
+      <ul className={estilos.lista}>
+        {itens.map((item) => (
+          <LinhaMinhaPosse
+            key={item.id}
+            item={item}
+            emCurso={cienciaEmCurso === item.id}
+            aoDarCiencia={(id) => void darCiencia(id)}
+          />
+        ))}
+      </ul>
+      {erroAcao && <p className={estilos.erro}>{erroAcao}</p>}
+      <p className={estilos.notaRodape}>
+        A ciência é o aceite eletrônico do termo de entrega no GED (hash da
+        versão no momento). A devolução é registrada pelo DP/RH.
+      </p>
+    </section>
+  );
+}
+
+/** A5:b — autodeclaração de raça-cor. Self-fetch em /api/portais/colaborador/raca-cor
+ *  (keyless por titularidade: o titular sai da sessão; o DP lê por outra porta, logada). */
+function CartaoRacaCor() {
+  const [dados, setDados] = useState<{
+    declaracao: { raca_cor: string | null; rotulo: string | null };
+    opcoes: { valor: string; rotulo: string }[];
+  } | null>(null);
+  const [escolha, setEscolha] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/portais/colaborador/raca-cor", { cache: "no-store" });
+        if (!ativo || !resposta.ok) return;
+        setDados(await resposta.json());
+      } catch { /* portal segue sem o cartão */ }
+    })();
+    return () => { ativo = false; };
+  }, []);
+
+  if (dados === null) return null;
+
+  async function declarar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch("/api/portais/colaborador/raca-cor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raca_cor: escolha }),
+      });
+      const corpo = await resposta.json().catch(() => ({}));
+      if (!resposta.ok) {
+        setErro((corpo as { erro?: string }).erro ?? "Não foi possível salvar.");
+        return;
+      }
+      setDados((atual) => (atual === null ? null : { ...atual, declaracao: corpo }));
+      setEscolha("");
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <section className={estilos.cartao}>
+      <h2>Raça-cor (autodeclaração)</h2>
+      <p>
+        Padrão IBGE, declarada por você — ninguém declara em seu lugar, e você pode
+        mudar quando quiser. Declaração atual:{" "}
+        <strong>{dados.declaracao.rotulo ?? "não declarada"}</strong>.
+      </p>
+      <form onSubmit={declarar}>
+        <select required value={escolha} onChange={(e) => setEscolha(e.target.value)}>
+          <option value="">selecione…</option>
+          {dados.opcoes.map((opcao) => (
+            <option key={opcao.valor} value={opcao.valor}>{opcao.rotulo}</option>
+          ))}
+        </select>{" "}
+        <button type="submit" disabled={salvando || escolha === ""}>
+          {salvando ? "Salvando…" : "Declarar"}
+        </button>
+      </form>
+      {erro && <p>{erro}</p>}
+    </section>
+  );
+}
+
+/**
+ * Ciclo de ciência (0086): pendências de ciência e testemunhos pendentes do
+ * usuário, com aviso de bloqueio em destaque. O dado vem por rota própria
+ * (molde do bloco de ponto) — falha não derruba o portal.
+ */
+function CartaoCiencias({ bloco }: { bloco: BlocoCiencias }) {
+  if (bloco.pendencias.length === 0 && bloco.testemunhos.length === 0) {
+    return null;
+  }
+  return (
+    <section className={estilos.cartao}>
+      <div className={estilos.cabecalhoCartao}>
+        <h2>Ciência de documentos</h2>
+        <Link className={estilos.ligacao} href="/documentos">
+          Ler e dar ciência →
+        </Link>
+      </div>
+      {bloco.bloqueada && (
+        <p className={estilos.erro}>
+          Há pendência que bloqueia o seu acesso ao sistema — regularize na
+          página de Documentos.
+        </p>
+      )}
+      <ul className={estilos.lista}>
+        {bloco.pendencias.map((pendencia) => (
+          <li
+            key={pendencia.documento_id}
+            className={`${estilos.itemLista} ${estilos.itemListaAcao}`}
+          >
+            <p>{pendencia.titulo}</p>
+            <span className={estilos.metaItem}>
+              {pendencia.bloqueante ? "Bloqueante" : "Aguarda sua ciência"}
+              {pendencia.data_limite
+                ? ` · prazo até ${formatarData(pendencia.data_limite)}`
+                : ""}
+              {pendencia.vencida ? " · prazo vencido" : ""}
+            </span>
+          </li>
+        ))}
+        {bloco.testemunhos.map((testemunho) => (
+          <li
+            key={testemunho.ato_id}
+            className={`${estilos.itemLista} ${estilos.itemListaAcao}`}
+          >
+            <p>Testemunho pendente — {testemunho.documento_titulo}</p>
+            <span className={estilos.metaItem}>
+              Ato sobre {testemunho.pessoa_nome} · confirme na página de
+              Documentos
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -902,6 +1290,27 @@ export function PortalColaborador() {
   const [ponto, setPonto] = useState<BlocoPonto | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [ciencias, setCiencias] = useState<BlocoCiencias | null>(null);
+
+  // Ciclo de ciência (0086): rota própria do domínio de documentos, molde
+  // exato do bloco de ponto — falha aqui não derruba o portal.
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch("/api/documentos/pendencias/minhas", {
+          cache: "no-store",
+        });
+        if (!ativo || !resposta.ok) return;
+        setCiencias((await resposta.json()) as BlocoCiencias);
+      } catch {
+        /* portal segue sem o cartão de ciências */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   // Bloco de ponto vem do domínio DONO do dado, com a chave dele
   // (ponto.ver.proprio). Falha aqui não derruba o portal: o cartão só não
@@ -990,6 +1399,9 @@ export function PortalColaborador() {
         {visao !== null && (
           <>
             <CartaoMeusDados dados={visao.meus_dados} />
+            {/* Fora de `colunas` de propósito: o aviso de bloqueio precisa de
+                destaque acima da grade. */}
+            {ciencias !== null && <CartaoCiencias bloco={ciencias} />}
 
             <div className={estilos.colunas}>
               {ponto !== null && <CartaoPonto bloco={ponto} />}
@@ -1009,6 +1421,11 @@ export function PortalColaborador() {
               {visao.documentos !== null && (
                 <CartaoDocumentos bloco={visao.documentos} />
               )}
+              {/* Cartão autônomo: busca o próprio dado e se esconde sozinho
+                  (403/sem itens). Falha nele não derruba o portal. */}
+              <CartaoMinhaPosse />
+              {/* Self-fetch como a posse: a titularidade sai da sessão. */}
+              <CartaoRacaCor />
               <CartaoAvaliacoes bloco={visao.avaliacoes} />
               {visao.checkin !== null && (
                 <CartaoCheckin bloco={visao.checkin} />

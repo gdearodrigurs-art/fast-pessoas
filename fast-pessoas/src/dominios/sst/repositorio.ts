@@ -53,15 +53,25 @@ export async function buscarDocumento(id: number): Promise<{
   titulo: string;
   colaborador_id: number | null;
   hash_sha256: string;
+  /** O documento está no ciclo de ciência (0086) — termo de EPI não pode. */
+  exige_ciencia: boolean;
+  /** Id da versão que SUBSTITUIU esta — null = versão vigente da cadeia. */
+  substituido_por_id: number | null;
 } | null> {
   const linhas = await consultar<{
     id: string;
     titulo: string;
     colaborador_id: string | null;
     hash_sha256: string;
+    exige_ciencia: boolean;
+    substituido_por_id: string | null;
   }>(
-    `SELECT id, titulo, colaborador_id, hash_sha256
-       FROM rh.documento WHERE id = $1`,
+    `SELECT d.id, d.titulo, d.colaborador_id, d.hash_sha256, d.exige_ciencia,
+            sucessor.id AS substituido_por_id
+       FROM rh.documento d
+       LEFT JOIN rh.documento sucessor
+         ON sucessor.substitui_documento_id = d.id
+      WHERE d.id = $1`,
     [id]
   );
   if (linhas.length === 0) return null;
@@ -73,6 +83,11 @@ export async function buscarDocumento(id: number): Promise<{
         ? null
         : Number(linhas[0].colaborador_id),
     hash_sha256: linhas[0].hash_sha256,
+    exige_ciencia: linhas[0].exige_ciencia,
+    substituido_por_id:
+      linhas[0].substituido_por_id === null
+        ? null
+        : Number(linhas[0].substituido_por_id),
   };
 }
 
@@ -232,7 +247,7 @@ export async function contarAtivosComAsoValido(): Promise<{
     `SELECT count(*)::int AS ativos,
             count(*) FILTER (WHERE EXISTS (
               SELECT 1 FROM rh.aso a
-               WHERE a.colaborador_id = c.id AND a.validade >= CURRENT_DATE
+               WHERE a.colaborador_id = c.id AND a.validade >= rh.hoje()
             ))::int AS com_aso_valido
        FROM rh.colaborador c
       WHERE c.status = 'ativo'`
@@ -402,7 +417,7 @@ export async function contarAtivosComPsicossocialValida(): Promise<{
     `SELECT count(*)::int AS ativos,
             count(*) FILTER (WHERE EXISTS (
               SELECT 1 FROM rh.avaliacao_psicossocial p
-               WHERE p.colaborador_id = c.id AND p.validade >= CURRENT_DATE
+               WHERE p.colaborador_id = c.id AND p.validade >= rh.hoje()
             ))::int AS com_avaliacao_valida
        FROM rh.colaborador c
       WHERE c.status = 'ativo'`
@@ -557,6 +572,23 @@ export async function listarEntregasDoColaborador(
   return linhas.map(mapearEntrega);
 }
 
+/**
+ * EPIs ainda com o colaborador (devolvido_em IS NULL) — a consulta que o
+ * DESLIGAMENTO usa para avisar as pendências de devolução (eixo 10). Usa o
+ * índice parcial de pendência da 0014.
+ */
+export async function listarEpiPendenteDevolucao(
+  colaboradorId: number
+): Promise<EntregaEpiLinha[]> {
+  const linhas = await consultar<EntregaEpiCrua>(
+    `${SELECT_ENTREGA}
+      WHERE e.colaborador_id = $1 AND e.devolvido_em IS NULL
+      ORDER BY e.data_entrega DESC, e.id DESC`,
+    [colaboradorId]
+  );
+  return linhas.map(mapearEntrega);
+}
+
 export async function buscarEntregaEpi(
   id: number
 ): Promise<EntregaEpiLinha | null> {
@@ -597,24 +629,33 @@ export async function inserirEntregaEpi(
 export async function marcarDevolucaoEpi(
   cliente: PoolClient,
   id: number
-): Promise<string> {
+): Promise<string | null> {
+  // Condicional (devolvido_em IS NULL): duas requisições concorrentes passavam
+  // pelo mesmo pré-check e o UPDATE incondicional da segunda batia no trigger de
+  // imutabilidade (500). Casando 0 linhas, quem chama devolve 409 limpo.
   const { rows } = await cliente.query<{ devolvido_em: string }>(
     `UPDATE rh.epi_entrega SET devolvido_em = now()
-      WHERE id = $1
+      WHERE id = $1 AND devolvido_em IS NULL
       RETURNING devolvido_em::text AS devolvido_em`,
     [id]
   );
-  return rows[0].devolvido_em;
+  return rows[0]?.devolvido_em ?? null;
 }
 
 export async function marcarCienciaEntregaEpi(
   cliente: PoolClient,
   id: number
-): Promise<void> {
-  await cliente.query(
-    "UPDATE rh.epi_entrega SET ciencia_registrada = TRUE WHERE id = $1",
+): Promise<boolean> {
+  // Condicional (ciencia_registrada = FALSE), molde marcarDevolucaoEpi: duas
+  // requisições concorrentes passam pelo mesmo pré-check; casando 0 linhas, a
+  // segunda leva 409 limpo no serviço em vez de projetar por cima.
+  const { rows } = await cliente.query<{ id: string }>(
+    `UPDATE rh.epi_entrega SET ciencia_registrada = TRUE
+      WHERE id = $1 AND ciencia_registrada = FALSE
+      RETURNING id`,
     [id]
   );
+  return rows.length > 0;
 }
 
 /** Ciência já dada no GED sobre este documento por este usuário? */

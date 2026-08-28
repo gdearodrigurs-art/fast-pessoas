@@ -126,6 +126,7 @@ fica fora do portão.
 |---|---|
 | `migrar.js` | aplica as migrations. Migration aplicada é **imutável**: o hash trava. |
 | `semear-demo.js` | popula a demonstração. Repetível: rodar duas vezes dá o mesmo banco. |
+| `semear-fundacao.js` | fundação de um banco de **produção** vazio: 1 empresa + unidade + centro de custo de exemplo e a conferência do modelo GERAL de avaliação. Idempotente; roda entre `migrar.js` e `seed-admin.js` (ver MIGRACAO.md, "ambiente vazio"). |
 | `seed-admin.js` | cria a conta real do dono num banco novo. |
 | `codigo-2fa.js` | gera o TOTP de uma persona — para quando o 2FA **precisa** ser provado. |
 | `servidor.js` | sobe o Next apontando para o banco **local** (`npm run dev:local`). |

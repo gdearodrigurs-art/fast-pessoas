@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { PainelEstrutura } from "./painel-estrutura";
 
 /**
@@ -11,19 +11,18 @@ import { PainelEstrutura } from "./painel-estrutura";
  * inativa sem chamar dev.
  */
 export default async function PaginaEstrutura() {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const linhas = await consultar<{
     pode_empresa: boolean;
     pode_centro_custo: boolean;
     pode_lotacao: boolean;
+    pode_importar: boolean;
   }>(
     `SELECT sistema.tem_permissao($1, 'rh.empresa.administrar')      AS pode_empresa,
             sistema.tem_permissao($1, 'rh.centro_custo.administrar') AS pode_centro_custo,
             sistema.tem_permissao($1, 'rh.estabelecimento.administrar')
-              AS pode_lotacao`,
+              AS pode_lotacao,
+            sistema.tem_permissao($1, 'sistema.carga.importar')      AS pode_importar`,
     [sessao.usuario_id]
   );
   const pode = linhas[0];
@@ -35,6 +34,7 @@ export default async function PaginaEstrutura() {
       podeEmpresa={Boolean(pode?.pode_empresa)}
       podeCentroCusto={Boolean(pode?.pode_centro_custo)}
       podeLotacao={Boolean(pode?.pode_lotacao)}
+      podeImportar={Boolean(pode?.pode_importar)}
     />
   );
 }

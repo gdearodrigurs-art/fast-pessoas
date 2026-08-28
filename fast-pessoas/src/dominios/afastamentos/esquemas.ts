@@ -29,6 +29,35 @@ export const ROTULOS_TIPO_AFASTAMENTO: Record<TipoAfastamento, string> = {
  */
 export const ROTULO_GENERICO = "Afastamento";
 
+/**
+ * Quais tipos, ao serem DEVOLVIDOS no payload, revelam uma condição de saúde do
+ * PRÓPRIO colaborador. É por isso que a visão sem a chave esconde todos atrás
+ * de ROTULO_GENERICO: o `tipo` em si já conta a condição. A trilha de leitura
+ * (eixo 8) se amarra a esse dado devolvido — devolver um tipo clínico é ler
+ * saúde de terceiro, tenha ou não texto livre cifrado junto.
+ *
+ * Administrativos (não revelam saúde do colaborador):
+ *  - `paternidade`: a condição de saúde é da parceira, não do colaborador;
+ *  - `outros`: rótulo genérico, não nomeia condição nenhuma.
+ * Os demais nomeiam uma condição do próprio colaborador — doença (atestado,
+ * licença médica), gestação (maternidade), acidente, ou incapacidade
+ * previdenciária (INSS): clínicos. Na dúvida, clínico — sobra-auditar é
+ * inócuo; falta-auditar é o defeito do eixo 8.
+ */
+export const TIPO_AFASTAMENTO_CLINICO: Record<TipoAfastamento, boolean> = {
+  atestado: true,
+  licenca_medica: true,
+  maternidade: true,
+  paternidade: false,
+  acidente_trabalho: true,
+  inss: true,
+  outros: false,
+};
+
+export function tipoAfastamentoEhClinico(tipo: TipoAfastamento): boolean {
+  return TIPO_AFASTAMENTO_CLINICO[tipo];
+}
+
 export const esquemaRegistroAfastamento = z
   .object({
     colaborador_id: z

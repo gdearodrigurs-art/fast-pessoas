@@ -118,6 +118,22 @@ export function lerFiltroEstrutura(parametros: URLSearchParams): {
   };
 }
 
+// ------------------------------------------------------------------ carga inicial
+// A MESMA envelope de arquivo do importador de ponto (esquemaImportacao), sem
+// competência: carga de catálogo não tem mês. O layout das colunas está em
+// importacao-analise.ts (e no cabeçalho de cada rota).
+
+export const esquemaCarga = z.object({
+  arquivo: z.string().trim().min(1, "Informe o nome do arquivo").max(200),
+  conteudo: z
+    .string()
+    .min(1, "Arquivo vazio")
+    .max(4_000_000, "Arquivo acima do limite de 4 MB"),
+  separador: z.enum([";", ",", "\t"]).default(";"),
+});
+
+export type EntradaCarga = z.infer<typeof esquemaCarga>;
+
 /** Opção de seletor: o catálogo já resolvido em nome legível. */
 export interface OpcaoEstrutura {
   id: number;

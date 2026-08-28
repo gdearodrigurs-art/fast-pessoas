@@ -1,5 +1,9 @@
 import { esquemaCredenciais } from "@/dominios/identidade/esquemas";
-import { autenticar } from "@/dominios/identidade/servico";
+import {
+  autenticar,
+  loginBloqueado,
+  registrarTentativa,
+} from "@/dominios/identidade/servico";
 import { criarSessao } from "@/lib/sessao";
 
 const MENSAGEM_GENERICA = "E-mail ou senha incorretos.";
@@ -20,7 +24,20 @@ export async function POST(request: Request) {
     );
   }
 
+  // Rate-limit ANTES do bcrypt: falhas demais na janela → 429 sem pagar o hash.
+  if (await loginBloqueado(analise.data.email)) {
+    return Response.json(
+      {
+        erro: "Muitas tentativas de acesso. Aguarde alguns minutos e tente novamente.",
+      },
+      { status: 429 }
+    );
+  }
+
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   const resultado = await autenticar(analise.data);
+  await registrarTentativa(analise.data.email, resultado, ip);
 
   if (!resultado.ok) {
     if (resultado.motivo === "totp_obrigatorio") {
@@ -33,6 +50,26 @@ export async function POST(request: Request) {
       return Response.json(
         { precisa_totp: true, erro: "Código de verificação inválido." },
         { status: 401 }
+      );
+    }
+    // Conta inativa — tanto a que o DP desativou quanto a que acabou de cair
+    // pela 5ª falha de TOTP (C1 modificada). A resposta é o MESMO 401 genérico
+    // da senha errada: um "Conta desativada" próprio só aparecia com a senha
+    // CERTA, e a diferença entre as duas respostas confirmava a senha para
+    // quem não pode mais entrar (oráculo). O aviso "procure o DP" saiu desta
+    // superfície de propósito; o motivo interno segue distinto para a
+    // auditoria e para o rate-limit (não conta como falha de senha).
+    if (resultado.motivo === "conta_desativada") {
+      return Response.json({ erro: MENSAGEM_GENERICA }, { status: 401 });
+    }
+    // Bloqueio temporário de TOTP (caso último-admin): mesma voz do rate-limit
+    // de senha, sem citar o segundo fator.
+    if (resultado.motivo === "totp_bloqueado") {
+      return Response.json(
+        {
+          erro: "Muitas tentativas de acesso. Aguarde alguns minutos e tente novamente.",
+        },
+        { status: 429 }
       );
     }
     return Response.json({ erro: MENSAGEM_GENERICA }, { status: 401 });

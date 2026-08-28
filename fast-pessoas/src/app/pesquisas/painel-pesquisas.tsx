@@ -4,6 +4,14 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Cabecalho } from "@/app/cabecalho";
 import {
+  FiltroEstrutura,
+  FILTRO_ESTRUTURA_VAZIO,
+  filtroEstruturaAtivo,
+  OpcoesFiltroEstrutura,
+  parametrosFiltroEstrutura,
+  ValorFiltroEstrutura,
+} from "@/app/filtro-estrutura";
+import {
   ROTULOS_STATUS_PESQUISA,
   ROTULOS_TIPO_PERGUNTA,
   ROTULOS_TIPO_PESQUISA,
@@ -28,8 +36,14 @@ interface PesquisaItem {
   status: StatusPesquisa;
   anonima: boolean;
   perguntas: number;
-  participacoes: number;
+  /** NULL quando a pesquisa tem alvo e a adesão está abaixo do piso k. */
+  participacoes: number | null;
   adesao: number | null;
+}
+
+interface OpcaoCargo {
+  id: number;
+  nome: string;
 }
 
 interface AbertaItem {
@@ -48,6 +62,9 @@ interface Visao {
   colaborador_vinculado: boolean;
   /** Piso de anonimato vigente, vindo do servidor (0044/0045). */
   minimo_amostra: number;
+  /** Catálogos do seletor de público-alvo — presentes só para quem administra. */
+  opcoes_estrutura?: OpcoesFiltroEstrutura;
+  opcoes_cargo?: OpcaoCargo[];
   pode: {
     administrar: boolean;
     responder: boolean;
@@ -134,10 +151,58 @@ export function PainelPesquisas({
    */
   const [fim, setFim] = useState("");
   const [anonima, setAnonima] = useState(true);
+  // Público-alvo (0079): começa VAZIO = empresa toda (comportamento de sempre).
+  const [alvoEstrutura, setAlvoEstrutura] = useState<ValorFiltroEstrutura>(
+    FILTRO_ESTRUTURA_VAZIO
+  );
+  const [alvoCargo, setAlvoCargo] = useState("");
+  // Contagem viva do recorte, vinda do servidor (a conta de gente nunca é feita
+  // aqui). null = ainda não contado ou recorte vazio.
+  const [alvoContagem, setAlvoContagem] = useState<{
+    elegiveis: number;
+    minimo: number;
+  } | null>(null);
   const [perguntas, setPerguntas] = useState<PerguntaRascunho[]>([
     { ...PERGUNTA_VAZIA, tipo: "nps_0_10", enunciado: "" },
   ]);
   const [enviando, setEnviando] = useState(false);
+
+  const recorteAlvoVazio =
+    !filtroEstruturaAtivo(alvoEstrutura) && alvoCargo === "";
+
+  // Contador vivo: a cada mudança do recorte, pergunta ao servidor quantos
+  // caem nele. Recorte vazio não consulta — é "empresa toda". O setState mora
+  // dentro do callback assíncrono (nunca no corpo do efeito): o número vem do
+  // servidor, e "Contando…" é o estado enquanto ele não chega.
+  useEffect(() => {
+    if (!mostrarForm || recorteAlvoVazio) return;
+    let ativo = true;
+    const parametros = parametrosFiltroEstrutura(alvoEstrutura);
+    if (alvoCargo) parametros.set("cargo_id", alvoCargo);
+    (async () => {
+      setAlvoContagem(null);
+      try {
+        const resposta = await fetch(
+          `/api/pesquisas/alvo?${parametros.toString()}`
+        );
+        const dados = await resposta.json().catch(() => ({}));
+        if (ativo && resposta.ok) {
+          setAlvoContagem(dados as { elegiveis: number; minimo: number });
+        }
+      } catch {
+        // Sem contagem viva a criação segue: o servidor reconta e é quem recusa.
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [mostrarForm, recorteAlvoVazio, alvoEstrutura, alvoCargo]);
+
+  function limparAlvo() {
+    setAlvoEstrutura(FILTRO_ESTRUTURA_VAZIO);
+    setAlvoCargo("");
+    setAlvoContagem(null);
+  }
 
   const recarregar = useCallback(() => setVersao((v) => v + 1), []);
 
@@ -179,6 +244,19 @@ export function PainelPesquisas({
     setErro(null);
     setMensagem(null);
     try {
+      // Só as dimensões preenchidas vão no alvo; string vazia é omitida. Alvo
+      // sem nenhuma dimensão = undefined = empresa toda.
+      const alvo: Record<string, number> = {};
+      if (alvoEstrutura.empresa_id) {
+        alvo.empresa_id = Number(alvoEstrutura.empresa_id);
+      }
+      if (alvoEstrutura.estabelecimento_id) {
+        alvo.estabelecimento_id = Number(alvoEstrutura.estabelecimento_id);
+      }
+      if (alvoEstrutura.centro_custo_id) {
+        alvo.centro_custo_id = Number(alvoEstrutura.centro_custo_id);
+      }
+      if (alvoCargo) alvo.cargo_id = Number(alvoCargo);
       const corpo = {
         titulo,
         tipo,
@@ -186,6 +264,7 @@ export function PainelPesquisas({
         inicio,
         fim,
         anonima,
+        alvo: Object.keys(alvo).length > 0 ? alvo : undefined,
         perguntas: perguntas.map((pergunta) => ({
           enunciado: pergunta.enunciado,
           tipo: pergunta.tipo,
@@ -220,6 +299,7 @@ export function PainelPesquisas({
       // para outra pesquisa — o mesmo defeito por outro caminho.
       setInicio(hojeIso());
       setFim("");
+      limparAlvo();
       setPerguntas([{ ...PERGUNTA_VAZIA, tipo: "nps_0_10" }]);
       recarregar();
     } catch {
@@ -417,6 +497,74 @@ export function PainelPesquisas({
                 </label>
 
                 <div className={estilos.campoGrupoLargo}>
+                  <h3>Público-alvo</h3>
+                  <p className={estilos.ajuda}>
+                    Sem recorte, a pesquisa vai para a empresa toda. Preencha uma
+                    ou mais dimensões para mirar um grupo — elas se combinam em E
+                    (ex.: empresa X e cargo Vendedor). O público-alvo congela
+                    quando a pesquisa é aberta.
+                  </p>
+                  <FiltroEstrutura
+                    opcoes={visao?.opcoes_estrutura ?? null}
+                    valor={alvoEstrutura}
+                    aoMudar={setAlvoEstrutura}
+                    prefixoId="alvo"
+                    mostrarLimpar={false}
+                  />
+                  <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="alvoCargo">
+                      Cargo
+                    </label>
+                    <select
+                      id="alvoCargo"
+                      className={estilos.campo}
+                      value={alvoCargo}
+                      onChange={(e) => setAlvoCargo(e.target.value)}
+                    >
+                      <option value="">Todos</option>
+                      {(visao?.opcoes_cargo ?? []).map((cargo) => (
+                        <option key={cargo.id} value={cargo.id}>
+                          {cargo.nome}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {recorteAlvoVazio ? (
+                    <p className={estilos.ajuda}>
+                      Empresa toda — a pesquisa vai para todos os colaboradores
+                      ativos.
+                    </p>
+                  ) : alvoContagem === null ? (
+                    <p className={estilos.ajuda}>
+                      Contando colaboradores no recorte…
+                    </p>
+                  ) : alvoContagem.elegiveis < alvoContagem.minimo ? (
+                    <p className={estilos.aviso}>
+                      {alvoContagem.elegiveis} colaborador
+                      {alvoContagem.elegiveis === 1 ? "" : "es"} neste recorte —
+                      abaixo do piso de anonimato (k={alvoContagem.minimo}). A
+                      criação será recusada: um grupo menor que o piso nunca
+                      poderia mostrar resultado.
+                    </p>
+                  ) : (
+                    <p className={estilos.ajuda}>
+                      {alvoContagem.elegiveis} colaborador
+                      {alvoContagem.elegiveis === 1 ? "" : "es"} neste recorte.
+                    </p>
+                  )}
+                  <div className={estilos.acoesLinha}>
+                    <button
+                      type="button"
+                      className={estilos.botaoDiscreto}
+                      disabled={recorteAlvoVazio}
+                      onClick={limparAlvo}
+                    >
+                      Limpar público-alvo
+                    </button>
+                  </div>
+                </div>
+
+                <div className={estilos.campoGrupoLargo}>
                   <h3>Perguntas</h3>
                   {perguntas.map((pergunta, indice) => (
                     <div key={indice} className={estilos.perguntaRascunho}>
@@ -582,7 +730,9 @@ export function PainelPesquisas({
                         </td>
                         <td className={estilos.numero}>{pesquisa.perguntas}</td>
                         <td className={estilos.numero}>
-                          {pesquisa.participacoes}
+                          {pesquisa.participacoes === null
+                            ? "—"
+                            : pesquisa.participacoes}
                           {pesquisa.adesao === null
                             ? ""
                             : ` (${pesquisa.adesao}%)`}

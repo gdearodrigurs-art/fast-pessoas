@@ -1,8 +1,15 @@
+import { createHash } from "node:crypto";
 import { hash } from "bcryptjs";
 import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao, consultar } from "../../lib/banco";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
 import { ErroHttp, lerSessao } from "../../lib/sessao";
+import { armazenamentoBytea } from "../documentos/armazenamento";
+import {
+  CATEGORIA_PESQUISA_SOCIAL,
+  formatarTamanho,
+  TAMANHO_MAXIMO_BYTES,
+} from "../documentos/esquemas";
 import {
   calcularPrazosExperiencia,
   ROTULOS_ESTADO_PROCESSO,
@@ -25,51 +32,72 @@ import { PayloadSessao } from "../identidade/esquemas";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
+  bloqueioDeAvancoPesquisaSocial,
   CriacaoCandidato,
   CriacaoCandidatura,
+  CriacaoModelo,
   CriacaoOferta,
   CriacaoParecer,
   CriacaoRequisicao,
   CriacaoVaga,
+  dataCorteExpurgo,
   DecisaoRequisicao,
   IniciarAdmissao,
   MESES_CONSENTIMENTO_PADRAO,
   Movimentacao,
+  RegistroPesquisaSocial,
   RespostaOferta,
+  TrocaModeloVaga,
+  validarSequenciaDeEtapas,
   ROTULOS_MOTIVO_MOVIMENTACAO,
   ROTULOS_MOTIVO_REQUISICAO,
   ROTULOS_RECOMENDACAO,
+  ROTULOS_RESULTADO_PESQUISA_SOCIAL,
   ROTULOS_STATUS_CANDIDATURA,
   ROTULOS_STATUS_OFERTA,
   ROTULOS_STATUS_REQUISICAO,
   ROTULOS_STATUS_VAGA,
 } from "./esquemas";
 import {
+  apagarDocumentoDoExpurgo,
+  apurarTempoPorEtapa,
   apurarVagasNoPrazo,
   atualizarCandidatura,
+  atualizarModeloDaVaga,
   atualizarStatusVaga,
+  buscarAnexoPesquisaSocial,
   buscarCandidaturaBasica,
   buscarCandidaturaParaMutacao,
   buscarCandidatoBasico,
   buscarCargoVersaoVigente,
   buscarEstabelecimentoVersaoAtiva,
-  buscarEtapasAtivas,
+  buscarEtapasDoModelo,
+  buscarModeloAtivo,
+  buscarModeloPadrao,
+  buscarModeloParaMutacao,
+  buscarNomeModelo,
   buscarFaixaVigente,
   buscarOfertaParaMutacao,
+  buscarPesquisaSocial,
   buscarRequisicaoParaMutacao,
   buscarVaga,
   buscarVagaParaMutacao,
   CandidatoResumo,
   CandidaturaKanban,
   CargoDisponivel,
+  contarCandidaturasDaVaga,
+  encerrarModelo,
   EstabelecimentoDisponivel,
   EtapaAtiva,
   gravarDecisaoRequisicao,
   inserirCandidato,
   inserirCandidatura,
+  inserirEtapasNoModelo,
+  inserirModelo,
   inserirMovimentacao,
   inserirOferta,
   inserirParecer,
+  inserirPesquisaSocial,
   inserirRequisicao,
   inserirVaga,
   listarCandidatos,
@@ -77,12 +105,19 @@ import {
   listarCargosDisponiveis,
   listarEstabelecimentosAtivos,
   listarEtapasAtivas,
+  listarEtapasDoModelo,
+  listarModelos,
+  listarModelosEncerrados,
   listarPareceres,
+  listarPesquisasParaExpurgo,
   listarRequisicoes,
   listarVagas,
+  expurgarPesquisa,
+  ModeloResumo,
   ParecerSelecao,
   responderOferta as gravarRespostaOferta,
   RequisicaoResumo,
+  TempoPorEtapa,
   VagaResumo,
 } from "./repositorio";
 
@@ -92,6 +127,7 @@ const TABELA_CANDIDATO = "rh.candidato";
 const TABELA_CANDIDATURA = "rh.candidatura";
 const TABELA_PARECER = "rh.parecer_selecao";
 const TABELA_OFERTA = "rh.oferta";
+const TABELA_MODELO = "rh.modelo_selecao_versao";
 
 // ------------------------------------------------------------------ utilidades
 
@@ -358,13 +394,41 @@ export async function criarVaga(
           `O cargo ${requisicao.cargo_nome} não tem faixa salarial vigente — cadastre a faixa antes de abrir a vaga.`
         );
       }
+      // A vaga congela um modelo de processo na abertura (0077); a candidatura
+      // vai andar pelas etapas deste modelo. Quem abre pode escolher um modelo
+      // alternativo ativo; sem escolha, vale o GERAL (padrão).
+      let modeloVersaoId: number | null;
+      if (dados.modelo_versao_id !== undefined) {
+        modeloVersaoId = await buscarModeloAtivo(cliente, dados.modelo_versao_id);
+        if (modeloVersaoId === null) {
+          throw new ErroHttpCampo(
+            409,
+            "O modelo de processo escolhido não está ativo.",
+            "modelo_versao_id"
+          );
+        }
+      } else {
+        modeloVersaoId = await buscarModeloPadrao(cliente);
+        if (modeloVersaoId === null) {
+          throw new ErroHttp(
+            409,
+            "Não há modelo de processo seletivo padrão ativo — configure o modelo antes de abrir vagas."
+          );
+        }
+      }
       const id = await inserirVaga(cliente, {
         requisicao_id: dados.requisicao_id,
         titulo: dados.titulo,
         faixa_min: faixa.faixa_min,
         faixa_max: faixa.faixa_max,
         prazo_alvo: dados.prazo_alvo,
+        modelo_versao_id: modeloVersaoId,
       });
+      // Rastro (eixo 8): o modelo congelado muda o pipeline inteiro da vaga —
+      // a criação tem que registrar por qual processo a seleção vai correr.
+      const modeloNome =
+        (await buscarNomeModelo(cliente, modeloVersaoId)) ??
+        `#${modeloVersaoId}`;
       await registrarAlteracao(cliente, {
         usuarioId: sessao.usuario_id,
         papel: sessao.papel,
@@ -381,6 +445,7 @@ export async function criarVaga(
             de: null,
             para: `${formatarSalario(faixa.faixa_min)} a ${formatarSalario(faixa.faixa_max)}`,
           },
+          "Modelo de processo": { de: null, para: modeloNome },
           "Prazo-alvo": { de: null, para: formatarData(dados.prazo_alvo) },
           Status: { de: null, para: ROTULOS_STATUS_VAGA.aberta },
         },
@@ -397,6 +462,268 @@ export async function criarVaga(
     }
     throw erro;
   }
+}
+
+/**
+ * Troca o modelo de processo CONGELADO de uma vaga. Decisão G1 (docs/20):
+ * reformular um modelo NÃO migra vaga aberta — ela fica na versão antiga e a
+ * troca é manual, por aqui, e só enquanto NINGUÉM entrou no pipeline. Com
+ * qualquer candidatura (ativa ou encerrada) o modelo é história congelada:
+ * trocá-lo reescreveria por qual processo as pessoas passaram.
+ */
+export async function trocarModeloDaVaga(
+  sessao: PayloadSessao,
+  vagaId: number,
+  dados: TrocaModeloVaga
+): Promise<void> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const vaga = await buscarVagaParaMutacao(cliente, vagaId);
+    if (!vaga) {
+      throw new ErroHttp(404, "Vaga não encontrada.");
+    }
+    if (vaga.status !== "aberta") {
+      throw new ErroHttp(
+        409,
+        `Vaga ${ROTULOS_STATUS_VAGA[vaga.status].toLowerCase()} não troca de modelo — só vaga aberta.`
+      );
+    }
+    const candidaturas = await contarCandidaturasDaVaga(cliente, vagaId);
+    if (candidaturas > 0) {
+      throw new ErroHttp(
+        409,
+        `Esta vaga já tem ${candidaturas} candidatura(s) — o processo segue na versão em que começou; o modelo não muda mais.`
+      );
+    }
+    if (dados.modelo_versao_id === vaga.modelo_versao_id) {
+      throw new ErroHttpCampo(
+        409,
+        "A vaga já usa este modelo.",
+        "modelo_versao_id"
+      );
+    }
+    const novoModeloId = await buscarModeloAtivo(
+      cliente,
+      dados.modelo_versao_id
+    );
+    if (novoModeloId === null) {
+      throw new ErroHttpCampo(
+        409,
+        "O modelo de processo escolhido não está ativo.",
+        "modelo_versao_id"
+      );
+    }
+    await atualizarModeloDaVaga(cliente, vagaId, novoModeloId);
+    const nomeAntigo =
+      (await buscarNomeModelo(cliente, vaga.modelo_versao_id)) ??
+      `#${vaga.modelo_versao_id}`;
+    const nomeNovo =
+      (await buscarNomeModelo(cliente, novoModeloId)) ?? `#${novoModeloId}`;
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "atualizacao",
+      tabela: TABELA_VAGA,
+      registroId: String(vagaId),
+      diff: {
+        "Título": { de: null, para: vaga.titulo },
+        "Modelo de processo": { de: nomeAntigo, para: nomeNovo },
+      },
+    });
+  });
+}
+
+// ------------------------------------------------------------------ administração dos modelos de processo
+
+export interface PainelModelosSelecao {
+  modelos: ModeloResumo[];
+  /** Histórico da série: versões encerradas (reformuladas ou aposentadas). */
+  encerrados: ModeloResumo[];
+  /** Catálogo de etapas disponíveis para montar um modelo. */
+  catalogo: EtapaAtiva[];
+}
+
+/** Painel de administração dos modelos de processo — só quem gere a seleção. */
+export async function obterModelosSelecao(
+  pode: PermissoesRs
+): Promise<PainelModelosSelecao> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  const [modelos, encerrados, catalogo] = await Promise.all([
+    listarModelos(),
+    listarModelosEncerrados(),
+    listarEtapasAtivas(),
+  ]);
+  return { modelos, encerrados, catalogo };
+}
+
+/**
+ * A regra de desenho (etapas do catálogo, sem repetição, oferta por último)
+ * vive pura em validarSequenciaDeEtapas — criar e reformular usam a MESMA; o
+ * que muda é só de onde nasce a versão. Aqui ela vira erro HTTP no campo.
+ */
+async function exigirSequenciaValida(etapaIds: number[]): Promise<EtapaAtiva[]> {
+  const catalogo = await listarEtapasAtivas();
+  const resultado = validarSequenciaDeEtapas(catalogo, etapaIds);
+  if (!resultado.ok) {
+    throw new ErroHttpCampo(resultado.status, resultado.mensagem, "etapa_ids");
+  }
+  // As escolhidas vêm do próprio catálogo — o cast só devolve a forma completa.
+  return resultado.etapas as EtapaAtiva[];
+}
+
+/**
+ * Cria um modelo de processo alternativo (nasce ATIVO, não-padrão). As etapas
+ * têm que ser do catálogo vigente, sem repetição, e terminar na etapa de
+ * OFERTA — senão a candidatura nunca alcançaria a proposta (é onde o valor
+ * é registrado). Os ids/ordem viram imutáveis: mudar o desenho = reformular.
+ */
+export async function criarModelo(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  dados: CriacaoModelo
+): Promise<number> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  const escolhidas = await exigirSequenciaValida(dados.etapa_ids);
+
+  return await comTransacao(sessao.usuario_id, async (cliente) => {
+    const id = await inserirModelo(cliente, {
+      nome: dados.nome,
+      padrao: false,
+      continua_de: null,
+    });
+    await inserirEtapasNoModelo(cliente, id, dados.etapa_ids);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "criacao",
+      tabela: TABELA_MODELO,
+      registroId: String(id),
+      diff: {
+        Nome: { de: null, para: dados.nome },
+        Etapas: {
+          de: null,
+          para: escolhidas.map((etapa) => etapa.nome).join(" → "),
+        },
+      },
+    });
+    return id;
+  });
+}
+
+/**
+ * Reformular: encerra a versão ativa e publica a nova ligada a ela
+ * (continua_de) na MESMA transação — molde do clima (0075). O modelo PADRÃO
+ * (GERAL) também passa por aqui e a versão nova HERDA padrao=true no mesmo
+ * ato (decisão G2): o índice de um-padrão-ativo da 0076 só admite um por vez,
+ * por isso a anterior é encerrada ANTES do INSERT. Vaga aberta NÃO migra
+ * (decisão G1): fica congelada na versão antiga; a troca é o PATCH da vaga.
+ */
+export async function reformularModelo(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  id: number,
+  dados: CriacaoModelo
+): Promise<number> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  const escolhidas = await exigirSequenciaValida(dados.etapa_ids);
+
+  return await comTransacao(sessao.usuario_id, async (cliente) => {
+    const anterior = await buscarModeloParaMutacao(cliente, id);
+    if (!anterior) {
+      throw new ErroHttp(404, "Modelo não encontrado.");
+    }
+    if (anterior.status !== "ativa") {
+      throw new ErroHttp(409, "Só um modelo ativo pode ser reformulado.");
+    }
+    await encerrarModelo(cliente, id);
+    const novoId = await inserirModelo(cliente, {
+      nome: dados.nome,
+      padrao: anterior.padrao,
+      continua_de: id,
+    });
+    await inserirEtapasNoModelo(cliente, novoId, dados.etapa_ids);
+    const diff: Diff = {
+      Reformula: { de: `#${id}: ${anterior.nome}`, para: dados.nome },
+      Etapas: {
+        de: null,
+        para: escolhidas.map((etapa) => etapa.nome).join(" → "),
+      },
+    };
+    if (anterior.padrao) {
+      diff["Padrão (GERAL)"] = { de: null, para: "herdado da versão anterior" };
+    }
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_MODELO,
+      registroId: String(novoId),
+      diff,
+    });
+    return novoId;
+  });
+}
+
+/**
+ * Aposentar: encerra sem substituto — o modelo sai da oferta de vaga nova.
+ * Vagas que o congelaram continuam correndo por ele (0077). O GERAL não se
+ * aposenta: toda vaga nova nasce dele; para mudar o desenho, reformule-o.
+ */
+export async function aposentarModelo(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  id: number
+): Promise<void> {
+  if (!pode.gerir) {
+    throw new ErroHttp(
+      403,
+      "Sem permissão para administrar modelos de processo."
+    );
+  }
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const modelo = await buscarModeloParaMutacao(cliente, id);
+    if (!modelo) {
+      throw new ErroHttp(404, "Modelo não encontrado.");
+    }
+    if (modelo.status !== "ativa") {
+      throw new ErroHttp(409, "Só um modelo ativo pode ser aposentado.");
+    }
+    if (modelo.padrao) {
+      throw new ErroHttp(
+        409,
+        "O modelo GERAL (padrão) não se aposenta — toda vaga nova nasce dele. Para mudar o desenho, use “Reformular”."
+      );
+    }
+    await encerrarModelo(cliente, id);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "transicao",
+      tabela: TABELA_MODELO,
+      registroId: String(id),
+      diff: {
+        Nome: { de: null, para: modelo.nome },
+        Situação: {
+          de: "ativa",
+          para: "aposentado (encerrado, sem substituto)",
+        },
+      },
+    });
+  });
 }
 
 // ------------------------------------------------------------------ kanban da vaga
@@ -418,7 +745,9 @@ export async function obterKanban(
     throw new ErroHttp(404, "Vaga não encontrada.");
   }
   const [etapas, candidaturas] = await Promise.all([
-    listarEtapasAtivas(),
+    // Colunas do kanban pelas etapas DO MODELO congelado da vaga (0077) — o par
+    // de leitura do pipeline; a escrita (criar/mover candidatura) já anda por aqui.
+    listarEtapasDoModelo(vaga.modelo_versao_id),
     listarCandidaturasDaVaga(vagaId),
   ]);
   const veSensivel = pode.ver || pode.gerir;
@@ -430,12 +759,30 @@ export async function obterKanban(
     // Valor da oferta é salário: gestor vê a faixa, nunca o valor final.
     oferta_valor: veSensivel ? candidatura.oferta_valor : null,
     oferta_dentro_banda: veSensivel ? candidatura.oferta_dentro_banda : null,
+    // Pesquisa social (G3:a): desfecho e existência do anexo SÓ para rs.gerir
+    // — mais restrito que o valor da oferta (rs.ver não alcança).
+    pesquisa_social_resultado: pode.gerir
+      ? candidatura.pesquisa_social_resultado
+      : null,
+    pesquisa_social_tem_anexo: pode.gerir
+      ? candidatura.pesquisa_social_tem_anexo
+      : null,
   }));
   if (veSensivel && saida.some((c) => c.oferta_valor !== null)) {
     await registrarLeituraSensivel({
       usuarioId: sessao.usuario_id,
       chavePermissao: pode.gerir ? "rs.gerir" : "rs.ver",
       recurso: "recrutamento.oferta_valor",
+      registroId: String(vagaId),
+    });
+  }
+  // Desfecho de pesquisa social exibido = leitura sensível de terceiro (eixo
+  // 8), trilhada com a chave que de fato autorizou (G3:a — rs.gerir).
+  if (pode.gerir && saida.some((c) => c.pesquisa_social_resultado !== null)) {
+    await registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "rs.gerir",
+      recurso: "recrutamento.pesquisa_social",
       registroId: String(vagaId),
     });
   }
@@ -532,23 +879,23 @@ export async function criarCandidatura(
           "candidato_id"
         );
       }
-      const etapas = await buscarEtapasAtivas(cliente);
+      const etapas = await buscarEtapasDoModelo(cliente, vaga.modelo_versao_id);
       if (etapas.length === 0) {
         throw new ErroHttp(
           409,
-          "Não há etapas de seleção ativas — ative o template antes."
+          "O modelo de processo desta vaga não tem etapas — configure o modelo antes."
         );
       }
       const etapaInicial = etapas[0];
       const id = await inserirCandidatura(cliente, {
         vaga_id: dados.vaga_id,
         candidato_id: dados.candidato_id,
-        etapa_atual_id: etapaInicial.id,
+        etapa_atual_id: etapaInicial.etapa_selecao_versao_id,
       });
       await inserirMovimentacao(cliente, {
         candidatura_id: id,
         de_etapa_id: null,
-        para_etapa_id: etapaInicial.id,
+        para_etapa_id: etapaInicial.etapa_selecao_versao_id,
         novo_status: null,
         motivo_catalogo: null,
         observacao: null,
@@ -606,10 +953,30 @@ export async function movimentarCandidatura(
     }
 
     if (dados.acao === "avancar") {
-      const etapas = await buscarEtapasAtivas(cliente);
-      const proxima = etapas.find(
-        (etapa) => etapa.ordem > candidatura.etapa_ordem
+      // GATE da pesquisa social (#13c): da etapa só se avança com desfecho
+      // APROVADO — sem desfecho a etapa não aconteceu; reprovado não avança
+      // (o caminho é reprovar com motivo do catálogo ou registrar desistência).
+      if (candidatura.etapa_tipo === "pesquisa_social") {
+        const pesquisa = await buscarPesquisaSocial(cliente, candidaturaId);
+        const bloqueio = bloqueioDeAvancoPesquisaSocial(
+          candidatura.etapa_tipo,
+          pesquisa?.resultado ?? null
+        );
+        if (bloqueio) {
+          throw new ErroHttp(409, bloqueio);
+        }
+      }
+      // Anda pelas etapas DO MODELO congelado na vaga (0077), não pela lista
+      // global viva: a próxima é a seguinte à etapa atual na ordem do modelo.
+      const etapas = await buscarEtapasDoModelo(
+        cliente,
+        candidatura.modelo_versao_id
       );
+      const indiceAtual = etapas.findIndex(
+        (etapa) => etapa.etapa_selecao_versao_id === candidatura.etapa_atual_id
+      );
+      const proxima =
+        indiceAtual >= 0 ? etapas[indiceAtual + 1] : undefined;
       if (!proxima) {
         throw new ErroHttp(
           409,
@@ -617,12 +984,12 @@ export async function movimentarCandidatura(
         );
       }
       await atualizarCandidatura(cliente, candidaturaId, {
-        etapa_atual_id: proxima.id,
+        etapa_atual_id: proxima.etapa_selecao_versao_id,
       });
       await inserirMovimentacao(cliente, {
         candidatura_id: candidaturaId,
         de_etapa_id: candidatura.etapa_atual_id,
-        para_etapa_id: proxima.id,
+        para_etapa_id: proxima.etapa_selecao_versao_id,
         novo_status: null,
         motivo_catalogo: null,
         observacao: dados.observacao ?? null,
@@ -650,6 +1017,17 @@ export async function movimentarCandidatura(
       throw new ErroHttpCampo(
         400,
         "Reprovação exige motivo do catálogo.",
+        "motivo_catalogo"
+      );
+    }
+    // "Desistência" é desfecho do CANDIDATO, não da empresa: reprovar dizendo
+    // que ele desistiu é um registro contraditório e frágil como defesa (Lei
+    // 9.029). A tela já esconde a opção; o servidor tem que recusar também,
+    // senão um POST direto grava a incoerência.
+    if (motivo === "desistencia") {
+      throw new ErroHttpCampo(
+        400,
+        "Desistência não é motivo de reprovação — a empresa reprova, o candidato desiste.",
         "motivo_catalogo"
       );
     }
@@ -765,6 +1143,361 @@ export async function registrarParecer(
   });
 }
 
+// ------------------------------------------------------------------ pesquisa social (#13c, G3:a)
+
+const TABELA_PESQUISA_SOCIAL = "rh.pesquisa_social";
+const TABELA_DOCUMENTO = "rh.documento";
+
+/**
+ * Costuras da pesquisa social com o banco/GED — o que os testes trocam por
+ * dublês (molde DepsPosse, pendência 16.2). Produção nunca passa o parâmetro:
+ * as rotas chamam como sempre e caem em DEPS_PESQUISA_REAIS.
+ */
+export interface DepsPesquisaSocial {
+  buscarCandidaturaParaMutacao: typeof buscarCandidaturaParaMutacao;
+  buscarPesquisaSocial: typeof buscarPesquisaSocial;
+  inserirPesquisaSocial: typeof inserirPesquisaSocial;
+  /** Escrita do anexo no GED — a MESMA interface do domínio documentos. */
+  guardarAnexo: typeof armazenamentoBytea.guardar;
+  buscarAnexoPesquisaSocial: typeof buscarAnexoPesquisaSocial;
+  lerConteudoAnexo: typeof armazenamentoBytea.lerConteudo;
+  listarPesquisasParaExpurgo: typeof listarPesquisasParaExpurgo;
+  expurgarPesquisa: typeof expurgarPesquisa;
+  apagarDocumentoDoExpurgo: typeof apagarDocumentoDoExpurgo;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+  registrarAlteracao: typeof registrarAlteracao;
+  comTransacao: typeof comTransacao;
+}
+
+const DEPS_PESQUISA_REAIS: DepsPesquisaSocial = {
+  buscarCandidaturaParaMutacao,
+  buscarPesquisaSocial,
+  inserirPesquisaSocial,
+  guardarAnexo: armazenamentoBytea.guardar,
+  buscarAnexoPesquisaSocial,
+  lerConteudoAnexo: armazenamentoBytea.lerConteudo,
+  listarPesquisasParaExpurgo,
+  expurgarPesquisa,
+  apagarDocumentoDoExpurgo,
+  registrarLeituraSensivel,
+  registrarAlteracao,
+  comTransacao,
+};
+
+/**
+ * Registra o DESFECHO da pesquisa social (aprovado/reprovado) da candidatura
+ * QUE ESTÁ na etapa de pesquisa social, com anexo opcional no GED. O anexo vai
+ * para rh.documento na categoria PRÓPRIA e OCULTA 'pesquisa_social' (A2/G3:a):
+ * o acervo do GED nunca a lista, e a visibilidade — inclusive no download
+ * genérico — exige rs.gerir com trilha (documento.sensivel.ver NÃO basta).
+ * Desfecho é único por candidatura: correção não sobrescreve história.
+ */
+export async function registrarPesquisaSocial(
+  sessao: PayloadSessao,
+  candidaturaId: number,
+  dados: RegistroPesquisaSocial,
+  deps: DepsPesquisaSocial = DEPS_PESQUISA_REAIS
+): Promise<void> {
+  // O anexo decodifica ANTES da transação: payload ruim nem abre transação.
+  let anexo: { nome: string; mime: string; conteudo: Buffer } | null = null;
+  if (dados.anexo) {
+    const conteudo = Buffer.from(dados.anexo.conteudo_base64, "base64");
+    if (conteudo.length === 0) {
+      throw new ErroHttpCampo(400, "O arquivo está vazio.", "anexo");
+    }
+    if (conteudo.length > TAMANHO_MAXIMO_BYTES) {
+      throw new ErroHttpCampo(
+        413,
+        "Arquivo excede o limite de 10 MB.",
+        "anexo"
+      );
+    }
+    anexo = {
+      nome: dados.anexo.nome_arquivo,
+      mime: dados.anexo.mime,
+      conteudo,
+    };
+  }
+  try {
+    await deps.comTransacao(sessao.usuario_id, async (cliente) => {
+      const candidatura = await deps.buscarCandidaturaParaMutacao(
+        cliente,
+        candidaturaId
+      );
+      if (!candidatura) {
+        throw new ErroHttp(404, "Candidatura não encontrada.");
+      }
+      if (candidatura.status !== "ativa") {
+        throw new ErroHttp(
+          409,
+          "Candidatura encerrada não recebe pesquisa social."
+        );
+      }
+      if (candidatura.vaga_status !== "aberta") {
+        throw new ErroHttp(
+          409,
+          `Vaga ${ROTULOS_STATUS_VAGA[candidatura.vaga_status].toLowerCase()} não registra pesquisa social.`
+        );
+      }
+      if (candidatura.etapa_tipo !== "pesquisa_social") {
+        throw new ErroHttp(
+          409,
+          "O desfecho da pesquisa social só se registra com o candidato NA etapa de pesquisa social."
+        );
+      }
+      if (await deps.buscarPesquisaSocial(cliente, candidaturaId)) {
+        throw new ErroHttp(
+          409,
+          "Esta candidatura já tem desfecho de pesquisa social — o registro é único."
+        );
+      }
+
+      let documentoId: number | null = null;
+      if (anexo) {
+        // Hash no servidor, como no GED — o cliente nunca informa o hash.
+        const hashSha256 = createHash("sha256")
+          .update(anexo.conteudo)
+          .digest("hex");
+        const guardado = await deps.guardarAnexo(cliente, {
+          colaborador_id: null,
+          // A2 (decisão G3:a): categoria própria e oculta — o GED não a lista
+          // e só rs.gerir a alcança; é também o que o trigger da 0101 usa para
+          // permitir o DELETE do expurgo (e nada além dele).
+          categoria: CATEGORIA_PESQUISA_SOCIAL,
+          titulo: `Pesquisa social — ${candidatura.candidato_nome}`,
+          nome_arquivo: anexo.nome,
+          mime: anexo.mime,
+          tamanho_bytes: anexo.conteudo.length,
+          conteudo: anexo.conteudo,
+          sensivel: true,
+          hash_sha256: hashSha256,
+          enviado_por_usuario: sessao.usuario_id,
+          exige_ciencia: false,
+          bloqueante: false,
+          prazo_ciencia_dias: null,
+          substitui_documento_id: null,
+        });
+        documentoId = guardado.id;
+        await deps.registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "criacao",
+          tabela: TABELA_DOCUMENTO,
+          registroId: String(documentoId),
+          diff: {
+            "Título": {
+              de: null,
+              para: `Pesquisa social — ${candidatura.candidato_nome}`,
+            },
+            Categoria: { de: null, para: "Pesquisa social" },
+            Arquivo: { de: null, para: anexo.nome },
+            Tamanho: { de: null, para: formatarTamanho(anexo.conteudo.length) },
+            "Sensível": { de: null, para: "Sim" },
+            "SHA-256": { de: null, para: hashSha256 },
+            Origem: {
+              de: null,
+              para: `Pesquisa social — candidatura #${candidaturaId}`,
+            },
+          },
+        });
+      }
+
+      const id = await deps.inserirPesquisaSocial(cliente, {
+        candidatura_id: candidaturaId,
+        resultado: dados.resultado,
+        documento_id: documentoId,
+        registrado_por: sessao.usuario_id,
+      });
+      await deps.registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: TABELA_PESQUISA_SOCIAL,
+        registroId: String(id),
+        diff: {
+          Candidato: { de: null, para: candidatura.candidato_nome },
+          Vaga: { de: null, para: candidatura.vaga_titulo },
+          Resultado: {
+            de: null,
+            para: ROTULOS_RESULTADO_PESQUISA_SOCIAL[dados.resultado],
+          },
+          Anexo: { de: null, para: anexo ? anexo.nome : "sem anexo" },
+        },
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "pesquisa_social_candidatura_id_key") {
+      throw new ErroHttp(
+        409,
+        "Esta candidatura já tem desfecho de pesquisa social — o registro é único."
+      );
+    }
+    throw erro;
+  }
+}
+
+export interface AnexoPesquisaSocialBaixado {
+  nome_arquivo: string;
+  mime: string;
+  conteudo: Buffer;
+}
+
+/**
+ * Download do anexo — SÓ rs.gerir (G3:a), sempre com trilha de leitura
+ * sensível ANTES do conteúdo sair. Sem anexo (ou já expurgado) = 404, ausência
+ * e não máscara.
+ */
+export async function baixarAnexoPesquisaSocial(
+  sessao: PayloadSessao,
+  pode: PermissoesRs,
+  candidaturaId: number,
+  deps: DepsPesquisaSocial = DEPS_PESQUISA_REAIS
+): Promise<AnexoPesquisaSocialBaixado> {
+  if (!pode.gerir) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  const anexo = await deps.buscarAnexoPesquisaSocial(candidaturaId);
+  if (!anexo) {
+    throw new ErroHttp(404, "Anexo não encontrado.");
+  }
+  await deps.registrarLeituraSensivel({
+    usuarioId: sessao.usuario_id,
+    chavePermissao: "rs.gerir",
+    recurso: "recrutamento.pesquisa_social_anexo",
+    registroId: String(candidaturaId),
+  });
+  const conteudo = await deps.lerConteudoAnexo(anexo.documento_id);
+  if (!conteudo) {
+    throw new ErroHttp(404, "Anexo não encontrado.");
+  }
+  return {
+    nome_arquivo: anexo.nome_arquivo,
+    mime: anexo.mime,
+    conteudo,
+  };
+}
+
+export interface ContagemExpurgo {
+  expurgadas: number;
+  anexos_apagados: number;
+  /** Itens que a rodada PULOU (ex.: FK inesperada no anexo) — nada abortou. */
+  puladas: number;
+}
+
+/**
+ * Motivo curto e sem dado pessoal para o relatório da rodada. FK (23503) é o
+ * caso conhecido: alguém criou vínculo (ex.: rh.ciencia) sobre o anexo — o A4
+ * fecha a porta nova, mas dado antigo não se conserta sozinho.
+ */
+function motivoDoPulo(erro: unknown): string {
+  if (
+    typeof erro === "object" &&
+    erro !== null &&
+    "code" in erro &&
+    (erro as { code?: unknown }).code === "23503"
+  ) {
+    return "o documento do anexo tem vínculo (ex.: ciência) que impede o DELETE";
+  }
+  return erro instanceof Error ? erro.message : String(erro);
+}
+
+/**
+ * EXPURGO da retenção (G3:a, 6 meses): para cada candidatura DESCARTADA
+ * (reprovada/desistiu) há mais de 6 meses, apaga o anexo do GED (a linha de
+ * rh.documento leva o BYTEA junto — o trigger da 0101 abre a exceção só para
+ * a categoria 'pesquisa_social') e ANONIMIZA o desfecho (resultado -> NULL,
+ * expurgado_em carimbado) — auditado SEM repetir o desfecho (repeti-lo no
+ * audit recriaria o dado que se está apagando; o audit nunca é tocado, molde
+ * 0012). Rota administrativa manual — o projeto não tem agendador; o cron é
+ * follow-up registrado.
+ *
+ * A3 — a rodada é blindada POR ITEM: cada pesquisa roda dentro de um
+ * SAVEPOINT. Um documento que não deleta (ex.: FK de rh.ciencia criada antes
+ * do A4 fechar essa porta) NÃO aborta a rodada inteira: aquele item é
+ * revertido e PULADO, com o motivo no ato da rodada — os demais expurgam.
+ */
+export async function expurgarPesquisasSociais(
+  sessao: PayloadSessao,
+  hoje: string,
+  deps: DepsPesquisaSocial = DEPS_PESQUISA_REAIS
+): Promise<ContagemExpurgo> {
+  const corte = dataCorteExpurgo(hoje);
+  return deps.comTransacao(sessao.usuario_id, async (cliente) => {
+    const linhas = await deps.listarPesquisasParaExpurgo(cliente, corte);
+    let expurgadas = 0;
+    let anexosApagados = 0;
+    const pulos: { id: number; motivo: string }[] = [];
+    for (const [indice, linha] of linhas.entries()) {
+      const savepoint = `expurgo_item_${indice}`;
+      await cliente.query(`SAVEPOINT ${savepoint}`);
+      try {
+        // Ordem obrigatória: primeiro o vínculo zera (expurgo), depois a
+        // linha do documento sai — a FK barraria a ordem inversa.
+        await deps.expurgarPesquisa(cliente, linha.id);
+        if (linha.documento_id !== null) {
+          await deps.apagarDocumentoDoExpurgo(cliente, linha.documento_id);
+        }
+        await deps.registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "expurgo",
+          tabela: TABELA_PESQUISA_SOCIAL,
+          registroId: String(linha.id),
+          diff: {
+            "Pesquisa social": {
+              de: "registrada",
+              para: "expurgada (retenção de 6 meses após o descarte)",
+            },
+            Anexo: {
+              de: null,
+              para:
+                linha.documento_id !== null
+                  ? "apagado do GED (conteúdo incluído)"
+                  : "sem anexo",
+            },
+          },
+        });
+        await cliente.query(`RELEASE SAVEPOINT ${savepoint}`);
+        expurgadas += 1;
+        if (linha.documento_id !== null) {
+          anexosApagados += 1;
+        }
+      } catch (erro) {
+        await cliente.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        pulos.push({ id: linha.id, motivo: motivoDoPulo(erro) });
+      }
+    }
+    // O ATO da rodada fica sempre na trilha, mesmo com zero expurgos — quem
+    // rodou a retenção, quando, com que resultado e o que ficou para trás.
+    await deps.registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "expurgo",
+      tabela: TABELA_PESQUISA_SOCIAL,
+      registroId: `rodada:${hoje}`,
+      diff: {
+        Corte: { de: null, para: `descartes até ${formatarData(corte)}` },
+        "Pesquisas expurgadas": { de: null, para: String(expurgadas) },
+        "Anexos apagados": { de: null, para: String(anexosApagados) },
+        Puladas: {
+          de: null,
+          para:
+            pulos.length === 0
+              ? "nenhuma"
+              : pulos
+                  .map((pulo) => `#${pulo.id}: ${pulo.motivo}`)
+                  .join(" · "),
+        },
+      },
+    });
+    return {
+      expurgadas,
+      anexos_apagados: anexosApagados,
+      puladas: pulos.length,
+    };
+  });
+}
+
 // ------------------------------------------------------------------ oferta
 
 export async function criarOferta(
@@ -858,6 +1591,24 @@ export async function responderOferta(
     );
     if (!candidatura) {
       throw new ErroHttp(404, "Candidatura não encontrada.");
+    }
+    // As mesmas guardas dos irmãos (movimentar/criarOferta): responder oferta
+    // também exige candidatura ATIVA e vaga ABERTA. Sem isto, dois candidatos
+    // com oferta 'enviada' na mesma vaga podiam ambos aceitar (over-hire: a
+    // segunda passava porque o fechamento da vaga só roda quando ela ainda está
+    // 'aberta'), e uma candidatura já reprovada podia "ressuscitar" para
+    // aprovada num 'aceita' tardio.
+    if (candidatura.status !== "ativa") {
+      throw new ErroHttp(
+        409,
+        `Candidatura ${ROTULOS_STATUS_CANDIDATURA[candidatura.status].toLowerCase()} não responde oferta — o histórico é definitivo.`
+      );
+    }
+    if (candidatura.vaga_status !== "aberta") {
+      throw new ErroHttp(
+        409,
+        `Vaga ${ROTULOS_STATUS_VAGA[candidatura.vaga_status].toLowerCase()} não recebe resposta de oferta.`
+      );
     }
     const oferta = await buscarOfertaParaMutacao(cliente, candidaturaId);
     if (!oferta) {
@@ -1196,4 +1947,18 @@ export async function iniciarAdmissao(
 /** % de vagas fechadas até o prazo-alvo (12 meses) — fonte da Central de Metas. */
 export async function valorIndicadorVagasNoPrazo(): Promise<number | null> {
   return apurarVagasNoPrazo();
+}
+
+/**
+ * Relatório de tempo por etapa (mediana, por cargo × etapa do catálogo) —
+ * agregado operacional, sem dado de titular: quem vê o funil (rs.ver, e
+ * rs.gerir que o conduz) vê o relatório; nenhum recorte chega a indivíduo.
+ */
+export async function relatorioTempoPorEtapa(
+  pode: PermissoesRs
+): Promise<TempoPorEtapa[]> {
+  if (!pode.ver && !pode.gerir) {
+    throw new ErroHttp(403, "Sem permissão para esta operação");
+  }
+  return apurarTempoPorEtapa();
 }

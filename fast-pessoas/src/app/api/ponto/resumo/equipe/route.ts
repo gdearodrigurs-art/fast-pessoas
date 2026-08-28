@@ -1,6 +1,6 @@
 import {
   colaboradorDaSessao,
-  listarIntercorrencias,
+  listarIntercorrenciasDaEquipe,
   resumoPontoDaEquipeComAlcance,
 } from "@/dominios/ponto/servico";
 import { responderErro } from "@/lib/http";
@@ -43,12 +43,15 @@ export async function GET(request: Request) {
     }
 
     const resumo = await resumoPontoDaEquipeComAlcance(sessao, gestorId);
-    const idsDaEquipe = new Set(
-      resumo.liderados.map((linha) => linha.colaborador_id)
-    );
+    const idsDaEquipe = resumo.liderados.map((linha) => linha.colaborador_id);
+    // Recorte no SERVIDOR: o LIMIT da fila se aplica ao time, não à empresa —
+    // senão as intercorrências antigas do time somem atrás das 500 mais recentes
+    // da empresa. O alcance já foi validado por resumoPontoDaEquipeComAlcance.
     const abertas = (
-      await listarIntercorrencias(sessao, { status: "aberta" })
-    ).itens.filter((item) => idsDaEquipe.has(item.colaborador_id));
+      await listarIntercorrenciasDaEquipe(sessao, gestorId, idsDaEquipe, {
+        status: "aberta",
+      })
+    ).itens;
 
     return Response.json({
       disponivel: true,

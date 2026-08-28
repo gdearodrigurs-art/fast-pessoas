@@ -405,8 +405,8 @@ export function PainelGestor() {
             </div>
             <p className={estilos.notaRodape}>
               Você enxerga todas as equipes: escolha o gestor para abrir o
-              portal dele. O alcance de cada bloco continua limitado aos
-              liderados com relação vigente.
+              portal dele. O alcance de cada bloco continua limitado à
+              sub-árvore do gestor — liderados diretos e indiretos.
             </p>
           </section>
         )}
@@ -441,7 +441,7 @@ export function PainelGestor() {
               </div>
               {portal.equipe.liderados.length === 0 ? (
                 <p className={estilos.vazio}>
-                  Nenhum liderado com relação vigente hoje.
+                  Nenhum liderado na sub-árvore hoje (diretos ou indiretos).
                 </p>
               ) : (
                 <div className={estilos.tabelaEnvolucro}>
@@ -533,7 +533,7 @@ export function PainelGestor() {
                   <p className={estilos.bloqueado}>{ponto.explicacao}</p>
                 ) : (ponto.liderados?.length ?? 0) === 0 ? (
                   <p className={estilos.vazio}>
-                    Nenhum liderado com relação vigente.
+                    Nenhum liderado na sub-árvore (diretos ou indiretos).
                   </p>
                 ) : (
                   <>

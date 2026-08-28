@@ -5,6 +5,7 @@ import {
   MotivoRequisicao,
   OrigemCandidato,
   RecomendacaoParecer,
+  ResultadoPesquisaSocial,
   StatusCandidatura,
   StatusOferta,
   StatusRequisicao,
@@ -50,6 +51,9 @@ export interface Vaga {
   status: StatusVaga;
   candidaturas_ativas: number;
   criado_em: string;
+  /** Modelo de processo congelado na abertura (0077). */
+  modelo_versao_id: number;
+  modelo_nome: string;
 }
 
 export interface Etapa {
@@ -106,6 +110,9 @@ export interface CandidaturaCartao {
   oferta_status: StatusOferta | null;
   oferta_valor: number | null;
   oferta_dentro_banda: boolean | null;
+  /** Pesquisa social (G3:a) — presentes SÓ para rs.gerir; o serviço recorta. */
+  pesquisa_social_resultado: ResultadoPesquisaSocial | null;
+  pesquisa_social_tem_anexo: boolean | null;
   criado_em: string;
 }
 
@@ -113,6 +120,17 @@ export interface Kanban {
   vaga: Vaga;
   etapas: Etapa[];
   candidaturas: CandidaturaCartao[];
+}
+
+export interface TempoEtapa {
+  /** Identidade do grupo — o CARGO, nunca o nome (homônimos não se fundem). */
+  cargo_id: number;
+  /** Nome de exibição: a versão mais recente do cargo. */
+  cargo_nome: string;
+  etapa_nome: string;
+  etapa_ordem: number;
+  mediana_dias: number;
+  amostras: number;
 }
 
 export interface Parecer {

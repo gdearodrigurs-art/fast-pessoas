@@ -27,6 +27,61 @@ export const PROFUNDIDADE_MAXIMA = 20;
 /** Status de vaga que conta como "posição em aberto" (nem fechada, nem cancelada). */
 export const STATUS_VAGA_EM_ABERTO = ["aberta", "congelada"] as const;
 
+// ------------------------------------------------------------------ sub-árvore (decisão A2:a)
+// Desde a Fase 4, "minha equipe" é a SUB-ÁRVORE inteira (liderados diretos e
+// indiretos), não só o primeiro nível — uma semântica só de equipe no sistema.
+// A caminhada é em JS de propósito: WITH RECURSIVE no Postgres entra em laço
+// infinito com ciclo na hierarquia (decisão em organograma/repositorio.ts:5-13);
+// aqui o conjunto de visitados e o teto de profundidade tornam o ciclo inofensivo.
+// Função PURA (testável sem banco) — quem carrega as linhas é
+// organograma/subarvore.ts.
+
+/** O mínimo que a caminhada precisa de cada linha do quadro. */
+export interface LinhaSubArvore {
+  colaborador_id: number;
+  gestor_id: number | null;
+}
+
+/**
+ * Ids dos LIDERADOS da sub-árvore de `raizId` (diretos e indiretos), SEM a
+ * própria raiz — quem alcança "a si mesmo" no escopo é a cláusula de pessoa
+ * (condicaoEscopo: "de mim alcanço todos os meus vínculos"). Cada nó é visitado
+ * no máximo uma vez e a descida para em PROFUNDIDADE_MAXIMA: ciclo na relação
+ * gestor→liderado não trava e não duplica ninguém.
+ */
+export function lideradosDaSubArvore(
+  raizId: number,
+  linhas: LinhaSubArvore[]
+): number[] {
+  const filhosDe = new Map<number, number[]>();
+  for (const linha of linhas) {
+    if (linha.gestor_id === null) continue;
+    const irmaos = filhosDe.get(linha.gestor_id) ?? [];
+    irmaos.push(linha.colaborador_id);
+    filhosDe.set(linha.gestor_id, irmaos);
+  }
+  const visitados = new Set<number>([raizId]);
+  const liderados: number[] = [];
+  let fronteira: number[] = [raizId];
+  for (
+    let nivel = 0;
+    nivel < PROFUNDIDADE_MAXIMA && fronteira.length > 0;
+    nivel += 1
+  ) {
+    const proxima: number[] = [];
+    for (const id of fronteira) {
+      for (const filho of filhosDe.get(id) ?? []) {
+        if (visitados.has(filho)) continue;
+        visitados.add(filho);
+        liderados.push(filho);
+        proxima.push(filho);
+      }
+    }
+    fronteira = proxima;
+  }
+  return liderados;
+}
+
 /**
  * Recorte do organograma. Os TRÊS campos da estrutura (registro, lotação e
  * centro de custo) vêm de `esquemaFiltroEstrutura` — o `estabelecimento_id`

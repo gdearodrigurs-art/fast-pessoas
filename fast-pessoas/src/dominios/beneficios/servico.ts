@@ -3,7 +3,12 @@ import { Diff, registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { mensagemSemFicha } from "../../lib/ficha-de-colaborador";
 import { ErroHttpCampo, violacaoUnica } from "../../lib/http";
-import { ErroHttp, lerSessao } from "../../lib/sessao";
+import {
+  ErroHttp,
+  exigirSessaoValida,
+  garantirUsuarioAtivo,
+  lerSessao,
+} from "../../lib/sessao";
 import { exigirVigenciaNaoFutura } from "../../lib/vigencia";
 import {
   ROTULOS_VINCULO,
@@ -138,10 +143,10 @@ export async function exigirAcessoBeneficios(): Promise<{
   sessao: PayloadSessao;
   pode: PermissoesBeneficios;
 }> {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    throw new ErroHttp(401, "Não autenticado");
-  }
+  // Defesa em profundidade: a MESMA guarda dos outros módulos (401 + barra 2FA
+  // pendente), não o atalho lerSessao()+if que dependia só do proxy (revisão).
+  const sessao = exigirSessaoValida(await lerSessao());
+  await garantirUsuarioAtivo(sessao.usuario_id); // revogou, acabou (B4)
   const pode = await permissoesDe(sessao.usuario_id);
   if (!pode.solicitar && !pode.gerir && !pode.administrar && !pode.ver) {
     throw new ErroHttp(403, "Sem permissão para esta operação");
@@ -1365,6 +1370,7 @@ function diffDependente(dados: {
   nascimento?: string;
   parentesco?: string;
   cpf?: string | null;
+  deduz_irrf?: boolean;
 }): Diff {
   const diff: Diff = {};
   if (dados.nome !== undefined) diff["Nome"] = { de: null, para: dados.nome };
@@ -1377,6 +1383,9 @@ function diffDependente(dados: {
   if (dados.cpf !== undefined) {
     // Minimização: o CPF do dependente não viaja para a trilha de auditoria.
     diff["CPF"] = { de: null, para: dados.cpf ? "informado" : "removido" };
+  }
+  if (dados.deduz_irrf !== undefined) {
+    diff["Abate no IRRF"] = { de: null, para: dados.deduz_irrf ? "sim" : "não" };
   }
   return diff;
 }
@@ -1400,6 +1409,8 @@ export async function criarDependente(
       nascimento: dados.nascimento,
       parentesco: dados.parentesco,
       cpf: dados.cpf ?? null,
+      // Só o DP (esta rota, adesao.gerir) marca; ausente = false.
+      deduz_irrf: dados.deduz_irrf ?? false,
     });
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,

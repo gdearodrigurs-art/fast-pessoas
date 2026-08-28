@@ -106,6 +106,985 @@ function BlocoPontoFicha({ colaboradorId }: { colaboradorId: number }) {
   );
 }
 
+// ------------------------------------------------------------------ bloco disciplinar (restrito — eixo 4/8)
+// Conteúdo SEMPRE restrito. O cartão busca o próprio dado
+// (`/api/disciplinar?colaborador_id=`) e DUAS chaves o abrem, com alcances
+// diferentes (0084, decisão A3:a): `rh.disciplinar.ver` (global — dp e
+// diretoria) e `rh.disciplinar.ver.equipe` (gestor — sub-árvore, só o vínculo
+// que ele lidera; o serviço confere o alvo). Trilha de leitura no serviço,
+// sempre. 403/404 => o cartão simplesmente NÃO aparece — ausência, não
+// máscara. O escalonamento é MANUAL: mostramos o histórico por tipo para o DP
+// decidir; o sistema não escalona sozinho.
+
+interface MedidaFicha {
+  id: number;
+  tipo_chave: string;
+  tipo_nome: string;
+  com_periodo: boolean;
+  descricao: string;
+  impacto: string | null;
+  acao_combinada: string | null;
+  aplicada_em: string;
+  inicio: string | null;
+  fim: string | null;
+  registrado_por_nome: string;
+  registrado_em: string;
+}
+
+interface ContagemTipoFicha {
+  tipo_chave: string;
+  nome: string;
+  total: number;
+}
+
+interface TipoFicha {
+  chave: string;
+  nome: string;
+  com_periodo: boolean;
+}
+
+interface VisaoDisciplinar {
+  medidas: MedidaFicha[];
+  historico: ContagemTipoFicha[];
+  tipos: TipoFicha[];
+}
+
+const MEDIDA_EM_BRANCO = {
+  tipo_chave: "",
+  descricao: "",
+  impacto: "",
+  acao_combinada: "",
+  aplicada_em: "",
+  inicio: "",
+  fim: "",
+};
+
+function BlocoDisciplinarFicha({
+  colaboradorId,
+  podeRegistrar,
+}: {
+  colaboradorId: number;
+  podeRegistrar: boolean;
+}) {
+  const [dados, setDados] = useState<VisaoDisciplinar | null>(null);
+  const [visivel, setVisivel] = useState(true);
+  const [formAberto, setFormAberto] = useState(false);
+  const [nova, setNova] = useState({ ...MEDIDA_EM_BRANCO });
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  // Erro de CARGA (distinto do `erro` do formulário): 5xx/timeout/rede não
+  // escondem o cartão — só sinalizam para tentar de novo. Só o 403 esconde.
+  const [erroCarregar, setErroCarregar] = useState<string | null>(null);
+  // Fechamento manual da suspensão (D1:a): qual medida está com o formulário
+  // aberto, o novo fim digitado e o erro daquela ação.
+  const [fechandoId, setFechandoId] = useState<number | null>(null);
+  const [novoFim, setNovoFim] = useState("");
+  const [fechandoEmCurso, setFechandoEmCurso] = useState(false);
+  const [erroFechar, setErroFechar] = useState<string | null>(null);
+
+  // Recarrega após registrar. Fora de effect (é ação de usuário) — pode
+  // setState direto.
+  async function recarregar() {
+    try {
+      const resposta = await fetch(
+        `/api/disciplinar?colaborador_id=${colaboradorId}`,
+        { cache: "no-store" }
+      );
+      if (resposta.status === 403 || resposta.status === 404) {
+        // 403 = sem a chave; 404 = fora do alcance da chave de equipe (A3:a).
+        // Os dois são ausência legítima — só eles escondem o cartão.
+        setVisivel(false);
+        return;
+      }
+      if (!resposta.ok) {
+        // 5xx/rede: instabilidade, não ausência — mantém o cartão e sinaliza.
+        setErroCarregar("Não foi possível carregar. Tente novamente.");
+        return;
+      }
+      setErroCarregar(null);
+      setDados((await resposta.json()) as VisaoDisciplinar);
+    } catch {
+      setErroCarregar("Falha de conexão. Tente novamente.");
+    }
+  }
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/disciplinar?colaborador_id=${colaboradorId}`,
+          { cache: "no-store" }
+        );
+        if (!ativo) return;
+        if (resposta.status === 403 || resposta.status === 404) {
+          // 403 = sem a chave; 404 = fora do alcance da chave de equipe.
+          // Ausência legítima esconde o cartão. Qualquer outro erro
+          // (5xx/timeout/rede) é instabilidade, NÃO "ficha limpa" —
+          // esconder aqui seria falso-negativo (o DP lê ausência onde há dado).
+          setVisivel(false);
+          return;
+        }
+        if (!resposta.ok) {
+          setErroCarregar("Não foi possível carregar. Tente novamente.");
+          return;
+        }
+        setDados((await resposta.json()) as VisaoDisciplinar);
+      } catch {
+        if (ativo) setErroCarregar("Falha de conexão. Tente novamente.");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  const tipoSelecionado = dados?.tipos.find(
+    (tipo) => tipo.chave === nova.tipo_chave
+  );
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(
+        `/api/disciplinar?colaborador_id=${colaboradorId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tipo_chave: nova.tipo_chave,
+            descricao: nova.descricao,
+            aplicada_em: nova.aplicada_em,
+            impacto: nova.impacto.trim() || undefined,
+            acao_combinada: nova.acao_combinada.trim() || undefined,
+            inicio: tipoSelecionado?.com_periodo
+              ? nova.inicio || undefined
+              : undefined,
+            fim: tipoSelecionado?.com_periodo ? nova.fim || undefined : undefined,
+          }),
+        }
+      );
+      if (!resposta.ok) {
+        setErro(await lerErro(resposta));
+        return;
+      }
+      setNova({ ...MEDIDA_EM_BRANCO });
+      setFormAberto(false);
+      await recarregar();
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  /**
+   * Fechamento manual da suspensão (decisão D1:a): só encurta — o servidor
+   * recusa estender/reabrir e aceita retroativo até o início da janela.
+   */
+  async function fecharSuspensao(medidaId: number) {
+    setFechandoEmCurso(true);
+    setErroFechar(null);
+    try {
+      const resposta = await fetch(`/api/disciplinar/${medidaId}/fechar`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fim: novoFim }),
+      });
+      if (!resposta.ok) {
+        setErroFechar(await lerErro(resposta));
+        return;
+      }
+      setFechandoId(null);
+      setNovoFim("");
+      await recarregar();
+    } catch {
+      setErroFechar("Falha de conexão. Tente novamente.");
+    } finally {
+      setFechandoEmCurso(false);
+    }
+  }
+
+  /** Janela que ainda pode ser encurtada: tem início e o fim não passou. */
+  function janelaViva(medida: MedidaFicha): boolean {
+    return (
+      medida.inicio !== null &&
+      (medida.fim === null || medida.fim > HOJE_NA_OPERACAO)
+    );
+  }
+
+  if (!visivel) return null;
+
+  return (
+    <div className={estilos.cartao} style={{ marginTop: 16 }}>
+      <div className={estilos.itemTopo} style={{ marginBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>Disciplinar</h2>
+        <span className={estilos.tagRestrito}>RESTRITA · leitura logada</span>
+      </div>
+
+      {erroCarregar !== null && dados === null ? (
+        <div>
+          <p className={estilos.erro}>{erroCarregar}</p>
+          <button
+            className={estilos.botaoLinha}
+            type="button"
+            onClick={() => {
+              setErroCarregar(null);
+              void recarregar();
+            }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      ) : dados === null ? (
+        <p className={estilos.vazio}>Carregando…</p>
+      ) : (
+        <>
+          {dados.historico.length > 0 && (
+            <p className={estilos.itemExtra} style={{ marginTop: 0 }}>
+              Histórico por tipo:{" "}
+              {dados.historico
+                .map((linha) => `${linha.nome} (${linha.total})`)
+                .join(" · ")}
+            </p>
+          )}
+
+          {podeRegistrar && !formAberto && (
+            <p style={{ margin: "10px 0" }}>
+              <button
+                className={estilos.botao}
+                type="button"
+                onClick={() => {
+                  setErro(null);
+                  setFormAberto(true);
+                }}
+              >
+                + Registrar medida
+              </button>
+            </p>
+          )}
+
+          {podeRegistrar && formAberto && (
+            <form className={estilos.formulario} onSubmit={enviar}>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdTipo">
+                  Tipo
+                </label>
+                <select
+                  className={estilos.campo}
+                  id="mdTipo"
+                  required
+                  value={nova.tipo_chave}
+                  onChange={(e) =>
+                    setNova((atual) => ({ ...atual, tipo_chave: e.target.value }))
+                  }
+                >
+                  <option value="">selecione…</option>
+                  {dados.tipos.map((tipo) => (
+                    <option key={tipo.chave} value={tipo.chave}>
+                      {tipo.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdData">
+                  Data do fato
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="mdData"
+                  type="date"
+                  required
+                  max={HOJE_NA_OPERACAO}
+                  value={nova.aplicada_em}
+                  onChange={(e) =>
+                    setNova((atual) => ({
+                      ...atual,
+                      aplicada_em: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {tipoSelecionado?.com_periodo && (
+                <>
+                  <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="mdInicio">
+                      Início do período
+                    </label>
+                    <input
+                      className={estilos.campo}
+                      id="mdInicio"
+                      type="date"
+                      required
+                      value={nova.inicio}
+                      onChange={(e) =>
+                        setNova((atual) => ({ ...atual, inicio: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className={estilos.campoGrupo}>
+                    <label className={estilos.rotulo} htmlFor="mdFim">
+                      Fim do período
+                    </label>
+                    <input
+                      className={estilos.campo}
+                      id="mdFim"
+                      type="date"
+                      required
+                      value={nova.fim}
+                      onChange={(e) =>
+                        setNova((atual) => ({ ...atual, fim: e.target.value }))
+                      }
+                    />
+                  </div>
+                </>
+              )}
+              <div className={estilos.campoGrupoLargo}>
+                <label className={estilos.rotulo} htmlFor="mdDescricao">
+                  Descrição (fato, motivo)
+                </label>
+                <textarea
+                  className={estilos.campo}
+                  id="mdDescricao"
+                  rows={3}
+                  required
+                  maxLength={4000}
+                  value={nova.descricao}
+                  onChange={(e) =>
+                    setNova((atual) => ({ ...atual, descricao: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdImpacto">
+                  Impacto (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="mdImpacto"
+                  type="text"
+                  maxLength={2000}
+                  value={nova.impacto}
+                  onChange={(e) =>
+                    setNova((atual) => ({ ...atual, impacto: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="mdAcao">
+                  Ação combinada (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="mdAcao"
+                  type="text"
+                  maxLength={2000}
+                  value={nova.acao_combinada}
+                  onChange={(e) =>
+                    setNova((atual) => ({
+                      ...atual,
+                      acao_combinada: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {erro && <p className={estilos.erro}>{erro}</p>}
+              <button className={estilos.botao} type="submit" disabled={salvando}>
+                {salvando ? "Registrando…" : "Registrar"}
+              </button>
+              <button
+                className={estilos.botaoLinha}
+                type="button"
+                onClick={() => setFormAberto(false)}
+              >
+                Cancelar
+              </button>
+            </form>
+          )}
+
+          {dados.medidas.length === 0 ? (
+            <p className={estilos.vazio}>Nenhuma medida disciplinar registrada.</p>
+          ) : (
+            dados.medidas.map((medida) => (
+              <div key={medida.id} className={estilos.itemRegistro}>
+                <div className={estilos.itemTopo}>
+                  <span className={`${estilos.clf} ${estilos.clfAlerta}`}>
+                    {medida.tipo_nome}
+                  </span>
+                  <span>{formatarData(medida.aplicada_em)}</span>
+                  <span>registrado por {medida.registrado_por_nome}</span>
+                </div>
+                <div className={estilos.itemTexto}>{medida.descricao}</div>
+                {medida.inicio && medida.fim && (
+                  <div className={estilos.itemExtra}>
+                    Período: {formatarData(medida.inicio)} a{" "}
+                    {formatarData(medida.fim)}
+                  </div>
+                )}
+                {medida.impacto && (
+                  <div className={estilos.itemExtra}>
+                    Impacto: {medida.impacto}
+                  </div>
+                )}
+                {medida.acao_combinada && (
+                  <div className={estilos.itemExtra}>
+                    Ação combinada: {medida.acao_combinada}
+                  </div>
+                )}
+                {/* D1:a — fechar/encurtar a suspensão: só quem registra
+                    (rh.disciplinar.registrar) e só janela viva. O servidor
+                    recusa estender/reabrir; retroativo vale até o início. */}
+                {podeRegistrar && janelaViva(medida) && (
+                  <div style={{ marginTop: 8 }}>
+                    {fechandoId !== medida.id ? (
+                      <button
+                        className={estilos.botaoLinha}
+                        type="button"
+                        onClick={() => {
+                          setErroFechar(null);
+                          setNovoFim("");
+                          setFechandoId(medida.id);
+                        }}
+                      >
+                        Encerrar suspensão antes do fim
+                      </button>
+                    ) : (
+                      <div className={estilos.itemExtra}>
+                        <label htmlFor={`mdNovoFim${medida.id}`}>
+                          Novo fim (só encurta; retroativo até{" "}
+                          {medida.inicio ? formatarData(medida.inicio) : "o início"}
+                          ):{" "}
+                        </label>
+                        <input
+                          id={`mdNovoFim${medida.id}`}
+                          type="date"
+                          min={medida.inicio ?? undefined}
+                          max={medida.fim ?? undefined}
+                          value={novoFim}
+                          onChange={(e) => setNovoFim(e.target.value)}
+                        />{" "}
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          disabled={fechandoEmCurso || novoFim === ""}
+                          onClick={() => void fecharSuspensao(medida.id)}
+                        >
+                          {fechandoEmCurso ? "Encerrando…" : "Confirmar"}
+                        </button>{" "}
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          disabled={fechandoEmCurso}
+                          onClick={() => setFechandoId(null)}
+                        >
+                          Cancelar
+                        </button>
+                        {erroFechar && (
+                          <p className={estilos.erro}>{erroFechar}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ bloco de posse de patrimônio (0081)
+// Patrimônio da empresa em posse do colaborador (notebook, ferramenta, carro).
+// Menos sensível que o disciplinar: dp+rh veem e registram (rh.posse.ver /
+// rh.posse.registrar). O cartão busca o próprio dado (/api/posse?colaborador_id=)
+// e usa o MESMO loader do BlocoDisciplinarFicha: 403 => o cartão some (ausência
+// legítima da chave); 5xx/timeout/rede => erro visível + "tentar novamente" —
+// esconder ali seria falso-negativo. A categoria vem do catálogo administrável
+// rh.categoria_devolucao (0054), o mesmo do checklist de desligamento.
+
+interface ItemPosseFicha {
+  id: number;
+  categoria_chave: string;
+  categoria_nome: string;
+  descricao: string;
+  quantidade: number;
+  numero_serie: string | null;
+  data_entrega: string;
+  termo_documento_id: number | null;
+  termo_titulo: string | null;
+  ciencia_registrada: boolean;
+  devolvido_em: string | null;
+}
+
+interface CategoriaPosseFicha {
+  chave: string;
+  nome: string;
+}
+
+interface VisaoPosse {
+  itens: ItemPosseFicha[];
+  categorias: CategoriaPosseFicha[];
+}
+
+const POSSE_EM_BRANCO = {
+  categoria_chave: "",
+  descricao: "",
+  quantidade: "",
+  numero_serie: "",
+  data_entrega: "",
+  termo_documento_id: "",
+};
+
+function BlocoPosseFicha({
+  colaboradorId,
+  podeRegistrar,
+  ehPropriaFicha,
+}: {
+  colaboradorId: number;
+  podeRegistrar: boolean;
+  /** A ciência é ato do TITULAR: o botão só aparece na própria ficha (o
+   *  serviço reconfere e devolve 404 a não-titular). */
+  ehPropriaFicha: boolean;
+}) {
+  const [dados, setDados] = useState<VisaoPosse | null>(null);
+  const [visivel, setVisivel] = useState(true);
+  const [formAberto, setFormAberto] = useState(false);
+  const [novo, setNovo] = useState({ ...POSSE_EM_BRANCO });
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  // Erro de CARGA (distinto do `erro` do formulário): 5xx/timeout/rede não
+  // escondem o cartão — só sinalizam para tentar de novo. Só o 403 esconde.
+  const [erroCarregar, setErroCarregar] = useState<string | null>(null);
+  const [acaoEmCurso, setAcaoEmCurso] = useState<number | null>(null);
+  const [erroAcao, setErroAcao] = useState<string | null>(null);
+
+  // Recarrega após registrar/devolver/ciência. Fora de effect (é ação de
+  // usuário) — pode setState direto.
+  async function recarregar() {
+    try {
+      const resposta = await fetch(`/api/posse?colaborador_id=${colaboradorId}`, {
+        cache: "no-store",
+      });
+      if (resposta.status === 403) {
+        // Só o 403 esconde: ausência legítima da chave.
+        setVisivel(false);
+        return;
+      }
+      if (!resposta.ok) {
+        // 5xx/rede: instabilidade, não ausência — mantém o cartão e sinaliza.
+        setErroCarregar("Não foi possível carregar. Tente novamente.");
+        return;
+      }
+      setErroCarregar(null);
+      setDados((await resposta.json()) as VisaoPosse);
+    } catch {
+      setErroCarregar("Falha de conexão. Tente novamente.");
+    }
+  }
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/posse?colaborador_id=${colaboradorId}`,
+          { cache: "no-store" }
+        );
+        if (!ativo) return;
+        if (resposta.status === 403) {
+          // Só o 403 esconde o cartão: ausência legítima da chave. Qualquer
+          // outro erro (5xx/timeout/rede) é instabilidade, NÃO "sem itens" —
+          // esconder aqui seria falso-negativo.
+          setVisivel(false);
+          return;
+        }
+        if (!resposta.ok) {
+          setErroCarregar("Não foi possível carregar. Tente novamente.");
+          return;
+        }
+        setDados((await resposta.json()) as VisaoPosse);
+      } catch {
+        if (ativo) setErroCarregar("Falha de conexão. Tente novamente.");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  async function enviar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setSalvando(true);
+    setErro(null);
+    try {
+      const resposta = await fetch(
+        `/api/posse?colaborador_id=${colaboradorId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            categoria_chave: novo.categoria_chave,
+            descricao: novo.descricao,
+            // Em branco vira chave ausente — assim o erro é "Informe a
+            // quantidade" e não "Quantidade mínima: 1" (Number("") vira zero).
+            quantidade:
+              novo.quantidade.trim() === ""
+                ? undefined
+                : Number(novo.quantidade),
+            numero_serie: novo.numero_serie.trim() || undefined,
+            data_entrega: novo.data_entrega,
+            termo_documento_id: novo.termo_documento_id
+              ? Number(novo.termo_documento_id)
+              : null,
+          }),
+        }
+      );
+      if (!resposta.ok) {
+        setErro(await lerErro(resposta));
+        return;
+      }
+      setNovo({ ...POSSE_EM_BRANCO });
+      setFormAberto(false);
+      await recarregar();
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function agir(itemId: number, acao: "devolucao" | "ciencia") {
+    setErroAcao(null);
+    setAcaoEmCurso(itemId);
+    try {
+      const resposta = await fetch(`/api/posse/${itemId}/${acao}`, {
+        method: "POST",
+      });
+      if (!resposta.ok) {
+        setErroAcao(await lerErro(resposta));
+        return;
+      }
+      await recarregar();
+    } catch {
+      setErroAcao("Falha de conexão. Tente novamente.");
+    } finally {
+      setAcaoEmCurso(null);
+    }
+  }
+
+  if (!visivel) return null;
+
+  return (
+    <div className={estilos.cartao} style={{ marginTop: 16 }}>
+      <h2>Patrimônio em posse</h2>
+
+      {erroCarregar !== null && dados === null ? (
+        <div>
+          <p className={estilos.erro}>{erroCarregar}</p>
+          <button
+            className={estilos.botaoLinha}
+            type="button"
+            onClick={() => {
+              setErroCarregar(null);
+              void recarregar();
+            }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      ) : dados === null ? (
+        <p className={estilos.vazio}>Carregando…</p>
+      ) : (
+        <>
+          {podeRegistrar && !formAberto && (
+            <p style={{ margin: "10px 0" }}>
+              <button
+                className={estilos.botao}
+                type="button"
+                onClick={() => {
+                  setErro(null);
+                  setFormAberto(true);
+                }}
+              >
+                + Registrar entrega
+              </button>
+            </p>
+          )}
+
+          {podeRegistrar && formAberto && (
+            <form className={estilos.formulario} onSubmit={enviar}>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psCategoria">
+                  Categoria
+                </label>
+                {/* As opções vêm do catálogo administrável (só as ativas),
+                    nunca de uma lista escrita aqui. */}
+                <select
+                  className={estilos.campo}
+                  id="psCategoria"
+                  required
+                  value={novo.categoria_chave}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      categoria_chave: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">selecione…</option>
+                  {dados.categorias.map((categoria) => (
+                    <option key={categoria.chave} value={categoria.chave}>
+                      {categoria.nome}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psDescricao">
+                  Item
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psDescricao"
+                  type="text"
+                  required
+                  maxLength={500}
+                  placeholder="ex.: Notebook Dell i7 patrimônio 123"
+                  value={novo.descricao}
+                  onChange={(e) =>
+                    setNovo((atual) => ({ ...atual, descricao: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psQuantidade">
+                  Quantidade
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psQuantidade"
+                  type="number"
+                  required
+                  min={1}
+                  max={999}
+                  value={novo.quantidade}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      quantidade: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psSerie">
+                  Nº de série / patrimônio (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psSerie"
+                  type="text"
+                  maxLength={120}
+                  value={novo.numero_serie}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      numero_serie: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psData">
+                  Data da entrega
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psData"
+                  type="date"
+                  required
+                  max={HOJE_NA_OPERACAO}
+                  value={novo.data_entrega}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      data_entrega: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className={estilos.campoGrupo}>
+                <label className={estilos.rotulo} htmlFor="psTermo">
+                  Termo no GED — nº do documento (opcional)
+                </label>
+                <input
+                  className={estilos.campo}
+                  id="psTermo"
+                  type="number"
+                  min={1}
+                  value={novo.termo_documento_id}
+                  onChange={(e) =>
+                    setNovo((atual) => ({
+                      ...atual,
+                      termo_documento_id: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              {erro && <p className={estilos.erro}>{erro}</p>}
+              <button className={estilos.botao} type="submit" disabled={salvando}>
+                {salvando ? "Registrando…" : "Registrar"}
+              </button>
+              <button
+                className={estilos.botaoLinha}
+                type="button"
+                onClick={() => setFormAberto(false)}
+              >
+                Cancelar
+              </button>
+            </form>
+          )}
+
+          {dados.itens.length === 0 ? (
+            <p className={estilos.vazio}>
+              Nenhum patrimônio registrado em posse deste colaborador.
+            </p>
+          ) : (
+            dados.itens.map((item) => (
+              <div key={item.id} className={estilos.itemRegistro}>
+                <div className={estilos.itemTopo}>
+                  <span className={`${estilos.clf} ${estilos.clfNeutro}`}>
+                    {item.categoria_nome}
+                  </span>
+                  <span>entregue em {formatarData(item.data_entrega)}</span>
+                  <span>
+                    {item.devolvido_em
+                      ? `devolvido em ${formatarDataEvento(item.devolvido_em)}`
+                      : "em uso"}
+                  </span>
+                </div>
+                <div className={estilos.itemTexto}>
+                  {item.descricao} (qtd {item.quantidade})
+                  {item.numero_serie ? ` · nº ${item.numero_serie}` : ""}
+                </div>
+                <div className={estilos.itemExtra}>
+                  Termo:{" "}
+                  {item.termo_documento_id ? (
+                    <a
+                      href={`/api/documentos/${item.termo_documento_id}/download`}
+                    >
+                      {item.termo_titulo ?? `#${item.termo_documento_id}`}
+                    </a>
+                  ) : (
+                    "sem termo no GED"
+                  )}
+                  {" · Ciência: "}
+                  {item.ciencia_registrada
+                    ? "registrada"
+                    : item.termo_documento_id
+                      ? "pendente (o titular dá a ciência sobre o termo)"
+                      : "sem termo, sem ciência"}
+                </div>
+                {podeRegistrar && item.devolvido_em === null && (
+                  <p style={{ margin: "8px 0 0" }}>
+                    <button
+                      className={estilos.botaoLinha}
+                      type="button"
+                      disabled={acaoEmCurso === item.id}
+                      onClick={() => void agir(item.id, "devolucao")}
+                    >
+                      {acaoEmCurso === item.id
+                        ? "Registrando…"
+                        : "Registrar devolução"}
+                    </button>
+                    {ehPropriaFicha &&
+                      item.termo_documento_id !== null &&
+                      !item.ciencia_registrada && (
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          disabled={acaoEmCurso === item.id}
+                          onClick={() => void agir(item.id, "ciencia")}
+                          title="Aceite eletrônico: só o titular registra a própria ciência"
+                        >
+                          Dar ciência
+                        </button>
+                      )}
+                  </p>
+                )}
+              </div>
+            ))
+          )}
+          {erroAcao && <p className={estilos.erro}>{erroAcao}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ raça-cor (A5:b — leitura do DP, com trilha)
+// O dado é AUTODECLARADO pela pessoa (portal); o DP o VÊ na ficha por decisão
+// registrada do dono. O campo busca o próprio dado
+// (/api/colaboradores/[id]/raca-cor, chave rh.colaborador.sensivel.ver) e cada
+// leitura grava trilha no serviço — por isso ele NÃO vem no payload da ficha:
+// abrir a ficha não é ler raça-cor; ler raça-cor é um ato próprio, logado.
+
+function CampoRacaCor({ colaboradorId }: { colaboradorId: number }) {
+  const [valor, setValor] = useState<{
+    raca_cor: string | null;
+    rotulo: string | null;
+  } | null>(null);
+  const [visivel, setVisivel] = useState(true);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const resposta = await fetch(
+          `/api/colaboradores/${colaboradorId}/raca-cor`,
+          { cache: "no-store" }
+        );
+        if (!ativo) return;
+        if (resposta.status === 403 || resposta.status === 404) {
+          setVisivel(false);
+          return;
+        }
+        if (!resposta.ok) return;
+        setValor(
+          (await resposta.json()) as {
+            raca_cor: string | null;
+            rotulo: string | null;
+          }
+        );
+      } catch {
+        /* a ficha segue sem o campo */
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [colaboradorId]);
+
+  if (!visivel) return null;
+  return (
+    <div className={`${estilos.campoDado} ${estilos.campoRestrito}`}>
+      <div className={estilos.rot}>Raça-cor (autodeclarada)</div>
+      <div className={estilos.val}>
+        {valor === null ? "…" : (valor.rotulo ?? "não declarada")}
+      </div>
+      <div className={estilos.notaRestrito}>
+        autodeclarada pela pessoa, no portal · dado sensível · leitura gravada
+        na trilha
+      </div>
+    </div>
+  );
+}
+
 /** RCF vigente do cargo da posição atual — documento de gestão, não sensível. */
 interface Rcf {
   cargo_id: number;
@@ -141,6 +1120,9 @@ interface Ficha {
   retrato: string | null;
   contexto: string | null;
   email: string;
+  /** Contato corporativo DA PESSOA (A7:b) — o mesmo em todos os vínculos. */
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
   usuario_ativo: boolean;
   cargo_nome: string | null;
   /** REGISTRO vigente: em qual empresa do grupo este vínculo está registrado. */
@@ -173,6 +1155,21 @@ interface VinculoDaPessoa {
   empresa_nome: string | null;
   sucede_vinculo_id: number | null;
   sucedido_por_vinculo_id: number | null;
+}
+
+/**
+ * Ficha pública MÍNIMA (decisão A4:a): o que o servidor devolve quando a ficha
+ * está fora do alcance de quem olha. Todo logado vê este mínimo de qualquer
+ * colega do quadro — e nada além: sem matrícula, sem status, sem histórico.
+ */
+interface Cracha {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
+  gestor_nome: string | null;
+  unidade: string | null;
 }
 
 interface Evento {
@@ -346,8 +1343,17 @@ const TIPOS_EVENTO: Record<string, { rotulo: string; simbolo: string; cor: strin
   reajuste: { rotulo: "Reajuste", simbolo: "$", cor: "#b58500" },
   feedback: { rotulo: "Feedback", simbolo: "✎", cor: "#1565c0" },
   ocorrencia: { rotulo: "Ocorrência", simbolo: "⚠", cor: "#c96f00" },
+  // Eco NEUTRO da medida disciplinar: chega só a quem tem a chave restrita (o
+  // servidor filtra a linha por payload.restrita); o motivo nunca entra no
+  // resumo — o detalhe fica no cartão Disciplinar, com leitura logada.
+  disciplinar: { rotulo: "Medida disciplinar", simbolo: "§", cor: "#8e24aa" },
   mudanca_gestor: { rotulo: "Mudança de gestor", simbolo: "⇄", cor: "#00838f" },
   transferencia: { rotulo: "Transferência", simbolo: "➜", cor: "#00838f" },
+  transferencia_continuidade: {
+    rotulo: "Continuidade (mudança de registro)",
+    simbolo: "➜",
+    cor: "#00838f",
+  },
   alteracao_status: { rotulo: "Status", simbolo: "•", cor: "#6b6763" },
   alteracao_vinculo: { rotulo: "Vínculo", simbolo: "•", cor: "#6b6763" },
 };
@@ -420,6 +1426,8 @@ export function FichaColaborador({
   permissoes: PermissoesFicha;
 }) {
   const [ficha, setFicha] = useState<Ficha | null>(null);
+  // A4:a — fora do alcance a mesma rota devolve o CRACHÁ, e a tela vira só ele.
+  const [cracha, setCracha] = useState<Cracha | null>(null);
   const [linhaDoTempo, setLinhaDoTempo] = useState<Evento[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -467,6 +1475,8 @@ export function FichaColaborador({
     // "" = não alterar. O valor guardado NUNCA vem no payload da ficha (LGPD:
     // gênero autodeclarado só existe em agregado), então o campo é de escrita.
     genero: "" as Genero | "",
+    telefone_corporativo: "",
+    email_corporativo: "",
     retrato: "",
     contexto: "",
   });
@@ -490,6 +1500,15 @@ export function FichaColaborador({
         return;
       }
       const dados = await resposta.json();
+      if (dados.cracha) {
+        // Modo crachá: a ficha completa está fora do alcance — a tela mostra o
+        // mínimo público e nada mais (os cartões e abas nem montam).
+        setCracha(dados.cracha as Cracha);
+        setFicha(null);
+        setErro(null);
+        return;
+      }
+      setCracha(null);
       setFicha(dados.colaborador);
       setLinhaDoTempo(dados.linha_do_tempo ?? []);
       setErro(null);
@@ -500,6 +1519,8 @@ export function FichaColaborador({
         data_desligamento: dados.colaborador.data_desligamento ?? "",
         data_nascimento: dados.colaborador.data_nascimento ?? "",
         genero: "",
+        telefone_corporativo: dados.colaborador.telefone_corporativo ?? "",
+        email_corporativo: dados.colaborador.email_corporativo ?? "",
         retrato: dados.colaborador.retrato ?? "",
         contexto: dados.colaborador.contexto ?? "",
       });
@@ -742,6 +1763,9 @@ export function FichaColaborador({
         status: edicao.status,
         retrato: edicao.retrato.trim() || null,
         contexto: edicao.contexto.trim() || null,
+        // Da pessoa (A7:b): vazio limpa (null); o servidor grava em rh.pessoa.
+        telefone_corporativo: edicao.telefone_corporativo.trim() || null,
+        email_corporativo: edicao.email_corporativo.trim() || null,
       };
       if (edicao.status === "desligado" && edicao.data_desligamento) {
         corpo.data_desligamento = edicao.data_desligamento;
@@ -886,6 +1910,75 @@ export function FichaColaborador({
         </Cabecalho>
         <main className={estilos.conteudo}>
           <p className={estilos.vazio}>Carregando…</p>
+        </main>
+      </div>
+    );
+  }
+
+  // A4:a — MODO CRACHÁ: a pessoa existe e está no quadro, mas a ficha completa
+  // está fora do alcance de quem olha. O que aparece é o mínimo público (nome,
+  // cargo, contato corporativo, líder, unidade) — e nada além: sem abas, sem
+  // matrícula, sem histórico. As APIs de detalhe nem são chamadas.
+  if (cracha) {
+    return (
+      <div className={estilos.pagina}>
+        <Cabecalho>
+          <Link className={acaoCabecalho} href="/colaboradores">
+            Colaboradores
+          </Link>
+        </Cabecalho>
+        <main className={estilos.conteudo}>
+          <Link className={estilos.voltar} href="/colaboradores">
+            ← Voltar à lista
+          </Link>
+          <div className={estilos.cabecalhoFicha}>
+            <div className={estilos.avatar}>{iniciais(cracha.nome_completo)}</div>
+            <div className={estilos.info}>
+              <h1>{cracha.nome_completo}</h1>
+              <div className={estilos.chips}>
+                {cracha.cargo_nome && (
+                  <span className={estilos.chip}>{cracha.cargo_nome}</span>
+                )}
+                {cracha.unidade && (
+                  <span className={estilos.chip}>{cracha.unidade}</span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className={estilos.cartao}>
+            <h2>Crachá</h2>
+            <div className={estilos.gradeDados}>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Cargo</div>
+                <div className={estilos.val}>{cracha.cargo_nome ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Unidade (lotação)</div>
+                <div className={estilos.val}>{cracha.unidade ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Líder atual</div>
+                <div className={estilos.val}>{cracha.gestor_nome ?? "—"}</div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Telefone corporativo</div>
+                <div className={estilos.val}>
+                  {cracha.telefone_corporativo ?? "—"}
+                </div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>E-mail corporativo</div>
+                <div className={estilos.val}>
+                  {cracha.email_corporativo ?? "—"}
+                </div>
+              </div>
+            </div>
+            <p className={estilos.notaRestrito}>
+              Visão pública mínima: a ficha completa desta pessoa está fora do
+              seu alcance — o que aparece aqui é o que todo colaborador logado
+              pode ver de qualquer colega.
+            </p>
+          </div>
         </main>
       </div>
     );
@@ -1041,8 +2134,23 @@ export function FichaColaborador({
                 <div className={estilos.val}>{formatarCpf(ficha.cpf)}</div>
               </div>
               <div className={estilos.campoDado}>
-                <div className={estilos.rot}>E-mail</div>
+                <div className={estilos.rot}>E-mail (login)</div>
                 <div className={estilos.val}>{ficha.email}</div>
+              </div>
+              {/* Contato corporativo é DA PESSOA (A7:b): o mesmo nos dois
+                  vínculos de quem foi readmitido em outro CNPJ. Faz parte do
+                  crachá público (A4:a). */}
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>Telefone corporativo</div>
+                <div className={estilos.val}>
+                  {ficha.telefone_corporativo ?? "—"}
+                </div>
+              </div>
+              <div className={estilos.campoDado}>
+                <div className={estilos.rot}>E-mail corporativo</div>
+                <div className={estilos.val}>
+                  {ficha.email_corporativo ?? "—"}
+                </div>
               </div>
               <div className={estilos.campoDado}>
                 <div className={estilos.rot}>Tipo de vínculo</div>
@@ -1118,7 +2226,9 @@ export function FichaColaborador({
               </div>
               {permissoes.podeVerSalario && (
                 <div className={`${estilos.campoDado} ${estilos.campoRestrito}`}>
-                  <div className={estilos.rot}>Salário — chave rh.posicao.ver</div>
+                  {/* Autorizado por rh.posicao.ver (global) OU
+                      rh.posicao.ver.equipe (sub-árvore do gestor — A1:a). */}
+                  <div className={estilos.rot}>Salário — dado sensível</div>
                   <div className={estilos.val}>
                     {posicaoVigente ? formatarSalario(posicaoVigente.salario) : "—"}
                   </div>
@@ -1126,6 +2236,11 @@ export function FichaColaborador({
                     dado sensível · leitura gravada na trilha
                   </div>
                 </div>
+              )}
+              {/* A5:b — raça-cor individual, visível ao DP (chave sensível);
+                  o campo busca o próprio dado e a leitura fica na trilha. */}
+              {permissoes.podeVerSensivel && (
+                <CampoRacaCor colaboradorId={colaboradorId} />
               )}
             </div>
 
@@ -1193,6 +2308,16 @@ export function FichaColaborador({
             )}
 
             <BlocoPontoFicha colaboradorId={colaboradorId} />
+
+            {/* Posse de patrimônio (0081): dp+rh. Self-fetch + 403 esconde o
+                cartão; erro transitório mostra "tentar novamente". */}
+            {permissoes.podeVerPosse && (
+              <BlocoPosseFicha
+                colaboradorId={colaboradorId}
+                podeRegistrar={permissoes.podeRegistrarPosse}
+                ehPropriaFicha={permissoes.ehPropriaFicha}
+              />
+            )}
 
             {/* RCF do cargo — pedido explícito da analista de RH. Vem da versão
                 VIGENTE do cargo da posição atual; documento de gestão (não é
@@ -1418,6 +2543,46 @@ export function FichaColaborador({
                           </option>
                         ))}
                       </select>
+                    </div>
+                    {/* Contato corporativo é DA PESSOA (A7:b): corrigir aqui
+                        corrige em todos os vínculos dela. Vazio = limpar.
+                        Raça-cor NÃO se edita aqui: é autodeclaração da
+                        pessoa, pelo portal (A5:b). */}
+                    <div className={estilos.campoGrupo}>
+                      <label className={estilos.rotulo} htmlFor="edTelCorp">
+                        Telefone corporativo
+                      </label>
+                      <input
+                        className={estilos.campo}
+                        id="edTelCorp"
+                        type="text"
+                        maxLength={40}
+                        value={edicao.telefone_corporativo}
+                        onChange={(e) =>
+                          setEdicao((atual) => ({
+                            ...atual,
+                            telefone_corporativo: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className={estilos.campoGrupo}>
+                      <label className={estilos.rotulo} htmlFor="edEmailCorp">
+                        E-mail corporativo
+                      </label>
+                      <input
+                        className={estilos.campo}
+                        id="edEmailCorp"
+                        type="email"
+                        maxLength={254}
+                        value={edicao.email_corporativo}
+                        onChange={(e) =>
+                          setEdicao((atual) => ({
+                            ...atual,
+                            email_corporativo: e.target.value,
+                          }))
+                        }
+                      />
                     </div>
                     <div className={estilos.campoGrupoLargo}>
                       <label className={estilos.rotulo} htmlFor="edRetrato">
@@ -1672,6 +2837,14 @@ export function FichaColaborador({
                   )}
                 </div>
               ))
+            )}
+            {/* Disciplinar: cartão à parte, restrito à chave rh.disciplinar.ver
+                (o gestor não vê). Self-fetch + 403 esconde o cartão. */}
+            {permissoes.podeVerDisciplinar && (
+              <BlocoDisciplinarFicha
+                colaboradorId={colaboradorId}
+                podeRegistrar={permissoes.podeRegistrarDisciplinar}
+              />
             )}
           </>
         )}

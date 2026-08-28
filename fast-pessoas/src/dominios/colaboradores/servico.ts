@@ -20,6 +20,18 @@ import {
   buscarEmpresa as buscarEmpresaDaEstrutura,
   listarOpcoesDeFiltroEstrutura,
 } from "../estrutura/repositorio";
+// Fechamento da liderança nos DOIS papéis — a mesma função que o domínio de
+// desligamento usa (0050), reusada aqui para que o desligamento pela edição
+// cadastral não deixe relação de gestor pendurada. (desligamento/repositorio
+// só importa de lib/banco e do próprio esquemas: sem ciclo.)
+import {
+  encerrarLiderancaNoDesligamento,
+  relacoesLiderancaAbertas,
+} from "../desligamento/repositorio";
+// Sub-árvore da equipe (A2:a): módulo próprio do organograma, sem ciclo de
+// import — organograma/servico importa este serviço, mas subarvore.ts só
+// depende do repositório e dos esquemas de lá.
+import { carregarLideradosDaSubArvore } from "../organograma/subarvore";
 import { criar as criarUsuario } from "../usuarios/repositorio";
 import { gerarSenhaTemporaria } from "../usuarios/servico";
 import {
@@ -43,6 +55,8 @@ import {
   NovaFaixaSalarial,
   NovaVersaoCargo,
   NovaVersaoEstabelecimento,
+  CriacaoNivelHierarquico,
+  DeclaracaoRacaCor,
   FAIXAS_IDADE,
   FiltroAniversariantes,
   Genero,
@@ -51,7 +65,10 @@ import {
   MINIMO_POR_RECORTE_MAX,
   MINIMO_POR_RECORTE_MIN,
   MINIMO_POR_RECORTE_PADRAO,
+  RacaCor,
+  RACAS_COR,
   ROTULOS_GENERO,
+  ROTULOS_RACA_COR,
   ROTULOS_MOTIVO_POSICAO,
   ROTULOS_OCORRENCIA,
   ROTULOS_STATUS,
@@ -89,9 +106,24 @@ import {
   lerMinimoPorRecorte,
   lerParametroPrivacidade,
   type ParametroPrivacidadeVigente,
+  buscarCracha,
   buscarEstabelecimentoVersaoAtiva,
   buscarFaixaAtivaParaAtualizar,
   buscarFicha,
+  buscarNivelAtivo,
+  buscarNivelParaAtualizar,
+  ColegaMinimo,
+  CrachaColaborador,
+  gravarRacaCorDaPessoa,
+  inativarNivelHierarquico,
+  inserirNivelHierarquico,
+  lerRacaCorDaPessoa,
+  lerRacaCorDoColaborador,
+  listarCatalogoMinimo,
+  listarNiveisHierarquicos,
+  NivelHierarquico,
+  pessoaIdDoUsuario,
+  travarRacaCorParaAtualizar,
   buscarLotacaoVigenteParaAtualizar,
   buscarParaAtualizar,
   buscarPosicaoVigenteParaAtualizar,
@@ -175,7 +207,8 @@ function truncar(texto: string, limite: number): string {
 // Fonte única do "quem vê quem", e a régua inteira está em DUAS chaves — nunca
 // no nome do papel (migration 0039 conta o porquê):
 //   sem rh.colaborador.ver ................ só a própria ficha
-//   com rh.colaborador.ver ................ si e liderados com relação VIGENTE
+//   com rh.colaborador.ver ................ si e a SUB-ÁRVORE que lidera
+//                                           (diretos e indiretos — A2:a)
 //   mais rh.colaborador.ver.todos ......... empresa inteira
 // O default de quem só tem a primeira chave é "equipe": perfil novo composto
 // em /perfis nasce restrito, e o alcance amplo só existe se o administrador o
@@ -194,9 +227,17 @@ export async function resolverEscopo(sessao: PayloadSessao): Promise<Escopo> {
     "rh.colaborador.ver.todos"
   );
   if (!alcancaTodos) {
+    // A2:a — "equipe" é a SUB-ÁRVORE inteira (diretos e indiretos), resolvida
+    // aqui em JS (caminhada com visitados e teto; ciclo não trava) e entregue
+    // pronta ao repositório como lista de vínculos.
+    const colaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
     return {
       alcance: "equipe",
-      colaboradorId: await colaboradorIdDoUsuario(sessao.usuario_id),
+      colaboradorId,
+      equipeIds:
+        colaboradorId === null
+          ? []
+          : await carregarLideradosDaSubArvore(colaboradorId),
     };
   }
   return { alcance: "todos" };
@@ -261,6 +302,8 @@ export async function listarColaboradores(
   colaboradores: ColaboradorListado[];
   alcance: Escopo["alcance"];
   estrutura_opcoes: OpcoesFiltroEstrutura;
+  /** A4:a — o resto do quadro em modo mínimo (nome, cargo, unidade). */
+  colegas_minimos: ColegaMinimo[];
 }> {
   const escopo = await resolverEscopo(sessao);
   // As opções dos três seletores vêm junto com a lista: sem endpoint novo e
@@ -270,6 +313,16 @@ export async function listarColaboradores(
     listar(filtro, escopo),
     listarOpcoesDeFiltroEstrutura(),
   ]);
+  // A4:a — quem não alcança a empresa inteira ainda assim VÊ todo mundo, no
+  // modo mínimo (o catálogo do crachá): a lista completa continua recortada
+  // pelo escopo, e o resto do quadro aparece só com nome, cargo e unidade.
+  let colegas_minimos: ColegaMinimo[] = [];
+  if (escopo.alcance !== "todos") {
+    const jaVisiveis = new Set(colaboradores.map((colaborador) => colaborador.id));
+    colegas_minimos = (
+      await listarCatalogoMinimo(filtro.busca ?? null)
+    ).filter((colega) => !jaVisiveis.has(colega.id));
+  }
   return {
     colaboradores: colaboradores.map((colaborador) => ({
       ...colaborador,
@@ -280,6 +333,7 @@ export async function listarColaboradores(
     })),
     alcance: escopo.alcance,
     estrutura_opcoes,
+    colegas_minimos,
   };
 }
 
@@ -310,13 +364,52 @@ export function chaveQueAmpliouAFicha(
     : "rh.colaborador.ver";
 }
 
+/** A ficha completa, para quem o escopo alcança. */
+export interface VisaoFichaCompleta {
+  colaborador: FichaColaborador & { feedback_vencido: boolean };
+  linha_do_tempo: EventoLinhaTempo[];
+  cracha?: undefined;
+}
+
+/** A4:a — fora do alcance, o que se vê é o CRACHÁ, não um 404. */
+export interface VisaoCracha {
+  cracha: CrachaColaborador;
+  colaborador?: undefined;
+}
+
+export type VisaoColaborador = VisaoFichaCompleta | VisaoCracha;
+
+/**
+ * A rota da ficha (A4:a): a regra antiga "fora do alcance = 404" foi
+ * SUBSTITUÍDA pelo crachá — todo logado vê o mínimo de qualquer colega do
+ * quadro (nome, cargo, contato corporativo, líder, unidade) e NADA além. Sem
+ * trilha de leitura no mínimo: é dado operacional (a trilha continua valendo
+ * para o que excede o crachá). Quem não está no quadro (desligado/inexistente)
+ * segue 404.
+ *
+ * `obterColaborador` continua existindo com o contrato de sempre (ficha ou
+ * 404) de propósito: o portal do colaborador o reusa para a PRÓPRIA ficha, e
+ * lá crachá não é resposta válida.
+ */
+export async function obterFichaOuCracha(
+  sessao: PayloadSessao,
+  id: number
+): Promise<VisaoColaborador> {
+  try {
+    return await obterColaborador(sessao, id);
+  } catch (erro) {
+    if (erro instanceof ErroHttp && erro.status === 404) {
+      const cracha = await buscarCracha(id);
+      if (cracha) return { cracha };
+    }
+    throw erro;
+  }
+}
+
 export async function obterColaborador(
   sessao: PayloadSessao,
   id: number
-): Promise<{
-  colaborador: FichaColaborador & { feedback_vencido: boolean };
-  linha_do_tempo: EventoLinhaTempo[];
-}> {
+): Promise<VisaoFichaCompleta> {
   const escopo = await resolverEscopo(sessao);
   const ficha = await buscarFicha(id, escopo);
   if (!ficha) {
@@ -508,6 +601,8 @@ async function admitirPessoaNova(
           genero: dados.genero,
           retrato: dados.retrato ?? null,
           contexto: dados.contexto ?? null,
+          telefone_corporativo: dados.telefone_corporativo ?? null,
+          email_corporativo: dados.email_corporativo ?? null,
         });
         const usuario = await criarUsuario(cliente, {
           email: dados.email,
@@ -567,6 +662,18 @@ async function admitirPessoaNova(
             para: ROTULOS_GENERO[dados.genero],
           },
         };
+        if (dados.telefone_corporativo) {
+          diffPessoa["Telefone corporativo"] = {
+            de: null,
+            para: dados.telefone_corporativo,
+          };
+        }
+        if (dados.email_corporativo) {
+          diffPessoa["E-mail corporativo"] = {
+            de: null,
+            para: dados.email_corporativo,
+          };
+        }
         if (dados.retrato) {
           diffPessoa.Retrato = { de: null, para: dados.retrato };
         }
@@ -822,6 +929,27 @@ export async function atualizarColaborador(
         para: formatarData(dados.data_nascimento),
       };
     }
+    // Contato corporativo é da PESSOA (A7:b): muda num contrato, vale nos dois.
+    if (
+      dados.telefone_corporativo !== undefined &&
+      dados.telefone_corporativo !== atual.telefone_corporativo
+    ) {
+      camposPessoa.telefone_corporativo = dados.telefone_corporativo;
+      diffPessoa["Telefone corporativo"] = {
+        de: atual.telefone_corporativo,
+        para: dados.telefone_corporativo,
+      };
+    }
+    if (
+      dados.email_corporativo !== undefined &&
+      dados.email_corporativo !== atual.email_corporativo
+    ) {
+      camposPessoa.email_corporativo = dados.email_corporativo;
+      diffPessoa["E-mail corporativo"] = {
+        de: atual.email_corporativo,
+        para: dados.email_corporativo,
+      };
+    }
     // Gênero é autodeclarado: gravamos o que a pessoa declarou sem devolver o
     // valor atual em nenhum payload de leitura (o formulário é "cego"). A
     // trilha registra a mudança — é lá que se audita quem tocou no campo.
@@ -855,6 +983,16 @@ export async function atualizarColaborador(
         dados.data_desligamento !== undefined &&
         dados.data_desligamento !== atual.data_desligamento
       ) {
+        // Desligar antes de admitir inverte a janela do vínculo e envenena
+        // qualquer contagem de tempo de casa. O banco não cobre esta borda
+        // (o CHECK só exige data quando o status é desligado).
+        if (dados.data_desligamento < atual.data_admissao) {
+          throw new ErroHttpCampo(
+            400,
+            "Data de desligamento deve ser posterior ou igual à admissão.",
+            "data_desligamento"
+          );
+        }
         campos.data_desligamento = dados.data_desligamento;
         diff["Data de desligamento"] = {
           de: atual.data_desligamento
@@ -911,6 +1049,50 @@ export async function atualizarColaborador(
         payload: { data_desligamento: dados.data_desligamento },
         registrado_por: sessao.usuario_id,
       });
+      // LIDERANÇA — encerrada no mesmo ato, nos DOIS papéis, como o domínio de
+      // desligamento faz (0050). Sem isto o desligado seguia GESTOR VIGENTE de
+      // um time pendurado numa conta desativada (aprovação de demanda caindo no
+      // vazio) e LIDERADO VIGENTE de quem ficou — porque o sistema inteiro lê
+      // "vigente" como rg.fim_vigencia IS NULL. Reintroduzia o exato estado que
+      // a 0050 consertou.
+      const liderancas = await relacoesLiderancaAbertas(cliente, id);
+      for (const relacao of liderancas) {
+        await encerrarLiderancaNoDesligamento(
+          cliente,
+          relacao.id,
+          dados.data_desligamento
+        );
+      }
+      if (liderancas.length > 0) {
+        // "papel" aqui é o LADO da relação de liderança ("gestor"/"liderado"),
+        // não papel de ACESSO — mas o lint acesso-por-chave não distingue e
+        // acusaria `=== "gestor"`. Como o tipo é fechado em dois valores,
+        // pergunto pelo complemento (`!== "liderado"`), que não colide com nome
+        // de papel e mantém a regra estrita nesta função ampla.
+        const gestorDele = liderancas.find((r) => r.papel === "liderado");
+        const orfaos = liderancas.filter((r) => r.papel !== "liderado");
+        const diffLideranca: Diff = {};
+        if (gestorDele) {
+          diffLideranca["Liderado por"] = {
+            de: gestorDele.contraparte_nome,
+            para: `Encerrado em ${formatarData(dados.data_desligamento)}`,
+          };
+        }
+        if (orfaos.length > 0) {
+          diffLideranca["Equipe que liderava (ficou sem gestor)"] = {
+            de: orfaos.map((r) => r.contraparte_nome).join("; "),
+            para: `${orfaos.length} pessoa(s) aguardando novo gestor — designar em Colaboradores`,
+          };
+        }
+        await registrarAlteracao(cliente, {
+          usuarioId: sessao.usuario_id,
+          papel: sessao.papel,
+          acao: "desligamento.lideranca",
+          tabela: "rh.relacao_gestor",
+          registroId: `colaborador:${id}`,
+          diff: diffLideranca,
+        });
+      }
     } else if (campos.status !== undefined) {
       await inserirEvento(cliente, {
         colaborador_id: id,
@@ -921,6 +1103,27 @@ export async function atualizarColaborador(
         resumo: `Status de ${atual.nome_completo} alterado de ${ROTULOS_STATUS[atual.status]} para ${ROTULOS_STATUS[campos.status]}`,
         payload: { de: atual.status, para: campos.status },
         registrado_por: sessao.usuario_id,
+      });
+    }
+    // Simétrico ao desligamento: desfazer o "desligado" reativa o login. O
+    // desligamento desativa a conta; sem reativar aqui, a pessoa voltava a
+    // aparecer ATIVA em todo lugar mas continuava SEM conseguir entrar, e sem
+    // rastro do porquê. reativarUsuario só toca conta que estava inativa
+    // (WHERE ativo = FALSE), então quem nunca perdeu o login não gera trilha
+    // falsa.
+    const reativando =
+      campos.status !== undefined &&
+      atual.status === "desligado" &&
+      dados.status !== undefined &&
+      dados.status !== "desligado";
+    if (reativando && (await reativarUsuario(cliente, atual.usuario_id))) {
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "atualizacao",
+        tabela: "sistema.usuario",
+        registroId: String(atual.usuario_id),
+        diff: { Ativo: { de: "Não", para: "Sim" } },
       });
     }
     if (campos.tipo_vinculo !== undefined) {
@@ -1251,26 +1454,119 @@ export async function atualizarAcaoColaborador(
 
 // ------------------------------------------------------------------ posição (salário — dado sensível)
 
+/**
+ * O escopo de EQUIPE do usuário da sessão, para as leituras de alcance-equipe
+ * (salário A1:a, disciplinar A3:a). Não depende de rh.colaborador.ver — a chave
+ * de alcance-equipe autoriza sozinha; o que se resolve aqui é só QUEM é a
+ * sub-árvore de quem pergunta.
+ */
+export async function escopoDaMinhaEquipe(
+  sessao: PayloadSessao
+): Promise<Escopo> {
+  const colaboradorId = await colaboradorIdDoUsuario(sessao.usuario_id);
+  return {
+    alcance: "equipe",
+    colaboradorId,
+    equipeIds:
+      colaboradorId === null
+        ? []
+        : await carregarLideradosDaSubArvore(colaboradorId),
+  };
+}
+
+/**
+ * A chave que DE FATO abriu o salário — molde `chaveQueAmpliouAFicha` (A1:a).
+ *
+ * `null` = nada a registrar: a PRÓPRIA posição (qualquer vínculo da MINHA
+ * pessoa — o contrato anterior no grupo continua sendo meu) não é leitura de
+ * terceiro. Fora isso, a global responde quando presente; quem só tem a de
+ * equipe grava a de equipe — nunca a mais ampla, que seria trilha mentindo.
+ */
+export function chaveQueAbriuAPosicao(
+  chavesConcedidas: ReadonlySet<string>,
+  ehVinculoMeu: boolean
+): string | null {
+  if (ehVinculoMeu) return null;
+  return chavesConcedidas.has("rh.posicao.ver")
+    ? "rh.posicao.ver"
+    : "rh.posicao.ver.equipe";
+}
+
+/**
+ * Costuras de `obterPosicoes` com o banco — o que os testes trocam por dublês
+ * (molde DepsPosse, pendência 16.2). Produção não passa o parâmetro.
+ */
+export interface DepsPosicoes {
+  colaboradorIdDoUsuario: typeof colaboradorIdDoUsuario;
+  colaboradorNoEscopo: typeof colaboradorNoEscopo;
+  lideradosDaSubArvore: typeof carregarLideradosDaSubArvore;
+  listarPosicoes: typeof listarPosicoes;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+}
+
+const DEPS_POSICOES_REAIS: DepsPosicoes = {
+  colaboradorIdDoUsuario,
+  colaboradorNoEscopo,
+  lideradosDaSubArvore: carregarLideradosDaSubArvore,
+  listarPosicoes,
+  registrarLeituraSensivel,
+};
+
+/**
+ * Salário com DUAS chaves de alcances diferentes (decisão A1:a): a global
+ * `rh.posicao.ver` continua como sempre foi; a nova `rh.posicao.ver.equipe`
+ * alcança só a sub-árvore de quem pergunta (e os próprios vínculos, pela
+ * cláusula de pessoa). A trilha grava a chave que DE FATO autorizou
+ * (`chaveQueAbriuAPosicao`) — e `chavesConcedidas` NÃO tem valor padrão de
+ * propósito: um default "rh.posicao.ver" deixava rota nova (o POST já caiu
+ * nisso) carimbar a chave global para quem talvez nem a tenha.
+ */
 export async function obterPosicoes(
   sessao: PayloadSessao,
-  colaboradorId: number
+  colaboradorId: number,
+  chavesConcedidas: ReadonlySet<string>,
+  deps: DepsPosicoes = DEPS_POSICOES_REAIS
 ): Promise<{ posicoes: Posicao[] }> {
-  const posicoes = await listarPosicoes(colaboradorId);
+  const meuVinculo = await deps.colaboradorIdDoUsuario(sessao.usuario_id);
+  // Cláusula de pessoa: qualquer vínculo MEU é a PRÓPRIA posição — leitura do
+  // titular sobre si, que não deixa trilha (molde `chaveQueAmpliouAFicha`).
+  const ehVinculoMeu =
+    meuVinculo !== null &&
+    (await deps.colaboradorNoEscopo(colaboradorId, {
+      alcance: "proprio",
+      colaboradorId: meuVinculo,
+    }));
+  if (!chavesConcedidas.has("rh.posicao.ver") && !ehVinculoMeu) {
+    // Só a chave de equipe: o alvo precisa estar na MINHA sub-árvore. Fora
+    // dela = ausência, o mesmo 404 de inexistente.
+    const liderados =
+      meuVinculo === null ? [] : await deps.lideradosDaSubArvore(meuVinculo);
+    if (!liderados.includes(colaboradorId)) {
+      throw new ErroHttp(404, "Colaborador não encontrado.");
+    }
+  }
+  const chaveDaLeitura = chaveQueAbriuAPosicao(chavesConcedidas, ehVinculoMeu);
+  const posicoes = await deps.listarPosicoes(colaboradorId);
   if (posicoes.length === 0) {
-    // Sem posição não há dado sensível lido; confere só a existência da ficha.
+    // Id fantasma é 404 ANTES da trilha: ler quem não existe não é leitura
+    // sensível de ninguém (molde do ponto).
     const escopoPleno: Escopo = { alcance: "todos" };
-    const existe = await colaboradorNoEscopo(colaboradorId, escopoPleno);
+    const existe = await deps.colaboradorNoEscopo(colaboradorId, escopoPleno);
     if (!existe) {
       throw new ErroHttp(404, "Colaborador não encontrado.");
     }
-    return { posicoes };
   }
-  await registrarLeituraSensivel({
-    usuarioId: sessao.usuario_id,
-    chavePermissao: "rh.posicao.ver",
-    recurso: "colaborador.salario",
-    registroId: String(colaboradorId),
-  });
+  // "Vazio também é informação" (molde disciplinar/servico.ts): abrir o
+  // salário de terceiro grava trilha MESMO sem posição registrada — "esta
+  // pessoa não tem posição" também é resposta sobre ela.
+  if (chaveDaLeitura !== null) {
+    await deps.registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: chaveDaLeitura,
+      recurso: "colaborador.salario",
+      registroId: String(colaboradorId),
+    });
+  }
   return { posicoes };
 }
 
@@ -1400,6 +1696,24 @@ export async function definirGestor(
         400,
         "Gestor informado não existe.",
         "gestor_colaborador_id"
+      );
+    }
+    // Não se abre janela de liderança sobre vínculo desligado (em nenhuma das
+    // pontas): a 0050 fecha as relações no desligamento, e criar uma nova
+    // apontando para um desligado recria o estado "vigente com vínculo
+    // desligado" que ela existe para impedir. (Só barra ao ABRIR — encerrar
+    // com gestor nulo segue livre.)
+    if (novoGestor && novoGestor.status === "desligado") {
+      throw new ErroHttpCampo(
+        400,
+        "Gestor informado está desligado.",
+        "gestor_colaborador_id"
+      );
+    }
+    if (novoGestor && colaborador.status === "desligado") {
+      throw new ErroHttp(
+        400,
+        "Não se abre relação de liderança sobre um vínculo desligado."
       );
     }
     const vigente = await buscarRelacaoGestorVigenteParaAtualizar(
@@ -1650,6 +1964,7 @@ function camposRcf(dados: {
   missao?: string;
   atividades?: string[];
   observacoes?: string;
+  nivel_hierarquico_id?: number | null;
 }) {
   return {
     setor: dados.setor ?? null,
@@ -1658,7 +1973,29 @@ function camposRcf(dados: {
     missao: dados.missao ?? null,
     atividades: dados.atividades ?? [],
     observacoes: dados.observacoes ?? null,
+    nivel_hierarquico_id: dados.nivel_hierarquico_id ?? null,
   };
+}
+
+/**
+ * Valida o nível hierárquico do catálogo (A6:a) e devolve o nome para a
+ * trilha. Nulo é aceito ("ainda não classificado"); id inativo/inexistente é
+ * recusado com erro de campo — o trigger da 0085 é a segunda tranca.
+ */
+async function validarNivelHierarquico(
+  cliente: Parameters<typeof buscarNivelAtivo>[0],
+  nivelId: number | null
+): Promise<string | null> {
+  if (nivelId === null) return null;
+  const nivel = await buscarNivelAtivo(cliente, nivelId);
+  if (!nivel) {
+    throw new ErroHttpCampo(
+      400,
+      "Nível hierárquico inexistente ou inativo — escolha um do catálogo.",
+      "nivel_hierarquico_id"
+    );
+  }
+  return nivel.nome;
 }
 
 /** Diff legível do RCF para a trilha (audit.alteracao). */
@@ -1749,6 +2086,10 @@ export async function criarCargo(
         );
       }
     }
+    const nivelNome = await validarNivelHierarquico(
+      cliente,
+      rcf.nivel_hierarquico_id
+    );
     const cha = chaCompleto(dados.cha);
     const versaoId = await inserirVersaoCargo(cliente, {
       cargo_id: cargoId,
@@ -1764,6 +2105,9 @@ export async function criarCargo(
     };
     if (dados.descricao) {
       diff["Descrição"] = { de: null, para: truncar(dados.descricao, 500) };
+    }
+    if (nivelNome !== null) {
+      diff["Nível hierárquico"] = { de: null, para: nivelNome };
     }
     diffRcf(diff, null, { ...rcf, cha });
     await registrarAlteracao(cliente, {
@@ -1838,6 +2182,17 @@ export async function criarVersaoCargo(
         );
       }
     }
+    const nivelNome = await validarNivelHierarquico(
+      cliente,
+      rcf.nivel_hierarquico_id
+    );
+    // O nome do nível ANTERIOR para a trilha — mesmo que ele esteja inativo
+    // hoje (a versão antiga aponta para o que valia na época).
+    const nivelAnteriorNome =
+      ativa?.nivel_hierarquico_id == null
+        ? null
+        : ((await buscarNivelParaAtualizar(cliente, ativa.nivel_hierarquico_id))
+            ?.nome ?? null);
     const cha = chaCompleto(dados.cha);
     const versaoId = await inserirVersaoCargo(cliente, {
       cargo_id: cargoId,
@@ -1858,6 +2213,9 @@ export async function criarVersaoCargo(
         para: formatarData(dados.inicio_vigencia),
       },
     };
+    if (nivelNome !== null || nivelAnteriorNome !== null) {
+      diff["Nível hierárquico"] = { de: nivelAnteriorNome, para: nivelNome };
+    }
     diffRcf(diff, ativa, { ...rcf, cha });
     await registrarAlteracao(cliente, {
       usuarioId: sessao.usuario_id,
@@ -2347,6 +2705,213 @@ export async function obterParametroPrivacidade(): Promise<PainelPrivacidade> {
     maximo: MINIMO_POR_RECORTE_MAX,
     padrao: MINIMO_POR_RECORTE_PADRAO,
   };
+}
+
+// ------------------------------------------------------------------ raça-cor (A5:b — autodeclarada; DP vê com trilha)
+
+export interface RacaCorVisao {
+  /** null = a pessoa nunca declarou. */
+  raca_cor: RacaCor | null;
+  rotulo: string | null;
+}
+
+function projetarRacaCor(bruto: string | null): RacaCorVisao {
+  const valor = (bruto ?? null) as RacaCor | null;
+  return {
+    raca_cor: valor,
+    rotulo: valor === null ? null : ROTULOS_RACA_COR[valor],
+  };
+}
+
+/**
+ * Costuras de `obterRacaCorColaborador` com o banco — dublês nos testes
+ * (molde DepsPosse, pendência 16.2). Produção não passa o parâmetro.
+ */
+export interface DepsRacaCor {
+  lerRacaCorDoColaborador: typeof lerRacaCorDoColaborador;
+  pessoaIdDoUsuario: typeof pessoaIdDoUsuario;
+  registrarLeituraSensivel: typeof registrarLeituraSensivel;
+}
+
+const DEPS_RACA_COR_REAIS: DepsRacaCor = {
+  lerRacaCorDoColaborador,
+  pessoaIdDoUsuario,
+  registrarLeituraSensivel,
+};
+
+/**
+ * A leitura INDIVIDUAL do DP na ficha (decisão A5:b — escolha consciente do
+ * dono, registrada em docs/20). A rota exige `rh.colaborador.sensivel.ver`
+ * (a chave de dado sensível da ficha, que já obriga 2FA); aqui a leitura de
+ * TERCEIRO grava trilha sempre, no molde salário/ASO — inclusive quando o
+ * valor é "não declarada", que também é informação sobre a pessoa. A PRÓPRIA
+ * raça-cor (mesma pessoa da sessão, em qualquer vínculo) é leitura do titular
+ * sobre si e NÃO deixa trilha — molde `chaveQueAmpliouAFicha`: trilha é para
+ * dado de terceiro.
+ */
+export async function obterRacaCorColaborador(
+  sessao: PayloadSessao,
+  colaboradorId: number,
+  deps: DepsRacaCor = DEPS_RACA_COR_REAIS
+): Promise<RacaCorVisao> {
+  const linha = await deps.lerRacaCorDoColaborador(colaboradorId);
+  if (!linha) {
+    throw new ErroHttp(404, "Colaborador não encontrado.");
+  }
+  const minhaPessoa = await deps.pessoaIdDoUsuario(sessao.usuario_id);
+  if (minhaPessoa !== linha.pessoa_id) {
+    await deps.registrarLeituraSensivel({
+      usuarioId: sessao.usuario_id,
+      chavePermissao: "rh.colaborador.sensivel.ver",
+      recurso: "colaborador.raca_cor",
+      registroId: String(colaboradorId),
+    });
+  }
+  return projetarRacaCor(linha.raca_cor);
+}
+
+/** O titular sem ficha de pessoa não tem o que declarar. */
+async function exigirMinhaPessoa(sessao: PayloadSessao): Promise<number> {
+  const pessoaId = await pessoaIdDoUsuario(sessao.usuario_id);
+  if (pessoaId === null) {
+    throw new ErroHttp(
+      409,
+      "Sua conta não está ligada a uma pessoa do quadro — fale com o DP."
+    );
+  }
+  return pessoaId;
+}
+
+/**
+ * A PRÓPRIA raça-cor, para o cartão do portal. Leitura do titular sobre si —
+ * sem trilha, pela mesma razão do portal inteiro (trilha é para dado de
+ * TERCEIRO). Devolve também as opções, para a tela não chumbar lista nenhuma.
+ */
+export async function minhaRacaCor(sessao: PayloadSessao): Promise<{
+  declaracao: RacaCorVisao;
+  opcoes: { valor: RacaCor; rotulo: string }[];
+}> {
+  const pessoaId = await exigirMinhaPessoa(sessao);
+  const bruto = await lerRacaCorDaPessoa(pessoaId);
+  return {
+    declaracao: projetarRacaCor(bruto),
+    opcoes: RACAS_COR.map((valor) => ({
+      valor,
+      rotulo: ROTULOS_RACA_COR[valor],
+    })),
+  };
+}
+
+/**
+ * A AUTODECLARAÇÃO (A5:b): só a própria pessoa grava a própria raça-cor —
+ * keyless por titularidade (molde da ciência de posse): o titular sai da
+ * SESSÃO, nunca de um id no corpo. Redeclarar é permitido (a pessoa pode
+ * mudar a declaração quando quiser); a trilha guarda o de/para com dono e
+ * data — é o controle de quem tocou num dado autodeclarado.
+ */
+export async function declararMinhaRacaCor(
+  sessao: PayloadSessao,
+  dados: DeclaracaoRacaCor
+): Promise<RacaCorVisao> {
+  const pessoaId = await exigirMinhaPessoa(sessao);
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const atual = await travarRacaCorParaAtualizar(cliente, pessoaId);
+    if (!atual) {
+      throw new ErroHttp(404, "Pessoa não encontrada.");
+    }
+    if (atual.raca_cor === dados.raca_cor) return;
+    await gravarRacaCorDaPessoa(cliente, pessoaId, dados.raca_cor);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "raca_cor.autodeclarar",
+      tabela: ORIGEM_PESSOA,
+      registroId: String(pessoaId),
+      diff: {
+        "Raça-cor (autodeclarada)": {
+          de:
+            atual.raca_cor === null
+              ? null
+              : ROTULOS_RACA_COR[atual.raca_cor as RacaCor],
+          para: ROTULOS_RACA_COR[dados.raca_cor],
+        },
+      },
+    });
+  });
+  return projetarRacaCor(dados.raca_cor);
+}
+
+// ------------------------------------------------------------------ nível hierárquico (A6:a — catálogo administrável)
+
+/** Quem administra vê inclusive os inativos (para reativar); o seletor, só ativos. */
+export async function obterNiveisHierarquicos(
+  apenasAtivos: boolean
+): Promise<{ niveis: NivelHierarquico[] }> {
+  return { niveis: await listarNiveisHierarquicos(apenasAtivos) };
+}
+
+export async function criarNivelHierarquico(
+  sessao: PayloadSessao,
+  dados: CriacaoNivelHierarquico
+): Promise<{ niveis: NivelHierarquico[] }> {
+  try {
+    await comTransacao(sessao.usuario_id, async (cliente) => {
+      const id = await inserirNivelHierarquico(cliente, dados.nome);
+      await registrarAlteracao(cliente, {
+        usuarioId: sessao.usuario_id,
+        papel: sessao.papel,
+        acao: "criacao",
+        tabela: "rh.nivel_hierarquico",
+        registroId: String(id),
+        diff: { Nome: { de: null, para: dados.nome } },
+      });
+    });
+  } catch (erro) {
+    if (violacaoUnica(erro) === "nivel_hierarquico_nome_key") {
+      throw new ErroHttpCampo(
+        409,
+        `Já existe um nível chamado "${dados.nome}" — reative-o ou use outro nome.`,
+        "nome"
+      );
+    }
+    throw erro;
+  }
+  return obterNiveisHierarquicos(false);
+}
+
+/**
+ * Inativar/reativar — o lugar da exclusão (o DELETE é barrado na 0085).
+ * Versão de cargo já gravada continua apontando para o nível; o que muda é
+ * que ele some do seletor de versões NOVAS.
+ */
+export async function definirNivelHierarquicoInativo(
+  sessao: PayloadSessao,
+  id: number,
+  inativo: boolean
+): Promise<{ niveis: NivelHierarquico[] }> {
+  await comTransacao(sessao.usuario_id, async (cliente) => {
+    const nivel = await buscarNivelParaAtualizar(cliente, id);
+    if (!nivel) {
+      throw new ErroHttp(404, "Nível hierárquico não encontrado.");
+    }
+    if (inativo === !nivel.ativo) return;
+    await inativarNivelHierarquico(cliente, id, inativo ? sessao.usuario_id : null);
+    await registrarAlteracao(cliente, {
+      usuarioId: sessao.usuario_id,
+      papel: sessao.papel,
+      acao: "edicao",
+      tabela: "rh.nivel_hierarquico",
+      registroId: String(id),
+      diff: {
+        Nível: { de: null, para: nivel.nome },
+        "Situação": {
+          de: inativo ? "ativo" : "inativo",
+          para: inativo ? "inativo" : "ativo",
+        },
+      },
+    });
+  });
+  return obterNiveisHierarquicos(false);
 }
 
 /**

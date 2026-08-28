@@ -6,7 +6,7 @@ import {
 } from "@/dominios/colaboradores/esquemas";
 import { obterRcfCargo } from "@/dominios/colaboradores/servico";
 import { consultar } from "@/lib/banco";
-import { lerSessao } from "@/lib/sessao";
+import { exigirSessaoDePagina } from "@/lib/sessao";
 import { BotaoImprimir } from "./botao-imprimir";
 import estilos from "./rcf.module.css";
 
@@ -28,10 +28,7 @@ export default async function PaginaRcf({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const sessao = await lerSessao();
-  if (!sessao) {
-    redirect("/entrar");
-  }
+  const sessao = await exigirSessaoDePagina();
   const { id } = await params;
   const cargoId = Number(id);
   if (!Number.isInteger(cargoId) || cargoId <= 0) {

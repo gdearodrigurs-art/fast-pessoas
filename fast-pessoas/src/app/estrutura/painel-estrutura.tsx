@@ -7,6 +7,7 @@ import {
   TIPOS_EMPRESA,
   type TipoEmpresa,
 } from "@/dominios/estrutura/esquemas";
+import { BlocoCarga } from "./bloco-carga";
 import estilos from "./page.module.css";
 
 // Três catálogos, três seções, a mesma gramática em todas:
@@ -91,10 +92,13 @@ export function PainelEstrutura({
   podeEmpresa,
   podeCentroCusto,
   podeLotacao,
+  podeImportar,
 }: {
   podeEmpresa: boolean;
   podeCentroCusto: boolean;
   podeLotacao: boolean;
+  /** Chave sistema.carga.importar: o bloco de carga inicial por planilha. */
+  podeImportar: boolean;
 }) {
   const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [centros, setCentros] = useState<CentroCusto[]>([]);
@@ -1110,6 +1114,21 @@ export function PainelEstrutura({
             Para criar centro de custo é preciso escolher a empresa que o
             mantém, e a lista de empresas exige a chave rh.empresa.administrar.
           </p>
+        )}
+
+        {podeImportar && (
+          <BlocoCarga
+            titulo="Carga inicial — importar estrutura por planilha"
+            rota="/api/estrutura/importacao"
+            colunas="empresa ; cnpj ; razao_social ; tipo ; estabelecimento ; cc_codigo ; cc_nome"
+            explicacao={
+              "Cada linha pode trazer só a empresa, ou a empresa com uma unidade " +
+              "e/ou um centro de custo. O tipo (matriz/filial) só é exigido quando " +
+              "a linha cria a empresa; o CNPJ pode ficar vazio."
+            }
+            exemplo={"Supply;41235678000101;Fast Supply Ltda;matriz;Matriz Centro;CC-1000;Operação Matriz Centro"}
+            aoImportar={() => void carregar()}
+          />
         )}
       </main>
     </div>

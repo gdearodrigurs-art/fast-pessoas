@@ -84,12 +84,24 @@ interface SituacaoConferencia {
   conferido_dp: boolean;
 }
 
+interface ContaContabil {
+  id: number;
+  rubrica_id: number;
+  codigo: string;
+  rubrica_nome: string;
+  conta_contabil: string;
+  status: string;
+  inicio_vigencia: string;
+  fim_vigencia: string | null;
+}
+
 interface Visao {
   rubricas: Rubrica[];
   inss: VersaoInss[];
   irrf: VersaoIrrf[];
   gerais: VersaoGerais[];
   conferencia: SituacaoConferencia[];
+  contas_contabeis: ContaContabil[];
 }
 
 interface DiferencaCaso {
@@ -325,6 +337,11 @@ export function PainelParametros() {
             </section>
 
             <SecaoRubricas rubricas={visao.rubricas} aoMudar={recarregar} />
+            <SecaoContasContabeis
+              contas={visao.contas_contabeis}
+              rubricas={visao.rubricas}
+              aoMudar={recarregar}
+            />
             <SecaoTabelaInss versoes={visao.inss} aoMudar={recarregar} />
             <SecaoTabelaIrrf versoes={visao.irrf} aoMudar={recarregar} />
             <SecaoParametrosGerais versoes={visao.gerais} aoMudar={recarregar} />
@@ -999,6 +1016,217 @@ function FormularioNovaRubrica({
         </p>
       )}
     </form>
+  );
+}
+
+// ------------------------------------------------------------------ de-para conta contábil (OLAC, E3:a)
+
+/**
+ * De-para rubrica → conta contábil do arquivo OLAC, administrável com vigência
+ * (eixo 9). Nova vigência para a mesma rubrica encerra a anterior no dia
+ * anterior, na mesma transação; rubrica sem de-para sai no arquivo com a
+ * coluna vazia — a exportação avisa quantas ficaram sem.
+ */
+function SecaoContasContabeis({
+  contas,
+  rubricas,
+  aoMudar,
+}: {
+  contas: ContaContabil[];
+  rubricas: Rubrica[];
+  aoMudar: () => void;
+}) {
+  const [rubricaId, setRubricaId] = useState("");
+  const [conta, setConta] = useState("");
+  const [inicio, setInicio] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [erroEnvio, setErroEnvio] = useState<string | null>(null);
+  const [encerrandoId, setEncerrandoId] = useState<number | null>(null);
+  const [fimEncerramento, setFimEncerramento] = useState("");
+
+  async function criar(evento: FormEvent<HTMLFormElement>) {
+    evento.preventDefault();
+    setErroEnvio(null);
+    setEnviando(true);
+    const resultado = await enviarJson("/api/folha/parametros/contas-contabeis", {
+      rubrica_id: Number(rubricaId),
+      conta_contabil: conta,
+      inicio_vigencia: inicio,
+    });
+    setEnviando(false);
+    if (resultado.ok) {
+      setRubricaId("");
+      setConta("");
+      setInicio("");
+      aoMudar();
+    } else {
+      setErroEnvio(resultado.erro);
+    }
+  }
+
+  async function encerrar(id: number) {
+    if (fimEncerramento === "") return;
+    setErroEnvio(null);
+    setEnviando(true);
+    const resultado = await enviarJson(
+      `/api/folha/parametros/contas-contabeis/${id}`,
+      { fim_vigencia: fimEncerramento },
+      "PATCH"
+    );
+    setEnviando(false);
+    if (resultado.ok) {
+      setEncerrandoId(null);
+      setFimEncerramento("");
+      aoMudar();
+    } else {
+      setErroEnvio(resultado.erro);
+    }
+  }
+
+  return (
+    <section className={estilos.cartao}>
+      <h2>De-para de conta contábil (arquivo OLAC)</h2>
+      <p className={estilos.notaRodape}>
+        A conta que cada rubrica leva no arquivo para a contabilidade
+        (docs/anexos/layout-olac.md). Com vigência: a exportação usa a conta
+        vigente <strong>na competência</strong>, nunca a de hoje. Rubrica sem
+        de-para sai com a coluna vazia.
+      </p>
+      {erroEnvio && <p className={estilos.erro}>{erroEnvio}</p>}
+      {contas.length > 0 && (
+        <div className={estilos.tabelaEnvolucro}>
+          <table className={estilos.tabela}>
+            <thead>
+              <tr>
+                <th>Rubrica</th>
+                <th>Conta contábil</th>
+                <th>Vigência</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {contas.map((vigencia) => (
+                <tr key={vigencia.id}>
+                  <td>
+                    {vigencia.codigo} — {vigencia.rubrica_nome}
+                  </td>
+                  <td>{vigencia.conta_contabil}</td>
+                  <td>
+                    {formatarData(vigencia.inicio_vigencia)}
+                    {" → "}
+                    {vigencia.fim_vigencia
+                      ? formatarData(vigencia.fim_vigencia)
+                      : "aberta"}
+                  </td>
+                  <td>
+                    <span
+                      className={etiquetaStatus(
+                        vigencia.status as StatusVersao
+                      )}
+                    >
+                      {vigencia.status === "ativa" ? "Ativa" : "Encerrada"}
+                    </span>
+                  </td>
+                  <td>
+                    {vigencia.status === "ativa" &&
+                      (encerrandoId === vigencia.id ? (
+                        <span className={estilos.campoGrupoCurto}>
+                          <input
+                            className={estilos.campo}
+                            type="date"
+                            value={fimEncerramento}
+                            onChange={(e) => setFimEncerramento(e.target.value)}
+                          />
+                          <button
+                            className={estilos.botaoLinha}
+                            type="button"
+                            disabled={enviando || fimEncerramento === ""}
+                            onClick={() => encerrar(vigencia.id)}
+                          >
+                            {enviando ? "Encerrando…" : "Confirmar"}
+                          </button>
+                          <button
+                            className={estilos.botaoLinha}
+                            type="button"
+                            onClick={() => setEncerrandoId(null)}
+                          >
+                            Cancelar
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          className={estilos.botaoLinha}
+                          type="button"
+                          onClick={() => {
+                            setEncerrandoId(vigencia.id);
+                            setFimEncerramento("");
+                          }}
+                        >
+                          Encerrar vigência
+                        </button>
+                      ))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <form className={estilos.formulario} onSubmit={criar}>
+        <div className={estilos.campoGrupo}>
+          <label className={estilos.rotulo} htmlFor="conta-rubrica">
+            Rubrica
+          </label>
+          <select
+            className={estilos.campo}
+            id="conta-rubrica"
+            required
+            value={rubricaId}
+            onChange={(e) => setRubricaId(e.target.value)}
+          >
+            <option value="">Escolha…</option>
+            {rubricas
+              .filter((rubrica) => rubrica.ativo)
+              .map((rubrica) => (
+                <option key={rubrica.id} value={rubrica.id}>
+                  {rubrica.codigo} — {rubrica.nome}
+                </option>
+              ))}
+          </select>
+        </div>
+        <div className={estilos.campoGrupo}>
+          <label className={estilos.rotulo} htmlFor="conta-contabil">
+            Conta contábil
+          </label>
+          <input
+            className={estilos.campo}
+            id="conta-contabil"
+            required
+            maxLength={60}
+            placeholder="ex.: 3.1.1.01.001"
+            value={conta}
+            onChange={(e) => setConta(e.target.value)}
+          />
+        </div>
+        <div className={estilos.campoGrupo}>
+          <label className={estilos.rotulo} htmlFor="conta-inicio">
+            Início de vigência
+          </label>
+          <input
+            className={estilos.campo}
+            id="conta-inicio"
+            type="date"
+            required
+            value={inicio}
+            onChange={(e) => setInicio(e.target.value)}
+          />
+        </div>
+        <button className={estilos.botao} type="submit" disabled={enviando}>
+          {enviando ? "Salvando…" : "Definir conta contábil"}
+        </button>
+      </form>
+    </section>
   );
 }
 

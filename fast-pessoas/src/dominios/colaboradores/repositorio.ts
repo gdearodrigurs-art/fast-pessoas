@@ -16,8 +16,9 @@ import {
 } from "./esquemas";
 
 // ------------------------------------------------------------------ escopo de visibilidade
-// A regra "quem vê quem" é do repositório: gestor enxerga a si e aos liderados
-// com relação VIGENTE; funcionário só a própria ficha; rh/dp/diretoria, todos.
+// A regra "quem vê quem" é do repositório: gestor enxerga a si e a SUB-ÁRVORE
+// que lidera (diretos e indiretos, pela relação VIGENTE — decisão A2:a);
+// funcionário só a própria ficha; rh/dp/diretoria, todos.
 //
 // A UNIDADE DO ESCOPO É O VÍNCULO, e "eu" é a PESSOA. As duas frases juntas são
 // a correção que a 0046 exigiu e que ficou faltando: antes dela uma pessoa tinha
@@ -36,10 +37,24 @@ import {
 // só os vínculos que eu lidero HOJE. Quem enxerga a pessoa inteira de terceiro
 // continua sendo só quem tem `rh.colaborador.ver.todos` (alcance "todos") — a
 // mesma chave de sempre, decidida por chave e nunca por nome de papel.
+//
+// DESDE A FASE 4 (decisão A2:a), "equipe" é a SUB-ÁRVORE: liderados diretos e
+// INDIRETOS, uma semântica só de "minha equipe" no sistema inteiro. A lista de
+// ids vem pronta no escopo (`equipeIds`), montada em JS pelo serviço — nunca
+// WITH RECURSIVE aqui: ciclo na hierarquia trava o Postgres (a decisão está em
+// organograma/repositorio.ts:5-13; a caminhada com visitados e teto mora em
+// organograma/esquemas.ts). O padrão pessoa×vínculo da 0046 continua: os ids da
+// sub-árvore são VÍNCULOS liderados — o outro contrato do liderado, em outro
+// CNPJ e sob outro gestor, segue fora do alcance.
 
 export type Escopo =
   | { alcance: "todos" }
-  | { alcance: "equipe"; colaboradorId: number | null }
+  | {
+      alcance: "equipe";
+      colaboradorId: number | null;
+      /** Vínculos da sub-árvore (diretos e indiretos), SEM os do próprio. */
+      equipeIds: number[];
+    }
   | { alcance: "proprio"; colaboradorId: number | null };
 
 function condicaoEscopo(
@@ -55,10 +70,9 @@ function condicaoEscopo(
   const euMesmo = `${alias}.pessoa_id =
       (SELECT eu.pessoa_id FROM rh.colaborador eu WHERE eu.id = $${n})`;
   if (escopo.alcance === "proprio") return `(${euMesmo})`;
-  return `(${euMesmo} OR ${alias}.id IN (
-      SELECT rg.liderado_colaborador_id
-        FROM rh.relacao_gestor rg
-       WHERE rg.gestor_colaborador_id = $${n} AND rg.fim_vigencia IS NULL))`;
+  if (escopo.equipeIds.length === 0) return `(${euMesmo})`;
+  parametros.push(escopo.equipeIds);
+  return `(${euMesmo} OR ${alias}.id = ANY($${parametros.length}::bigint[]))`;
 }
 
 /**
@@ -172,6 +186,9 @@ export interface FichaColaborador extends ColaboradorResumo {
   retrato: string | null;
   contexto: string | null;
   email: string;
+  /** Contato corporativo DA PESSOA (A7:b, 0085) — igual em todos os vínculos. */
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
   usuario_ativo: boolean;
   gestor_id: number | null;
   gestor_nome: string | null;
@@ -198,6 +215,8 @@ export interface ColaboradorParaAtualizar {
   data_desligamento: string | null;
   retrato: string | null;
   contexto: string | null;
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
   usuario_ativo: boolean;
 }
 
@@ -229,6 +248,9 @@ export interface CamposPessoa {
   contexto?: string | null;
   data_nascimento?: string;
   genero?: Genero;
+  /** Contato corporativo (A7:b, 0085) — da pessoa, não do vínculo. */
+  telefone_corporativo?: string | null;
+  email_corporativo?: string | null;
 }
 
 interface LinhaResumo extends Record<string, unknown> {
@@ -258,6 +280,8 @@ interface LinhaFicha extends LinhaResumo {
   retrato: string | null;
   contexto: string | null;
   email: string;
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
   usuario_ativo: boolean;
   gestor_id: string | null;
   gestor_nome: string | null;
@@ -470,6 +494,9 @@ export async function buscarFicha(
             c.data_nascimento::text AS data_nascimento,
             c.data_desligamento::text AS data_desligamento,
             c.retrato, c.contexto,
+            -- Contato corporativo é DA PESSOA (A7:b, 0085): leitura direta de
+            -- rh.pessoa, sem projeção nova no vínculo.
+            p.telefone_corporativo, p.email_corporativo,
             u.email, u.ativo AS usuario_ativo,
             pos.cargo_nome,
             lot.empresa_id, lot.empresa_nome, lot.unidade,
@@ -480,6 +507,7 @@ export async function buscarFicha(
             ((now() AT TIME ZONE 'America/Sao_Paulo')::date - c.data_admissao)
               AS dias_desde_admissao
        FROM rh.colaborador c
+       JOIN rh.pessoa p ON p.id = c.pessoa_id
        -- A conta é da PESSOA, não do contrato (migration 0046): dois vínculos
        -- da mesma gente compartilham o mesmo login.
        JOIN sistema.usuario u ON u.pessoa_id = c.pessoa_id
@@ -605,6 +633,199 @@ export async function listarEventos(
     id: Number(linha.id),
     vinculo_id: Number(linha.vinculo_id),
   }));
+}
+
+// ------------------------------------------------------------------ ficha pública mínima (crachá — decisão A4:a)
+// TODO logado vê o "crachá" de qualquer colega DO QUADRO: nome, cargo, contato
+// corporativo, líder atual e unidade — e NADA além. Sem trilha de leitura (dado
+// operacional, decisão A4:a); a trilha continua valendo para o que EXCEDE o
+// mínimo. Desligado não é colega: fora do quadro continua sendo 404.
+
+export interface CrachaColaborador {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  telefone_corporativo: string | null;
+  email_corporativo: string | null;
+  /** O líder ATUAL (relação de gestor vigente). */
+  gestor_nome: string | null;
+  /** A LOTAÇÃO (local de trabalho) vigente. */
+  unidade: string | null;
+}
+
+export async function buscarCracha(
+  id: number
+): Promise<CrachaColaborador | null> {
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    cargo_nome: string | null;
+    telefone_corporativo: string | null;
+    email_corporativo: string | null;
+    gestor_nome: string | null;
+    unidade: string | null;
+  }>(
+    // Telefone/e-mail corporativo são da PESSOA (decisão A7:b, migration 0085)
+    // — leitura direta de rh.pessoa, sem projeção nova no vínculo.
+    `SELECT c.id, c.nome_completo,
+            pos.cargo_nome,
+            p.telefone_corporativo, p.email_corporativo,
+            ges.gestor_nome,
+            lot.unidade
+       FROM rh.colaborador c
+       JOIN rh.pessoa p ON p.id = c.pessoa_id
+       LEFT JOIN LATERAL (
+         SELECT cv.nome AS cargo_nome
+           FROM rh.posicao_colaborador pc
+           JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+          WHERE pc.colaborador_id = c.id
+          ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+          LIMIT 1
+       ) pos ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT ld.lotacao_nome AS unidade
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
+       ) lot ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT g.nome_completo AS gestor_nome
+           FROM rh.relacao_gestor rg
+           JOIN rh.colaborador g ON g.id = rg.gestor_colaborador_id
+          WHERE rg.liderado_colaborador_id = c.id AND rg.fim_vigencia IS NULL
+       ) ges ON TRUE
+      WHERE c.id = $1 AND c.status <> 'desligado'`,
+    [id]
+  );
+  if (linhas.length === 0) return null;
+  return { ...linhas[0], id: Number(linhas[0].id) };
+}
+
+/** Uma linha do catálogo mínimo da lista — menos ainda que o crachá. */
+export interface ColegaMinimo {
+  id: number;
+  nome_completo: string;
+  cargo_nome: string | null;
+  unidade: string | null;
+}
+
+/**
+ * O catálogo mínimo da LISTA (A4:a): todo mundo do quadro, para quem não tem
+ * alcance de empresa inteira. Só nome, cargo e unidade — matrícula, status,
+ * admissão e o resto continuam sendo dado da ficha, servidos pelo escopo.
+ * A busca por nome se aplica; os demais filtros da lista (status, estrutura)
+ * são recorte de FICHA e não alcançam este catálogo.
+ */
+export async function listarCatalogoMinimo(
+  busca: string | null
+): Promise<ColegaMinimo[]> {
+  const parametros: unknown[] = [];
+  let filtroBusca = "";
+  if (busca !== null && busca !== "") {
+    parametros.push(`%${busca}%`);
+    filtroBusca = ` AND c.nome_completo ILIKE $${parametros.length}`;
+  }
+  const linhas = await consultar<{
+    id: string;
+    nome_completo: string;
+    cargo_nome: string | null;
+    unidade: string | null;
+  }>(
+    `SELECT c.id, c.nome_completo, pos.cargo_nome, lot.unidade
+       FROM rh.colaborador c
+       LEFT JOIN LATERAL (
+         SELECT cv.nome AS cargo_nome
+           FROM rh.posicao_colaborador pc
+           JOIN rh.cargo_versao cv ON cv.id = pc.cargo_versao_id
+          WHERE pc.colaborador_id = c.id
+          ORDER BY pc.inicio_vigencia DESC, pc.id DESC
+          LIMIT 1
+       ) pos ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT ld.lotacao_nome AS unidade
+           FROM rh.lotacao_detalhada ld
+          WHERE ld.colaborador_id = c.id
+          ORDER BY ld.inicio_vigencia DESC, ld.id DESC
+          LIMIT 1
+       ) lot ON TRUE
+      WHERE c.status <> 'desligado'${filtroBusca}
+      ORDER BY c.nome_completo, c.id`,
+    parametros
+  );
+  return linhas.map((linha) => ({ ...linha, id: Number(linha.id) }));
+}
+
+// ------------------------------------------------------------------ raça-cor (autodeclarada — A5:b)
+// A verdade mora em rh.pessoa.raca_cor (0085). NULL = nunca declarou;
+// 'prefiro_nao_declarar' = recusa ativa. Quem escreve é a PESSOA (portal);
+// quem lê o dado individual é o DP, com trilha (serviço).
+
+/** A pessoa da sessão (0046: uma conta por gente). NULL = conta de sistema. */
+export async function pessoaIdDoUsuario(
+  usuarioId: number
+): Promise<number | null> {
+  const linhas = await consultar<{ pessoa_id: string | null }>(
+    "SELECT pessoa_id FROM sistema.usuario WHERE id = $1",
+    [usuarioId]
+  );
+  const bruto = linhas[0]?.pessoa_id ?? null;
+  return bruto === null ? null : Number(bruto);
+}
+
+/** A raça-cor da pessoa por trás de UM vínculo. NULL interno = não declarada. */
+export async function lerRacaCorDoColaborador(
+  colaboradorId: number
+): Promise<{ pessoa_id: number; raca_cor: string | null } | null> {
+  const linhas = await consultar<{
+    pessoa_id: string;
+    raca_cor: string | null;
+  }>(
+    `SELECT p.id AS pessoa_id, p.raca_cor
+       FROM rh.colaborador c
+       JOIN rh.pessoa p ON p.id = c.pessoa_id
+      WHERE c.id = $1`,
+    [colaboradorId]
+  );
+  if (linhas.length === 0) return null;
+  return {
+    pessoa_id: Number(linhas[0].pessoa_id),
+    raca_cor: linhas[0].raca_cor,
+  };
+}
+
+/** A raça-cor da própria pessoa (portal) — leitura do titular, sem trilha. */
+export async function lerRacaCorDaPessoa(
+  pessoaId: number
+): Promise<string | null> {
+  const linhas = await consultar<{ raca_cor: string | null }>(
+    "SELECT raca_cor FROM rh.pessoa WHERE id = $1",
+    [pessoaId]
+  );
+  return linhas[0]?.raca_cor ?? null;
+}
+
+/** Trava a pessoa e devolve o valor atual — o diff da trilha nasce daqui. */
+export async function travarRacaCorParaAtualizar(
+  cliente: PoolClient,
+  pessoaId: number
+): Promise<{ raca_cor: string | null } | null> {
+  const { rows } = await cliente.query<{ raca_cor: string | null }>(
+    "SELECT raca_cor FROM rh.pessoa WHERE id = $1 FOR UPDATE",
+    [pessoaId]
+  );
+  return rows.length === 0 ? null : { raca_cor: rows[0].raca_cor };
+}
+
+export async function gravarRacaCorDaPessoa(
+  cliente: PoolClient,
+  pessoaId: number,
+  racaCor: string
+): Promise<void> {
+  await cliente.query("UPDATE rh.pessoa SET raca_cor = $2 WHERE id = $1", [
+    pessoaId,
+    racaCor,
+  ]);
 }
 
 /** Pessoa existente com este CPF (null quando é gente nova para o grupo). */
@@ -734,12 +955,18 @@ export async function criarPessoa(
     genero?: Genero;
     retrato: string | null;
     contexto: string | null;
+    /** Contato corporativo (A7:b) — opcional na admissão. */
+    telefone_corporativo?: string | null;
+    email_corporativo?: string | null;
   }
 ): Promise<number> {
+  // raca_cor NÃO entra aqui de propósito (A5:b): é autodeclaração da pessoa,
+  // pelo portal — ninguém declara por ela na admissão.
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.pessoa
-       (cpf, nome_completo, data_nascimento, genero, retrato, contexto)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (cpf, nome_completo, data_nascimento, genero, retrato, contexto,
+        telefone_corporativo, email_corporativo)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
       dados.cpf,
@@ -748,6 +975,8 @@ export async function criarPessoa(
       dados.genero ?? "nao_informado",
       dados.retrato,
       dados.contexto,
+      dados.telefone_corporativo ?? null,
+      dados.email_corporativo ?? null,
     ]
   );
   return Number(rows[0].id);
@@ -839,18 +1068,25 @@ export async function buscarParaAtualizar(
     data_desligamento: string | null;
     retrato: string | null;
     contexto: string | null;
+    telefone_corporativo: string | null;
+    email_corporativo: string | null;
     usuario_ativo: boolean;
   }>(
+    // FOR UPDATE OF c, p: a escrita que segue toca as duas tabelas (o que é da
+    // pessoa desce pelo trigger da 0046; o contato corporativo grava direto).
     `SELECT c.id, c.usuario_id, c.pessoa_id, c.matricula, c.nome_completo,
             c.tipo_vinculo, c.status,
             c.data_desligamento::text AS data_desligamento,
             c.data_admissao::text AS data_admissao,
             c.data_nascimento::text AS data_nascimento, c.genero,
-            c.retrato, c.contexto, u.ativo AS usuario_ativo
+            c.retrato, c.contexto,
+            p.telefone_corporativo, p.email_corporativo,
+            u.ativo AS usuario_ativo
        FROM rh.colaborador c
+       JOIN rh.pessoa p ON p.id = c.pessoa_id
        JOIN sistema.usuario u ON u.pessoa_id = c.pessoa_id
       WHERE c.id = $1
-      FOR UPDATE`,
+      FOR UPDATE OF c, p`,
     [id]
   );
   if (rows.length === 0) return null;
@@ -875,6 +1111,8 @@ const COLUNAS_PESSOA: Record<keyof CamposPessoa, string> = {
   contexto: "contexto",
   data_nascimento: "data_nascimento",
   genero: "genero",
+  telefone_corporativo: "telefone_corporativo",
+  email_corporativo: "email_corporativo",
 };
 
 /** Escreve o que é do CONTRATO. */
@@ -1635,6 +1873,9 @@ export interface CargoResumo {
   missao: string | null;
   atividades: string[] | null;
   observacoes: string | null;
+  /** Nível hierárquico DESTA versão (A6:a) — id e nome do catálogo. */
+  nivel_hierarquico_id: number | null;
+  nivel_hierarquico_nome: string | null;
   ocupantes: number;
 }
 
@@ -1656,12 +1897,15 @@ export async function listarCargos(): Promise<CargoResumo[]> {
     missao: string | null;
     atividades: string[] | null;
     observacoes: string | null;
+    nivel_hierarquico_id: string | null;
+    nivel_hierarquico_nome: string | null;
     ocupantes: string;
   }>(
     `SELECT cg.id, cv.id AS versao_id, cv.nome, cv.descricao, cv.cha,
             cv.inicio_vigencia::text AS inicio_vigencia,
             cv.setor, cv.cargo_lider_id, cv.tipo_contrato_previsto,
             cv.missao, cv.atividades, cv.observacoes,
+            cv.nivel_hierarquico_id, nh.nome AS nivel_hierarquico_nome,
             lider.nome AS cargo_lider_nome,
             ts.faixa_min::text AS faixa_min, ts.faixa_max::text AS faixa_max,
             ts.inicio_vigencia::text AS faixa_inicio_vigencia,
@@ -1669,6 +1913,7 @@ export async function listarCargos(): Promise<CargoResumo[]> {
        FROM rh.cargo cg
        LEFT JOIN rh.cargo_versao cv
          ON cv.cargo_id = cg.id AND cv.status = 'ativa'
+       LEFT JOIN rh.nivel_hierarquico nh ON nh.id = cv.nivel_hierarquico_id
        LEFT JOIN rh.tabela_salarial_versao ts
          ON ts.cargo_id = cg.id AND ts.status = 'ativa'
        LEFT JOIN LATERAL (
@@ -1695,6 +1940,10 @@ export async function listarCargos(): Promise<CargoResumo[]> {
     faixa_max: linha.faixa_max === null ? null : Number(linha.faixa_max),
     cargo_lider_id:
       linha.cargo_lider_id === null ? null : Number(linha.cargo_lider_id),
+    nivel_hierarquico_id:
+      linha.nivel_hierarquico_id === null
+        ? null
+        : Number(linha.nivel_hierarquico_id),
     ocupantes: Number(linha.ocupantes),
   }));
 }
@@ -1712,6 +1961,7 @@ export interface CargoVersaoAtiva {
   missao: string | null;
   atividades: string[];
   observacoes: string | null;
+  nivel_hierarquico_id: number | null;
 }
 
 export async function buscarCargoVersaoAtiva(
@@ -1732,9 +1982,11 @@ export async function buscarCargoVersaoAtiva(
     missao: string | null;
     atividades: string[];
     observacoes: string | null;
+    nivel_hierarquico_id: string | null;
   }>(
     `SELECT cv.id, cv.cargo_id, cv.nome, cv.descricao, cv.cha,
-            cv.inicio_vigencia::text AS inicio_vigencia, ${COLUNAS_RCF}
+            cv.inicio_vigencia::text AS inicio_vigencia, ${COLUNAS_RCF},
+            cv.nivel_hierarquico_id
        FROM rh.cargo_versao cv
       WHERE cv.cargo_id = $1 AND cv.status = 'ativa'
       ${travar ? "FOR UPDATE" : ""}`,
@@ -1747,6 +1999,10 @@ export async function buscarCargoVersaoAtiva(
     cargo_id: Number(rows[0].cargo_id),
     cargo_lider_id:
       rows[0].cargo_lider_id === null ? null : Number(rows[0].cargo_lider_id),
+    nivel_hierarquico_id:
+      rows[0].nivel_hierarquico_id === null
+        ? null
+        : Number(rows[0].nivel_hierarquico_id),
   };
 }
 
@@ -1795,13 +2051,15 @@ export async function inserirVersaoCargo(
     missao: string | null;
     atividades: string[];
     observacoes: string | null;
+    nivel_hierarquico_id: number | null;
   }
 ): Promise<number> {
   const { rows } = await cliente.query<{ id: string }>(
     `INSERT INTO rh.cargo_versao
        (cargo_id, nome, descricao, cha, status, inicio_vigencia,
-        setor, cargo_lider_id, tipo_contrato_previsto, missao, atividades, observacoes)
-     VALUES ($1, $2, $3, $4, 'ativa', $5, $6, $7, $8, $9, $10, $11)
+        setor, cargo_lider_id, tipo_contrato_previsto, missao, atividades,
+        observacoes, nivel_hierarquico_id)
+     VALUES ($1, $2, $3, $4, 'ativa', $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING id`,
     [
       dados.cargo_id,
@@ -1815,9 +2073,113 @@ export async function inserirVersaoCargo(
       dados.missao,
       JSON.stringify(dados.atividades),
       dados.observacoes,
+      dados.nivel_hierarquico_id,
     ]
   );
   return Number(rows[0].id);
+}
+
+// ------------------------------------------------------------------ nível hierárquico (catálogo administrável — A6:a)
+// Molde do catálogo de tipos disciplinares (0080): nunca se apaga (o DELETE é
+// barrado por trigger na 0085) — inativa-se, e a versão de cargo antiga
+// continua apontando para o nível que valia na época dela.
+
+export interface NivelHierarquico {
+  id: number;
+  nome: string;
+  ordem: number;
+  ativo: boolean;
+  /** Quantas versões de cargo (ativas ou não) apontam para este nível. */
+  em_uso: number;
+}
+
+type LinhaNivel = {
+  id: string;
+  nome: string;
+  ordem: number;
+  ativo: boolean;
+  em_uso: string;
+};
+
+function montarNivel(linha: LinhaNivel): NivelHierarquico {
+  return {
+    id: Number(linha.id),
+    nome: linha.nome,
+    ordem: linha.ordem,
+    ativo: linha.ativo,
+    em_uso: Number(linha.em_uso),
+  };
+}
+
+const SELECT_NIVEL = `SELECT n.id, n.nome, n.ordem,
+                             (n.inativado_em IS NULL) AS ativo,
+                             (SELECT count(*) FROM rh.cargo_versao cv
+                               WHERE cv.nivel_hierarquico_id = n.id) AS em_uso
+                        FROM rh.nivel_hierarquico n`;
+
+/** `apenasAtivos` para o seletor de versão nova; a tela de administrar vê todos. */
+export async function listarNiveisHierarquicos(
+  apenasAtivos: boolean
+): Promise<NivelHierarquico[]> {
+  const linhas = await consultar<LinhaNivel>(
+    `${SELECT_NIVEL}
+      ${apenasAtivos ? "WHERE n.inativado_em IS NULL" : ""}
+      ORDER BY (n.inativado_em IS NULL) DESC, n.ordem, n.nome`
+  );
+  return linhas.map(montarNivel);
+}
+
+export async function buscarNivelParaAtualizar(
+  cliente: PoolClient,
+  id: number
+): Promise<NivelHierarquico | null> {
+  const { rows } = await cliente.query<LinhaNivel>(
+    `${SELECT_NIVEL} WHERE n.id = $1 FOR UPDATE OF n`,
+    [id]
+  );
+  return rows.length === 0 ? null : montarNivel(rows[0]);
+}
+
+/** Nível ATIVO com este id — a validação de versão nova de cargo pergunta aqui. */
+export async function buscarNivelAtivo(
+  cliente: PoolClient,
+  id: number
+): Promise<{ id: number; nome: string } | null> {
+  const { rows } = await cliente.query<{ id: string; nome: string }>(
+    `SELECT id, nome FROM rh.nivel_hierarquico
+      WHERE id = $1 AND inativado_em IS NULL`,
+    [id]
+  );
+  return rows.length === 0 ? null : { id: Number(rows[0].id), nome: rows[0].nome };
+}
+
+export async function inserirNivelHierarquico(
+  cliente: PoolClient,
+  nome: string
+): Promise<number> {
+  // Nasce no fim da ordem; quem reordena é evolução da tela, não constante.
+  const { rows } = await cliente.query<{ id: string }>(
+    `INSERT INTO rh.nivel_hierarquico (nome, ordem)
+     VALUES ($1, COALESCE((SELECT max(ordem) + 10 FROM rh.nivel_hierarquico), 500))
+     RETURNING id`,
+    [nome]
+  );
+  return Number(rows[0].id);
+}
+
+/** `inativadoPor` nulo = reativar. Exclusão não existe (trigger da 0085). */
+export async function inativarNivelHierarquico(
+  cliente: PoolClient,
+  id: number,
+  inativadoPor: number | null
+): Promise<void> {
+  await cliente.query(
+    `UPDATE rh.nivel_hierarquico
+        SET inativado_em  = CASE WHEN $2::BIGINT IS NULL THEN NULL ELSE now() END,
+            inativado_por = $2
+      WHERE id = $1`,
+    [id, inativadoPor]
+  );
 }
 
 export interface FaixaSalarialAtiva {
