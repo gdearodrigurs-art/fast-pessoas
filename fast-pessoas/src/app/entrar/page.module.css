@@ -82,3 +82,37 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* Vitrine (MODO_DEMO=1): botões de persona no lugar do formulário. */
+.cartaoDemo {
+  max-width: 480px;
+}
+
+.persona {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 12px 14px;
+  font-size: 0.95rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.persona span {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.persona:hover:enabled {
+  border-color: #d21217;
+}
+
+.persona:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}

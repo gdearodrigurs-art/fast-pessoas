@@ -3,6 +3,7 @@ import * as OTPAuth from "otpauth";
 import { registrarAlteracao } from "../../lib/auditoria";
 import { comTransacao } from "../../lib/banco";
 import { ErroHttpCampo } from "../../lib/http";
+import { ehContaDemo, modoDemoLigado } from "../../lib/modo-demo";
 import { ErroHttp } from "../../lib/sessao";
 import { pendenciaBloqueante } from "../documentos/servico";
 import { chaveSensivel } from "../usuarios/esquemas";
@@ -283,6 +284,26 @@ export async function autenticar(
   };
 }
 
+/**
+ * Entrada da VITRINE (MODO_DEMO=1): persona fictícia entra sem senha e sem
+ * 2FA. Duas travas: o modo precisa estar ligado no ambiente e a conta precisa
+ * ser do domínio @fastdemo.local. O gate do Código de Conduta também fica de
+ * fora, para a visita não começar presa numa tela de regularização.
+ */
+export async function autenticarDemo(
+  email: string
+): Promise<PayloadSessao | null> {
+  if (!modoDemoLigado() || !ehContaDemo(email)) return null;
+  const usuario = await buscarPorEmail(email);
+  if (!usuario || !usuario.ativo) return null;
+  await registrarAcao(
+    "login_sucesso",
+    { id: usuario.id, papel: usuario.papel },
+    { modo: "demo" }
+  );
+  return { usuario_id: usuario.id, papel: usuario.papel, nome: usuario.nome };
+}
+
 export async function registrarSaida(sessao: PayloadSessao): Promise<void> {
   await registrarAcao("logout", {
     id: sessao.usuario_id,
@@ -339,6 +360,11 @@ export async function validarTotpDoUsuario(
   codigo: string
 ): Promise<"ok" | "sem_2fa" | "invalido"> {
   const usuario = await buscarPorId(usuarioId);
+  // Vitrine: a revalidação no ato aceita qualquer código de 6 dígitos para as
+  // personas fictícias (ver lib/modo-demo.ts).
+  if (usuario?.ativo && modoDemoLigado() && ehContaDemo(usuario.email)) {
+    return "ok";
+  }
   if (!usuario || !usuario.ativo || !usuario.totp_secret) {
     return "sem_2fa";
   }

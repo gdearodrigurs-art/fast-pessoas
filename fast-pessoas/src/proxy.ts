@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify, type JWTPayload } from "jose";
 
-const ROTAS_LIVRES = new Set(["/entrar", "/api/identidade/entrar"]);
+const ROTAS_LIVRES = new Set([
+  "/entrar",
+  "/api/identidade/entrar",
+  // Vitrine: a rota se desliga sozinha sem MODO_DEMO=1 (lib/modo-demo.ts).
+  "/api/identidade/entrar-demo",
+]);
 const NOME_COOKIE_SESSAO = "fp_sessao";
 
 // Sessão pendente de 2FA (claim pendente_2fa no JWT) só alcança o fluxo de

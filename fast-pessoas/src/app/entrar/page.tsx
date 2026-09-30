@@ -1,9 +1,44 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import estilos from "./page.module.css";
 
+type PersonaDemo = { email: string; titulo: string; descricao: string };
+
 export default function PaginaEntrar() {
+  const [personas, setPersonas] = useState<PersonaDemo[] | null>(null);
+  const [entrandoComo, setEntrandoComo] = useState<string | null>(null);
+
+  // Vitrine (MODO_DEMO=1): se o servidor estiver em modo demonstração, a
+  // tela troca o formulário por um botão por persona fictícia.
+  useEffect(() => {
+    fetch("/api/identidade/entrar-demo")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setPersonas(d?.ligado ? d.personas : []))
+      .catch(() => setPersonas([]));
+  }, []);
+
+  async function entrarComo(email: string) {
+    setErro(null);
+    setEntrandoComo(email);
+    try {
+      const resposta = await fetch("/api/identidade/entrar-demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (resposta.ok) {
+        window.location.assign("/");
+        return;
+      }
+      const dados = await resposta.json().catch(() => ({}));
+      setErro(dados.erro ?? "Não foi possível entrar. Tente novamente.");
+    } catch {
+      setErro("Falha de conexão. Tente novamente.");
+    }
+    setEntrandoComo(null);
+  }
+
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [codigoTotp, setCodigoTotp] = useState("");
@@ -50,6 +85,40 @@ export default function PaginaEntrar() {
     } finally {
       setEnviando(false);
     }
+  }
+
+  if (personas && personas.length > 0) {
+    return (
+      <main className={estilos.pagina}>
+        <div className={`${estilos.cartao} ${estilos.cartaoDemo}`}>
+          <h1 className={estilos.titulo}>Fast Pessoas</h1>
+          <p className={estilos.subtitulo}>
+            Versão de demonstração, com dados 100% fictícios. Escolha com quem
+            entrar: cada perfil enxerga uma parte diferente do sistema. Para
+            trocar de perfil, use &quot;Sair&quot; no topo da tela.
+          </p>
+          {personas.map((p) => (
+            <button
+              key={p.email}
+              type="button"
+              className={estilos.persona}
+              disabled={entrandoComo !== null}
+              onClick={() => entrarComo(p.email)}
+            >
+              <strong>
+                {entrandoComo === p.email ? "Entrando…" : p.titulo}
+              </strong>
+              <span>{p.descricao}</span>
+            </button>
+          ))}
+          <p className={estilos.aviso}>
+            Se alguma tela pedir o código do autenticador, digite qualquer
+            número de 6 dígitos (ex.: 000000).
+          </p>
+          {erro && <p className={estilos.erro}>{erro}</p>}
+        </div>
+      </main>
+    );
   }
 
   return (
