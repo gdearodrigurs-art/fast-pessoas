@@ -20,13 +20,10 @@ const TIME = 'team_k3rCxXI6jpRx4WXZcAuFSb4b';
 const PROJETO = 'fast-pessoas-demo';
 const SO_BANCO = process.argv.includes('--so-banco');
 
-function rodar(rotulo, comando, args) {
+// Sem shell: o caminho "C:\sistema RH" tem espaço e o shell o partia em dois.
+function rodarNode(rotulo, script) {
   console.log(`\n== ${rotulo}`);
-  const r = spawnSync(comando, args, {
-    stdio: 'inherit',
-    env: process.env,
-    shell: process.platform === 'win32',
-  });
+  const r = spawnSync(process.execPath, [script], { stdio: 'inherit', env: process.env });
   if (r.status !== 0) {
     console.error(`\nFalhou em: ${rotulo}. Nada depois disso foi feito.`);
     process.exit(1);
@@ -38,8 +35,8 @@ if (!process.env.DATABASE_URL || !process.env.DATABASE_URL.includes('supabase'))
   process.exit(1);
 }
 
-rodar('1/3 migrations no Supabase', 'node', [path.join(__dirname, 'migrar.js')]);
-rodar('2/3 dados fictícios da demo', 'node', [path.join(__dirname, 'semear-demo.js')]);
+rodarNode('1/3 migrations no Supabase', path.join(__dirname, 'migrar.js'));
+rodarNode('2/3 dados fictícios da demo', path.join(__dirname, 'semear-demo.js'));
 if (SO_BANCO) process.exit(0);
 
 console.log('\n== 3/3 variáveis na Vercel');
@@ -58,7 +55,7 @@ try {
     );
     const r = spawnSync(
       'vercel',
-      ['api', `/v10/projects/${PROJETO}/env?teamId=${TIME}&upsert=true`, '--method', 'POST', '--input', arquivo],
+      ['api', `/v10/projects/${PROJETO}/env?teamId=${TIME}&upsert=true`, '--method', 'POST', '--input', `"${arquivo}"`],
       { encoding: 'utf8', shell: process.platform === 'win32' }
     );
     console.log(`  ${chave}: ${r.status === 0 ? 'ok' : 'FALHOU\n' + (r.stdout || '') + (r.stderr || '')}`);
